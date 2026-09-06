@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+# 同じPR/ブランチの古い実行を止め、別のPRのチェックは取り消さない。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    # Draft中はrunnerを起動せず、レビュー可能になった時点で検証する。
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: npm ci
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install -r requirements-dev.txt
+      - name: アプリと工場スクリプトの検査
+        id: quality
+        continue-on-error: true
+        run: npm run factory:check
+      - name: lychee本体のキャッシュ
+        id: lychee-cache
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lychee/bin
+          key: lychee-0.24.2-${{ runner.os }}-${{ runner.arch }}
+      - name: キャッシュがない場合だけlycheeを取得
+        if: steps.lychee-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 2
+        uses: lycheeverse/lychee-action@649b0e4890508ea3e11ea6b3ee35ce899a25afd5
+        with:
+          lycheeVersion: v0.24.2
+          args: --version
+          fail: true
+          failIfEmpty: false
+          checkbox: false
+          jobSummary: false
+          output: artifacts/factory/lychee-install.log
+      - name: ローカル文書リンク
+        id: docs
+        timeout-minutes: 1
+        continue-on-error: true
+        env:
+          LYCHEE_BIN: ${{ runner.temp }}/lychee/bin/lychee
+        run: |
+          mkdir -p artifacts/factory
+          python scripts/check_tools.py docs > artifacts/factory/links.log 2>&1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.16.1
+          terraform_wrapper: false
+      - name: Terraform宣言とポリシー
+        id: iac
+        continue-on-error: true
+        run: python scripts/check_tools.py iac
+      - name: 実行結果を残す
+        if: always()
+        shell: bash
+        env:
+          QUALITY_RESULT: ${{ steps.quality.outcome }}
+          DOCS_RESULT: ${{ steps.docs.outcome }}
+          IAC_RESULT: ${{ steps.iac.outcome }}
+        run: |
+          if [ -f artifacts/factory/report.md ]; then
+            cat artifacts/factory/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '工場検査の結果は未取得です。セットアップのログを確認してください。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo ''
+            echo "quality=$QUALITY_RESULT / docs=$DOCS_RESULT / iac=$IAC_RESULT"
+            echo 'Terraformはfmt・validate・mock testのみ。実GitHubへのplan/applyは未実行です。'
+            echo '個別ログはfactory-report artifactを参照してください。'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: factory-report
+          path: artifacts/factory/
+          retention-days: 7
+      - name: 未実行・失敗を成功扱いにしない
+        if: always()
+        shell: bash
+        env:
+          QUALITY_RESULT: ${{ steps.quality.outcome }}
+          DOCS_RESULT: ${{ steps.docs.outcome }}
+          IAC_RESULT: ${{ steps.iac.outcome }}
+        run: |
+          test "$QUALITY_RESULT" = success && test "$DOCS_RESULT" = success && test "$IAC_RESULT" = success

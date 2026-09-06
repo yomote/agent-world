@@ -1,0 +1,5 @@
+owner               = "yomote"
+repository_name     = "agent-world"
+# 2026-09-06にユーザーが指定した公開先。適用前に実repoと照合する。
+visibility          = "public"
+existing_ruleset_id = null

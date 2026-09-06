@@ -1,0 +1,58 @@
+# CIと外部アクセスの運用
+
+CIはローカル検証を終えた変更を確認するために使う。Agentによる小刻みなpush、CI結果の頻繁な取得、失敗時の再実行が重なって過剰なアクセスにならないよう、実行条件と確認回数を制限する。
+
+## ワークフローで制御する範囲
+
+| 操作・イベント                               | CIの動作                                                        |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| PRのない作業ブランチへのpush                 | 起動しない                                                      |
+| Draft PRの作成・更新・再open                 | workflowの記録はできるが、check jobはskipしてrunnerを起動しない |
+| PRをReady for reviewに変更                   | checkを実行する                                                 |
+| 通常PRの作成・更新・再open                   | checkを実行する                                                 |
+| PRをDraftに戻す                              | 同じPRの古い実行をキャンセル対象にし、新しいcheck jobはskipする |
+| main / masterへのpush                        | 統合後のcheckを実行する                                         |
+| 同じPRまたは同じ対象ブランチの次の実行       | 古い実行・待機を取り消し、最新だけを残す                        |
+| コメント・ラベル・レビュー投稿・CI完了・定刻 | 起動しない                                                      |
+| mainを指定したmerge gateの手動dispatch       | current headと保護条件を再検査し、成立時だけsquash mergeする    |
+
+設定は [ci.yml](../../.github/workflows/ci.yml)。1回につき1job、実行時間は最大10分。npm/pipのダウンロードキャッシュを利用する。別PRは別グループであり、リポジトリ全体の同時実行数や時間あたりの起動回数を制限する設定ではない。連続pushのたびにworkflow自体は作られるため、pushをまとめる運用も必要になる。
+
+工場機能の追加後もこの実行予算を維持する。check job内でAPI契約・lint・format・test・build、lycheeのローカルリンク検査、Terraformのfmt/validate/mock testを行う。各検査の結果を集約し、失敗・未実行があれば最後のstepでjobを失敗させる。途中で失敗した場合もsummaryとartifactへ取得済みの結果を残す。GitHub設定の必須チェック名も `check` とし、[Terraform](../../infra/github/README.md)のテストでCI名との一致を確認する。GitHubへのplan/applyはPRのCIからは行わない。
+
+工場runnerは全検査を合わせて180秒までとし、残り時間を各コマンドの期限として渡す。使い切ったら後続をnot_runで記録して終了する。これにより複数のハングを順番に待ってレポート保存前にjob期限へ達することを防ぐ。依存の取得やrunner自体の停止でGitHub側の期限が切れた場合、artifact保存は保証できないため、GitHubのtimed_out/cancelledを結果として扱う。
+
+lychee本体は固定バージョン・OS・CPUアーキテクチャをキーにGitHub Actionsのキャッシュで再利用する。キャッシュがない場合だけ公式Actionから取得し、リンク検査そのものは毎回実行する。取得は最大2分、検査は最大1分。対象は直下・docs・.github・infraのMarkdownに限り、providerの依存文書は除外する。offlineで外部URLへの要求は0件、並列上限2・再試行0。結果は `artifacts/factory/links.log` に保存する。キャッシュの利用可否は未検証であり、GitHub初回実行時にhit/missの双方を確認する。
+
+PRの検証とmain / masterの検証は、マージ前後の異なる内容を確認するため両方残す。ドキュメントも整形チェックの対象なのでpath filterは設けない。workflow単位のスキップによって必須チェックがPendingのままになる運用も避ける。Draftのskipは検証成功を意味しない。Ready for review後の最新の結果を確認する。
+
+merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+
+## 開発エージェントの確認予算
+
+以下は [AGENTS.md](../../AGENTS.md) で開発エージェントに適用する運用上限。GitHub側で強制するAPIレート制限や、実装済みの監視プログラムではない。
+
+1. 編集中はローカルで確認し、意味のある変更単位でpushする。作業途中のPRはDraftを使う。
+2. CIの完了通知やChecks画面を優先する。自動照会が必要なときは対象PR/runだけを直列に確認する。短い間隔のwatchコマンドは使わない。
+3. 状態確認は60秒以上空け、1つのrunにつき最大10回。再試行もこの回数に含める。上限に達したら監視を終了し、対象runと「未完了・未検証」を報告する。再開して回数をリセットしない。
+4. 完了したら照会を止める。失敗したjobだけ必要なログを一度取得し、手元で再利用する。成功したrunの全ログや、全PR・全コメントを繰り返し取得しない。
+5. テスト失敗は原因を修正してローカルで確認する。CIの自動再実行ループを作らない。一時的な基盤障害と確認できた場合のみ、同じ内容の再実行は1回までとする。
+
+60秒・10回という値は、この小規模プロジェクトの開始時の運用予算であり、GitHubが保証する「ブロックされない閾値」ではない。キュー待ちが長い場合はCIをキャンセルせず監視だけ終了する。
+
+## 制限応答と通信失敗
+
+- 429、またはレート制限と明示された403では、そのサービスへの追加要求を休止する。`Retry-After` と、`X-RateLimit-Remaining: 0` のときの `X-RateLimit-Reset` を確認し、指定された待機時間より早く再開しない。両方あれば遅い方まで待つ。
+- 待機時間の指定がないレート制限は、最初は60秒、次は120秒以上待つ。読み取りの再試行は初回の後に最大2回で終了し、制限が続けばその時点で報告する。ヘッダーが見えないツールで制限が出た場合も同じ予算を使う。
+- 認証・権限・アカウント拒否、レート制限と判断できない403は再試行しない。別アカウントやトークンへ切り替えて続行しない。
+- 結果不明の書き込みは自動再送しない。取得できなかったCI結果をPASSと扱わない。
+
+GitHubは短時間の集中アクセスに対する二次制限を設けており、公開されていない条件や変更される条件もある。上限内に収めてもブロック回避を保証するものではない。基準は [REST APIの推奨運用](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) と [レート制限](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)。
+
+将来、外部取得やCDが必要になった時点で、対象サービスに合わせた共有キュー、キャッシュ、有界な再試行を設計する。今の段階で常駐監視や取得用の仕組みは増やさない。
+
+## 変更時の確認
+
+ローカルでは `npm run check` でYAML/Markdownの整形と既存の品質チェックを行う。これはGitHub Actionsのイベント処理を実行した証拠にはならない。
+
+GitHubへの反映後、通常の開発で該当するイベントが発生したときに、上の表と実行結果を照合する。検証だけの連続pushや大量の試験PRは作らない。同一PRのキャンセル、別PRの独立性、Draftのskip、Ready for review後の実行が未確認なら、そのまま未検証と記録する。

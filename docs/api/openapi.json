@@ -1,0 +1,291 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Agent Sandbox World",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/world": {
+      "get": {
+        "summary": "Observe",
+        "operationId": "observe_api_world_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/actions": {
+      "post": {
+        "summary": "Act",
+        "operationId": "act_api_actions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Action"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Action": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "actor_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Actor Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "move",
+            "title": "Type"
+          },
+          "dx": {
+            "type": "integer",
+            "title": "Dx"
+          },
+          "dy": {
+            "type": "integer",
+            "title": "Dy"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["action_id", "actor_id", "type", "dx", "dy"],
+        "title": "Action"
+      },
+      "ActionResult": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "world": {
+            "$ref": "#/components/schemas/WorldState"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["event", "world"],
+        "title": "ActionResult"
+      },
+      "Entity": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Position"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "position"],
+        "title": "Entity"
+      },
+      "Event": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Event Id"
+          },
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "failure"],
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["moved", "out_of_bounds", "unknown_actor", "invalid_move"],
+            "title": "Reason"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Position"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Position"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "world_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "World Id"
+          },
+          "world_revision": {
+            "type": "integer",
+            "title": "World Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "action",
+          "status",
+          "reason",
+          "before",
+          "after",
+          "world_id",
+          "world_revision"
+        ],
+        "title": "Event"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Position": {
+        "properties": {
+          "x": {
+            "type": "integer",
+            "title": "X"
+          },
+          "y": {
+            "type": "integer",
+            "title": "Y"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["x", "y"],
+        "title": "Position"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": ["loc", "msg", "type"],
+        "title": "ValidationError"
+      },
+      "WorldState": {
+        "properties": {
+          "world_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "World Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height"
+          },
+          "entities": {
+            "items": {
+              "$ref": "#/components/schemas/Entity"
+            },
+            "type": "array",
+            "title": "Entities"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["world_id", "revision", "width", "height", "entities"],
+        "title": "WorldState"
+      }
+    }
+  }
+}

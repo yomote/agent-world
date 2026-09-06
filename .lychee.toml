@@ -1,0 +1,9 @@
+# PRではローカルリンクを決定的に検査。外部URLの死活は対象外。
+offline = true
+# 外部リクエストは0件。オンライン検査へ変更する場合も無制限に並列化しない。
+max_concurrency = 2
+max_retries = 0
+hidden = true
+include_verbatim = false
+no_progress = true
+exclude_path = ['(^|[/\\])\.terraform([/\\]|$)']
