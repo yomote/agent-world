@@ -1,11 +1,17 @@
 const STATUS_LABELS = {
   running: "実装中",
+  idle: "turn終了",
+  unknown: "状態不明",
   "review-wait": "レビュー待ち",
   blocked: "停止中",
 };
 
 const SOURCE_LABELS = {
   "codex-event": ["Codex event", "Codex App Server由来の正規化eventです。"],
+  "local-event-record": [
+    "local event記録",
+    "このPCの構造化task event由来です。Codex App Serverへのlive接続ではありません。",
+  ],
   "pm-confirmed": [
     "PM確認snapshot",
     "PMが確認した時点の報告です。Codex App Serverとは未接続です。",

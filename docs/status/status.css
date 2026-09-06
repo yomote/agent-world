@@ -181,6 +181,8 @@ summary:focus-visible {
 }
 .card {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -189,8 +191,12 @@ summary:focus-visible {
 .card[data-status="blocked"] {
   border-left: 4px solid var(--danger);
 }
-.card[data-status="in-progress"] {
+.card[data-status="running"] {
   border-left: 4px solid #64b5ff;
+}
+.card[data-status="idle"] {
+  border-left: 4px solid var(--accent);
+  opacity: 0.78;
 }
 .card[data-status="review-wait"] {
   border-left: 4px solid var(--warning);
@@ -242,7 +248,7 @@ summary:focus-visible {
 }
 .meta {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 7px 12px;
   margin: 0;
   font-size: 0.85rem;
@@ -366,6 +372,12 @@ footer {
   .site-header {
     flex-direction: column;
   }
+  .site-header,
+  main,
+  footer {
+    width: calc(100vw - 24px);
+    max-width: 1120px;
+  }
   .site-header button {
     align-self: stretch;
   }
@@ -375,6 +387,14 @@ footer {
   .timestamps {
     flex-direction: column;
     gap: 10px;
+  }
+  .meta dd,
+  .scope-note span {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .work-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .action-row {
     grid-template-columns: 1fr auto;

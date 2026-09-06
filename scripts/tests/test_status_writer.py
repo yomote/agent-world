@@ -29,3 +29,28 @@ def test_manual_writer_rejects_codex_event_source(tmp_path):
     assert result.returncode != 0
     assert "invalid choice" in result.stderr
     assert not output.exists()
+
+
+def test_manual_writer_rejects_local_event_record_source(tmp_path):
+    """手入力をlocal event readerの観測結果として偽装する回帰を防ぐ。"""
+    root = Path(__file__).parents[2]
+    output = tmp_path / "snapshot.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "write_status_snapshot.py"),
+            "--source",
+            "local-event-record",
+            "--observed-at",
+            "2026-09-06T12:45:04Z",
+            "--output",
+            str(output),
+        ],
+        cwd=root,
+        input="[]",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not output.exists()

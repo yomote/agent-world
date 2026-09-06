@@ -15,6 +15,12 @@ test("fixtureを実際のagent稼働と表示しない", () => {
   assert.match(note, /実際のagent稼働を示しません/);
 });
 
+test("local event記録をApp Server live接続と表示しない", () => {
+  const [label, note] = sourceDescription("local-event-record");
+  assert.equal(label, "local event記録");
+  assert.match(note, /live接続ではありません/);
+});
+
 test("経過時間を未来日時でも負数にしない", () => {
   assert.equal(elapsed("2026-09-06T00:01:00Z", Date.parse("2026-09-06T00:00:00Z")), "0秒前");
 });

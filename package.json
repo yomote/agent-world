@@ -14,6 +14,7 @@
     "dev:web": "vite --config apps/web/vite.config.ts",
     "dev:world": "python scripts/python_env.py -m uvicorn world.api:app --app-dir apps --host 127.0.0.1 --port 8000 --reload --reload-dir apps/world",
     "status:dev": "python scripts/python_env.py -m uvicorn ops_status.api:app --app-dir apps --host 127.0.0.1 --port 8010",
+    "status:events": "python scripts/python_env.py scripts/sync_status_from_local_events.py --config artifacts/status/local-agents.json --watch",
     "test": "vitest run --config apps/web/vitest.config.ts && node --test scripts/tests/status_dashboard.test.mjs && python scripts/python_env.py -m pytest",
     "lint": "eslint . && python scripts/python_env.py -m ruff check .",
     "format": "prettier --write . && python scripts/python_env.py -m ruff format .",
