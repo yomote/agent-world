@@ -26,11 +26,12 @@ assignees: ""
 ## 状態
 
 - 状態: `in_progress`
+- PR: `<URL または未作成>`
 - 次の担当 / 具体的な次手順:
 - 既実施:
 - 未実施:
 
-<!-- `in_progress` / `review_pending` / `blocked` / `failed` / `unknown` を使う。失敗・結果不明は操作と確認範囲を記録し、自動再送しない。 -->
+<!-- `in_progress` / `review_pending` / `blocked` / `failed` / `unknown` / `delivery_ready` を使う。`delivery_ready`でもIssueはmergeまたは本来のDoDまでopenにする。失敗・結果不明は操作と確認範囲を記録し、自動再送しない。 -->
 
 ## 受渡し時の振返り
 

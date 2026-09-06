@@ -27,12 +27,12 @@ flowchart TD
   PM --> Terra[Terra worker<br/>通常実装]
   PM --> Sol[Sol worker<br/>複雑実装]
   Luna -->|調査結果| PM
-  Review[独立Sol reviewer]
-  Terra --> Review
-  Sol --> Review
+  Terra --> Commit[実装/統合worker<br/>レビュー対象commitを固定]
+  Sol --> Commit
+  Commit --> Review[独立Sol reviewer]
   Review -->|指摘あり| Fix[担当worker<br/>修正]
-  Fix --> Review
-  Review -->|指摘なし| Integrate[統合worker<br/>ローカル検証・commit・push・Draft PR]
+  Fix --> Commit
+  Review -->|指摘なし| Integrate[統合worker<br/>非変更の最終確認・push・Draft PR証跡]
   Integrate --> PM
   PM --> User
   Luna -. blocked .-> PM
@@ -45,7 +45,7 @@ flowchart TD
 1. ユーザーはPMだけへ目的と優先順位を伝え、PMは指示と担当調整を行う。workerやreviewerをユーザーが個別に巡回して管理しない。
 2. PMは独立した変更だけをworkerへ分配する。workerは担当ファイルと責務を完了まで所有し、既に稼働中の工場担当などは自分の修正を完了するまで所有権を維持する。初回の未コミット成果を含む統合作業も、専任workerへ委任する。
 3. 分配packetには、目的、完了条件、担当ファイル、禁止範囲、依存関係、検証、報告形式、許可済み外部操作を一括で書く。workerは成果、根拠または対象ファイル、検証、未完了を短く返す。
-4. 読み取り専用の調査結果はPMへ返し、次の指示と担当判断に使う。コードや文書を変更した成果には、実装会話を継承しない独立Sol reviewerを依頼する。reviewerが完了条件、検証、未検証を照合し、指摘は担当workerが修正する。reviewerの確認後、統合workerが全体検証とGit操作を行い、PMは結果をユーザーへ取り次ぐ。PMは調査、編集、検証、レビュー、統合、commit、push、PR作成を行わない。
+4. 読み取り専用の調査結果はPMへ返し、次の指示と担当判断に使う。コードや文書を変更した成果は、実装workerまたは統合workerがレビュー対象commitを固定してから、実装会話を継承しない独立Sol reviewerを依頼する。reviewerが完了条件、検証、未検証を照合し、指摘は担当workerが修正して新しいcommitと必要な再検証・再reviewを行う。指摘のないcurrent headだけを、統合workerが内容を変えない最終確認、Git操作、Draft PRの証跡記録へ進める。PMは結果をユーザーへ取り次ぐ。PMは調査、編集、検証、レビュー、統合、commit、push、PR作成を行わない。
 
 Lunaは限定した読み取り調査、Terraは通常実装、Solは複雑実装と独立reviewを担う。読み取り調査だけを一律に独立reviewへ回さず、変更物をreview対象とする。子へ渡す文脈は必要最小限にし、独立した作業だけを並列にする。調査や全体検証を重複させず、最終チェックは統合workerへ一元化する。難航したworkerは無限に反復せず、PMへ状況を返して担当の引き上げ判断を受ける。金額と高速化率は未測定のため主張しない。
 
@@ -55,10 +55,10 @@ Mind Inboxの単一窓口、Issue/PRでの状態管理、分配packet、短命br
 
 初回だけは、共有ディレクトリにある未コミット成果を各担当と合意してから、専任の統合workerがまとめます。その後は独立worktreeで作業し、担当者が自分の変更をcommitします。担当packetで許可された場合に限り、担当者がpushし、Draft PRを作成または更新します。
 
-統合workerは、PMが起動した独立reviewerの報告を待ってからcommitを確定する。レビュー待ちをPASSや完了とは扱わない。
+実装workerまたは統合workerがレビュー前に対象commitを固定する。reviewerの指摘で内容が変わった場合は新しいheadとして、必要な再検証と独立reviewを行う。指摘のないheadに対する非変更の最終確認は可能だが、review待ちはPASSや完了とは扱わない。
 
 - ブランチは `codex/<issue>-<slug>` を使う。小さな文書などIssueが不要な変更は `codex/<slug>` を使う。
-- IssueまたはDraft PRには、owner、作業状態、head SHA、ローカル検証、review、未検証を記録する。
+- Issueには目的、owner、作業状態、次手順とPRへのリンクを記録する。Draft PRには差分と、current head SHAに対応するreview・検証・未検証の証跡を記録する。詳細は[単一課題の完遂ループ](single-task-loop.md)を参照する。
 - DraftでCI jobがskipされたことはPASSではない。Ready for review後の該当runを確認できない場合は、未完了・未検証として扱う。
 - CIは1 job・最大10分の予算を守る。照会は対象runを60秒以上空けて最大10回までとし、常駐の定期監視とauto-mergeは追加しない。詳細は [CIと外部アクセスの運用](ci.md) を参照する。
 
