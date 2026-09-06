@@ -7,6 +7,7 @@ import {
   latestRunFor,
   needsHuman,
   ownerOf,
+  rateLimitDeadline,
   relatedIssueNumbers,
   reportFieldsForPull,
   requestAllowed,
@@ -56,6 +57,13 @@ test("取得失敗後は期限までrequestを許可しない", () => {
   const deadline = requestDeadline(now, now + 10 * 60 * 1000);
   assert.equal(requestAllowed(now + 60 * 1000, deadline), false);
   assert.equal(requestAllowed(now + 10 * 60 * 1000, deadline), true);
+});
+
+test("secondary rate limitのRetry-Afterをprimary残量があっても守る", () => {
+  // 403でremainingが残るsecondary limitを通常失敗と誤認して早く再試行する回帰を防ぐ。
+  const now = 1_000_000;
+  assert.equal(rateLimitDeadline(403, "50", "600", "999999", now), now + 600 * 1000);
+  assert.equal(rateLimitDeadline(403, "50", null, "999999", now), 0);
 });
 
 test("PRのActionsをbranch名だけで関連付けない", () => {

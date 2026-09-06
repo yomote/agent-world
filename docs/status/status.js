@@ -69,6 +69,14 @@ export function requestDeadline(now, retryAt = 0) {
   return Math.max(now + CACHE_MS, retryAt || 0);
 }
 
+export function rateLimitDeadline(status, remaining, retryAfter, reset, now = Date.now()) {
+  const limited = status === 429 || (status === 403 && (remaining === "0" || retryAfter !== null));
+  if (!limited) return 0;
+  const retryAt = retryAfter === null ? 0 : now + Number(retryAfter) * 1000;
+  const resetAt = remaining === "0" && reset !== null ? Number(reset) * 1000 : 0;
+  return requestDeadline(now, Math.max(retryAt, resetAt));
+}
+
 async function github(path, { complete = false } = {}) {
   const response = await fetch(`${API}${path}`, {
     headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
@@ -78,12 +86,8 @@ async function github(path, { complete = false } = {}) {
     const retryAfter = response.headers.get("retry-after");
     const reset = response.headers.get("x-ratelimit-reset");
     const error = new Error(`GitHub API ${response.status}`);
-    error.rateLimited = response.status === 429 || (response.status === 403 && remaining === "0");
-    if (error.rateLimited) {
-      const retryAt = retryAfter ? Date.now() + Number(retryAfter) * 1000 : 0;
-      const resetAt = reset ? Number(reset) * 1000 : 0;
-      error.retryAt = Math.max(retryAt, resetAt, Date.now() + CACHE_MS);
-    }
+    error.retryAt = rateLimitDeadline(response.status, remaining, retryAfter, reset, Date.now());
+    error.rateLimited = error.retryAt > 0;
     throw error;
   }
   if (complete && /<[^>]+>;\s*rel="next"/.test(response.headers.get("link") || "")) {
