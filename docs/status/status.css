@@ -192,8 +192,11 @@ summary:focus-visible {
 .card[data-status="ready"] {
   border-left: 4px solid var(--accent);
 }
-.card[data-status="awaiting-human"] {
-  border-left: 4px solid #d9a7ff;
+.card[data-needs-human="true"] {
+  box-shadow: inset 0 3px #d9a7ff;
+}
+.card[data-status="unknown"] {
+  border-left: 4px solid #8f98a7;
 }
 .card[data-status="done"] {
   opacity: 0.72;
@@ -253,6 +256,9 @@ summary:focus-visible {
 .human-text {
   color: #e1b9ff;
   font-weight: 800;
+}
+.badge.human-text {
+  background: #3a2650;
 }
 .pr-list {
   display: grid;

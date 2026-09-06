@@ -2,22 +2,38 @@ const API = "https://api.github.com/repos/yomote/agent-world";
 const MILESTONE = "Factory rollout";
 const CACHE_KEY = "agent-world-live-status-v1";
 const CACHE_MS = 5 * 60 * 1000;
-const STATUS_ORDER = ["in-progress", "review", "awaiting-human", "blocked", "ready", "done"];
+const DETAIL_LIMIT = 4;
+const DETAIL_COOLDOWN_MS = 15 * 1000;
+const COMMENT_MAX = 600;
+const STATUS_ORDER = ["in-progress", "review", "blocked", "ready", "unknown", "done"];
+const FILTER_ORDER = [
+  "in-progress",
+  "review",
+  "awaiting-human",
+  "blocked",
+  "ready",
+  "unknown",
+  "done",
+];
 const STATUS_LABELS = {
   "in-progress": "進行中",
   review: "レビュー待ち",
   "awaiting-human": "本人承認待ち",
   blocked: "停止中",
   ready: "Ready",
+  unknown: "状態未設定",
   done: "完了",
 };
 
 export function statusOf(issue) {
   if (issue.state === "closed") return "done";
-  if (issue.labels.some((item) => item.name === "needs-human")) return "awaiting-human";
   const label = issue.labels.find((item) => item.name.startsWith("status:"));
   const value = label?.name.slice("status:".length).trim();
-  return STATUS_ORDER.includes(value) ? value : "ready";
+  return STATUS_ORDER.includes(value) && value !== "done" ? value : "unknown";
+}
+
+export function needsHuman(item) {
+  return item.labels.some((label) => label.name === "needs-human");
 }
 
 export function ownerOf(issue) {
@@ -45,7 +61,15 @@ export function elapsed(iso, now = Date.now()) {
   return `${Math.floor(hours / 24)}日前`;
 }
 
-async function github(path) {
+export function requestAllowed(now, deadline) {
+  return now >= deadline;
+}
+
+export function requestDeadline(now, retryAt = 0) {
+  return Math.max(now + CACHE_MS, retryAt || 0);
+}
+
+async function github(path, { complete = false } = {}) {
   const response = await fetch(`${API}${path}`, {
     headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
   });
@@ -62,16 +86,21 @@ async function github(path) {
     }
     throw error;
   }
+  if (complete && /<[^>]+>;\s*rel="next"/.test(response.headers.get("link") || "")) {
+    throw new Error("GitHub API result incomplete: 取得上限を超えました");
+  }
   return response.json();
 }
 
 async function loadLive() {
-  const milestones = await github("/milestones?state=all&per_page=100");
+  const milestones = await github("/milestones?state=all&per_page=100", { complete: true });
   const milestone = milestones.find((item) => item.title === MILESTONE);
   if (!milestone) throw new Error(`${MILESTONE} milestoneが見つかりません`);
   // GitHubのsecondary rate limitを避けるため、外部requestは直列にする。
-  const issues = await github(`/issues?milestone=${milestone.number}&state=all&per_page=100`);
-  const pulls = await github("/pulls?state=open&per_page=100");
+  const issues = await github(`/issues?milestone=${milestone.number}&state=all&per_page=100`, {
+    complete: true,
+  });
+  const pulls = await github("/pulls?state=open&per_page=100", { complete: true });
   const runs = await github("/actions/runs?per_page=30");
   return {
     fetchedAt: new Date().toISOString(),
@@ -129,10 +158,24 @@ function displayOwner(item) {
   return owner === "pm" ? "pm（AI PM）" : owner;
 }
 
-function latestRunFor(pull, runs) {
+export function reportFieldsForPull(pull, relatedIssue) {
+  const statusSource = pull.labels.some((label) => label.name.startsWith("status:"))
+    ? pull
+    : relatedIssue || pull;
+  const ownerSource = pull.labels.some((label) => label.name.startsWith("owner:"))
+    ? pull
+    : relatedIssue || pull;
+  return {
+    status: statusOf({ ...statusSource, state: "open" }),
+    owner: ownerOf(ownerSource),
+    needsHuman: needsHuman(pull) || Boolean(relatedIssue && needsHuman(relatedIssue)),
+  };
+}
+
+export function latestRunFor(pull, runs) {
   return runs.find(
     (run) =>
-      run.head_branch === pull.head.ref ||
+      run.head_sha === pull.head.sha ||
       run.pull_requests.some((item) => item.number === pull.number),
   );
 }
@@ -145,17 +188,41 @@ function metaRow(dl, name, value) {
   dl.append(dd);
 }
 
+let detailRequests = 0;
+let nextDetailAllowed = 0;
+
 async function loadLatestComment(issue, target) {
   if (target.dataset.loaded) return;
+  if (detailRequests >= DETAIL_LIMIT) {
+    target.textContent =
+      "この表示sessionの詳細取得上限（4件）に達しました。Issueを開いて確認してください。";
+    return;
+  }
+  if (Date.now() < nextDetailAllowed) {
+    const seconds = Math.ceil((nextDetailAllowed - Date.now()) / 1000);
+    target.textContent = `API予算保護のため、次の詳細取得まであと${seconds}秒です。`;
+    return;
+  }
   target.dataset.loaded = "true";
+  if (!issue.comments) {
+    target.textContent = "報告コメントはありません。";
+    return;
+  }
+  detailRequests += 1;
+  nextDetailAllowed = Date.now() + DETAIL_COOLDOWN_MS;
   target.textContent = "最新報告を取得中…";
   try {
     const comments = await github(
       `/issues/${issue.number}/comments?per_page=1&page=${Math.max(1, issue.comments)}`,
     );
-    target.textContent = comments[0]?.body || "報告コメントはありません。";
+    const body = comments[0]?.body || "報告コメントはありません。";
+    target.textContent = body.length > COMMENT_MAX ? `${body.slice(0, COMMENT_MAX)}…` : body;
   } catch (error) {
-    if (error.retryAt) nextAllowed = Math.max(nextAllowed, error.retryAt);
+    if (error.retryAt) {
+      nextAllowed = Math.max(nextAllowed, error.retryAt);
+      nextDetailAllowed = error.retryAt;
+      detailRequests = DETAIL_LIMIT;
+    }
     target.textContent = `取得失敗: ${error.message}。Issue本文を確認してください。`;
   }
 }
@@ -165,10 +232,13 @@ function issueCard(issue, data) {
   const card = document.createElement("article");
   card.className = "card";
   card.dataset.status = status;
+  card.dataset.needsHuman = String(needsHuman(issue));
   const top = document.createElement("div");
   top.className = "card-top";
   top.append(text("span", `ISSUE #${issue.number}`, "issue-number"));
   top.append(text("span", STATUS_LABELS[status], "badge"));
+  if (needsHuman(issue))
+    top.append(text("span", STATUS_LABELS["awaiting-human"], "badge human-text"));
   card.append(top);
   const title = document.createElement("h3");
   title.append(link(issue.title, issue.html_url));
@@ -184,7 +254,7 @@ function issueCard(issue, data) {
   );
   if (status === "blocked")
     metaRow(dl, "blocker", text("span", "停止理由はIssueの最新報告を確認", "blocked-text"));
-  if (status === "awaiting-human")
+  if (needsHuman(issue))
     metaRow(dl, "本人承認", text("span", "ユーザーの判断待ち。AI PMの判断とは区別", "human-text"));
   const related = pullsFor(issue, data.pulls);
   const wrapper = document.createElement("div");
@@ -217,9 +287,14 @@ function renderFilters(data) {
   const filters = document.querySelector("#filters");
   filters.replaceChildren();
   const counts = Object.fromEntries(
-    STATUS_ORDER.map((key) => [key, data.issues.filter((i) => statusOf(i) === key).length]),
+    FILTER_ORDER.map((key) => [
+      key,
+      data.issues.filter((issue) =>
+        key === "awaiting-human" ? needsHuman(issue) : statusOf(issue) === key,
+      ).length,
+    ]),
   );
-  for (const key of ["all", ...STATUS_ORDER]) {
+  for (const key of ["all", ...FILTER_ORDER]) {
     const label =
       key === "all" ? `すべて ${data.issues.length}` : `${STATUS_LABELS[key]} ${counts[key]}`;
     const button = text("button", label, "filter");
@@ -230,7 +305,11 @@ function renderFilters(data) {
       for (const item of filters.children)
         item.setAttribute("aria-pressed", String(item === button));
       for (const card of document.querySelectorAll(".card"))
-        card.hidden = key !== "all" && card.dataset.status !== key;
+        card.hidden =
+          key !== "all" &&
+          (key === "awaiting-human"
+            ? card.dataset.needsHuman !== "true"
+            : card.dataset.status !== key);
     });
     filters.append(button);
   }
@@ -260,21 +339,18 @@ function renderWork(data) {
 function pullCard(pull, data) {
   const issueNumbers = relatedIssueNumbers(pull);
   const relatedIssue = data.issues.find((issue) => issueNumbers.includes(issue.number));
-  const hasReportLabels = pull.labels.some(
-    (label) =>
-      label.name.startsWith("status:") ||
-      label.name.startsWith("owner:") ||
-      label.name === "needs-human",
-  );
-  const report = hasReportLabels ? pull : relatedIssue || pull;
-  const status = statusOf({ ...report, state: "open" });
+  const report = reportFieldsForPull(pull, relatedIssue);
+  const status = report.status;
   const card = document.createElement("article");
   card.className = "card";
   card.dataset.status = status;
+  card.dataset.needsHuman = String(report.needsHuman);
   const top = document.createElement("div");
   top.className = "card-top";
   top.append(text("span", `PR #${pull.number}`, "issue-number"));
   top.append(text("span", pull.draft ? "Draft" : "Ready", "badge"));
+  if (report.needsHuman)
+    top.append(text("span", STATUS_LABELS["awaiting-human"], "badge human-text"));
   card.append(top);
   const title = document.createElement("h3");
   title.append(link(pull.title, pull.html_url));
@@ -282,7 +358,7 @@ function pullCard(pull, data) {
   const dl = document.createElement("dl");
   dl.className = "meta";
   metaRow(dl, "報告状態", STATUS_LABELS[status]);
-  metaRow(dl, "owner", displayOwner(report));
+  metaRow(dl, "owner", report.owner === "pm" ? "pm（AI PM）" : report.owner);
   metaRow(
     dl,
     "最終変更",
@@ -294,7 +370,7 @@ function pullCard(pull, data) {
     "最新Actions",
     run ? link(`${run.name}: ${actionResult(run)}`, run.html_url) : "関連run未取得",
   );
-  if (status === "awaiting-human")
+  if (report.needsHuman)
     metaRow(dl, "本人承認", text("span", "ユーザーの判断待ち。AI PMの判断とは区別", "human-text"));
   if (status === "blocked")
     metaRow(dl, "blocker", link("PRの停止理由を確認", pull.html_url, "blocked-text"));
@@ -353,22 +429,24 @@ async function refresh(force = false) {
   const cacheAge = cached ? Date.now() - Date.parse(cached.fetchedAt) : Infinity;
   if (!force && cached && cacheAge < CACHE_MS) {
     render(cached, "live", "5分以内に取得したcacheを表示しています。");
-    nextAllowed = Date.parse(cached.fetchedAt) + CACHE_MS;
+    nextAllowed = Math.max(nextAllowed, Date.parse(cached.fetchedAt) + CACHE_MS);
     return;
   }
-  if (force && Date.now() < nextAllowed) {
+  if (!requestAllowed(Date.now(), nextAllowed)) {
+    if (!force) return;
     const seconds = Math.ceil((nextAllowed - Date.now()) / 1000);
     document.querySelector("#health").textContent =
       `API予算保護のため、あと${seconds}秒待ってください。`;
     return;
   }
   button.disabled = true;
-  nextAllowed = Date.now() + CACHE_MS;
+  nextAllowed = requestDeadline(Date.now());
   try {
     const data = await loadLive();
     saveCache(data);
     render(data);
   } catch (error) {
+    nextAllowed = requestDeadline(Date.now(), error.retryAt);
     if (cached) {
       render(
         cached,

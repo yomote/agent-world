@@ -9,9 +9,11 @@
 - `skipped`、`failure`、`cancelled`、`timed_out`を`success`へ読み替えない。
 - ownerとstatusはGitHubへの担当・報告状態であり、Codex内部threadの実livenessを表さない。
 - blockerの詳細と次の証跡はIssue / PRを正本とし、最新コメントは利用者が詳細を開いたときだけ1件取得する。
-- `owner: pm`はAI PMの管理状態、`needs-human`はユーザー本人の承認待ちとして別表示する。AI PM判断をhuman approvalとして表示しない。
+- `owner: pm`はAI PMの管理状態、`needs-human`はstatusと独立したユーザー本人の承認待ちとして別表示する。AI PM判断をhuman approvalとして表示しない。未知または未設定の`status:*`をReadyと推定せず「状態未設定」とする。
 
-基本取得はmilestone、対象Issue、open PR、直近Actionsの4 requestである。1分ごとにcache期限だけをlocal確認し、外部APIは5分に1回までの自動更新とする。非表示tabでは更新しない。手動更新にも5分のcooldownを適用する。403 / 429 / 通信失敗では前回値をstaleと明示し、前回値がなければerrorとして表示する。
+基本取得はmilestone、対象Issue、open PR、直近Actionsの4 requestである。1分ごとにcache期限だけをlocal確認し、外部APIは成功・失敗とも5分に1回までの自動更新とする。非表示tabでは更新しない。手動更新にも同じcooldownを適用し、`Retry-After`とrate limit resetが長ければそちらを優先する。403 / 429 / 通信失敗では前回値をstaleと明示し、前回値がなければerrorとして表示する。
+
+milestone、Issue、PRが1 requestの100件上限を超えた場合は不完全な一覧を表示せず、stale / errorにする。Actionsは「直近30件」が仕様上の上限である。詳細コメントは15秒間隔、1表示sessionで4件まで、各600文字までとし、基本取得48 request / hourと合わせてpublic APIの60 request / hour以内へ収める。
 
 ## Pages source
 
