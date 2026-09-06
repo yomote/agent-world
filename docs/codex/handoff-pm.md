@@ -49,4 +49,6 @@ CI担当の最新ターン `01a07546-b618-7e90-a2d2-1a187342cb19` は完了済�
 
 旧PM分業セッション `01a071e6-09f3-7531-a150-015acb864ee2` は、`AGENTS.md`、[チーム運用](../runbooks/codex-team.md)、この申し送りの移管に明示合意し、新規実装を終了した。以後のPM窓口は `01a0754f-7db4-7732-bd5f-ebb0d8aabcdc`（現在のUI名: agent-world）である。
 
-この移管では、単一PM窓口、worker/reviewerの分離、スマートフォンからのRemote継続、GitHubのDraft PR運用を [PMワークフロー](../runbooks/pm-workflow.md) に記録した。PMはユーザー窓口・指示・担当調整だけを行い、調査、編集、検証、レビュー、統合、commit、push、PR作成はworkerへ委任する。工場・IaCなど、すでに稼働中の担当は自分の修正を完了するまで所有権を維持し、初回を含む統合は専任workerが行う。現在はリポジトリ未作成で、既存GCMによるGitHub `/user` は401となり再試行を停止した。ブラウザーは未ログインで、公開作業は未実施である。Remoteは有効フラグ1だけを観測し、pairingとスマートフォンの実動作は未検証である。GitHub作成・pushの結果は実行したworkerが記録する。
+この移管では、単一PM窓口、worker/reviewerの分離、スマートフォンからのRemote継続、GitHubのDraft PR運用を [PMワークフロー](../runbooks/pm-workflow.md) に記録した。PMはユーザー窓口・指示・担当調整だけを行い、調査、編集、検証、レビュー、統合、commit、push、PR作成はworkerへ委任する。工場・IaCなど、すでに稼働中の担当は自分の修正を完了するまで所有権を維持し、初回を含む統合は専任workerが行う。
+
+統合workerはPublic [yomote/agent-world](https://github.com/yomote/agent-world) を作成し、空のbootstrap `main` と `codex/initial-vertical-slice` をpushして [Draft PR #1](https://github.com/yomote/agent-world/pull/1) を作成した。既存GCM資格情報によるGitHub `/user` の401は、`yomote` のdevice flow完了後の再確認で解消した。tokenと一時device codeはリポジトリやartifactへ保存していない。Remoteは有効フラグ1だけを観測し、pairingとスマートフォンの実動作は未検証である。GitHub Actions上の検査、Draft / Readyイベント、Terraformの実環境plan / apply / 再planも未検証・未実施として残る。

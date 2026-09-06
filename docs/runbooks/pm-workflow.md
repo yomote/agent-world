@@ -4,7 +4,7 @@
 
 ## 状態
 
-2026-09-06時点のPM窓口は `01a0754f-7db4-7732-bd5f-ebb0d8aabcdc`（UI名: agent-world）です。リポジトリは未作成です。GitHub認証では既存GCMによる `/user` が401となったため再試行を停止し、ブラウザーは未ログインです。公開作業は未実施です。Remoteは有効フラグ1だけを観測し、pairingとスマートフォンの実動作は未検証です。GitHub実行workerは結果をPMへ報告する。文書の更新は、そのファイルを明示的に割り当てられたworkerだけが行う。
+2026-09-06時点のPM窓口は `01a0754f-7db4-7732-bd5f-ebb0d8aabcdc`（UI名: agent-world）です。Public [yomote/agent-world](https://github.com/yomote/agent-world) を作成し、空のbootstrap `main` と成果branchをpushして [Draft PR #1](https://github.com/yomote/agent-world/pull/1) を作成済みです。GitHub認証は既存GCM資格情報で401となった後、`yomote` のdevice flowを完了し、`/user` で同アカウントへの認証成功を確認しました。Remoteは有効フラグ1だけを観測し、pairingとスマートフォンの実動作は未検証です。GitHub実行workerは結果をPMへ報告する。文書の更新は、そのファイルを明示的に割り当てられたworkerだけが行う。
 
 PMは会話で次の短い状態をユーザーへ取り次ぐ。Issue/PRへの記録が必要な場合は、対象を割り当てられたworkerが記録する。
 
