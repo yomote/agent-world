@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src https://api.github.com; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>Agent World — 開発状況</title>
+    <link rel="stylesheet" href="./status.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">AGENT WORLD / FACTORY ROLLOUT</p>
+        <h1>開発状況</h1>
+        <p class="lede">Issue・PR・Actionsの公開情報を、そのまま現在地として表示します。</p>
+      </div>
+      <button id="refresh" type="button">更新する</button>
+    </header>
+
+    <main>
+      <section class="notice" aria-labelledby="health-title">
+        <div>
+          <h2 id="health-title">取得状態</h2>
+          <p id="health" aria-live="polite">GitHubから読み込み中…</p>
+        </div>
+        <dl class="timestamps">
+          <div>
+            <dt>取得</dt>
+            <dd id="fetched-at">—</dd>
+          </div>
+          <div>
+            <dt>次回更新</dt>
+            <dd id="next-refresh">—</dd>
+          </div>
+        </dl>
+      </section>
+
+      <p class="scope-note">
+        ここに示すownerとstatusはGitHub上の担当・報告状態です。Codex内部processの実行中・停止中を示すものではありません。
+      </p>
+
+      <nav class="filters" aria-label="状態で絞り込む" id="filters"></nav>
+      <section aria-labelledby="work-title">
+        <div class="section-heading">
+          <h2 id="work-title">作業項目</h2>
+          <a id="github-dashboard" href="https://github.com/yomote/agent-world/issues"
+            >GitHubで開く</a
+          >
+        </div>
+        <div id="work-items" class="work-grid" aria-live="polite"></div>
+      </section>
+
+      <section aria-labelledby="prs-title">
+        <div class="section-heading"><h2 id="prs-title">Open PR</h2></div>
+        <div id="pull-requests" class="work-grid"></div>
+      </section>
+
+      <section aria-labelledby="actions-title">
+        <div class="section-heading"><h2 id="actions-title">直近のActions</h2></div>
+        <div id="actions" class="actions-list"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Public GitHub APIのみを使用。tokenやsecretはブラウザへ保存しません。</p>
+    </footer>
+    <script type="module" src="./status.js"></script>
+  </body>
+</html>
