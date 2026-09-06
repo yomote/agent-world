@@ -69,6 +69,23 @@ resource "github_repository_dependabot_security_updates" "project" {
   depends_on = [github_repository_vulnerability_alerts.project]
 }
 
+resource "github_repository_environment" "azure_production" {
+  repository        = github_repository.project.name
+  environment       = "azure-production"
+  can_admins_bypass = false
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "azure_production_main" {
+  repository     = github_repository.project.name
+  environment    = github_repository_environment.azure_production.environment
+  branch_pattern = "main"
+}
+
 resource "github_repository_ruleset" "main" {
   name        = "agent-world-main"
   repository  = github_repository.project.name

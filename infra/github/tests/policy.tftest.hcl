@@ -21,6 +21,12 @@ override_resource {
 override_resource {
   target = github_repository_dependabot_security_updates.project
 }
+override_resource {
+  target = github_repository_environment.azure_production
+}
+override_resource {
+  target = github_repository_environment_deployment_policy.azure_production_main
+}
 
 variables {
   owner           = "test-owner"
@@ -62,6 +68,16 @@ run "factory_policy" {
   assert {
     condition     = github_repository.project.security_and_analysis[0].secret_scanning[0].status == "enabled" && github_repository.project.security_and_analysis[0].secret_scanning_push_protection[0].status == "enabled"
     error_message = "public repoのsecret scanningとpush protectionを有効にする。"
+  }
+  # OIDC subjectのenvironment境界を、main以外からのdeploymentで迂回させない。
+  assert {
+    condition = (
+      !github_repository_environment.azure_production.can_admins_bypass &&
+      !github_repository_environment.azure_production.deployment_branch_policy[0].protected_branches &&
+      github_repository_environment.azure_production.deployment_branch_policy[0].custom_branch_policies &&
+      github_repository_environment_deployment_policy.azure_production_main.branch_pattern == "main"
+    )
+    error_message = "azure-production environmentは管理者bypassなし・main限定にする。"
   }
   assert {
     condition = (

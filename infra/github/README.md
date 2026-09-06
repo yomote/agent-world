@@ -4,15 +4,16 @@
 
 ## 管理範囲
 
-| 対象           | 宣言                                                                                                        |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| リポジトリ     | 公開範囲は明示入力、Issues有効、squashのみ、native auto-merge無効、マージ後のブランチ削除                   |
-| default branch | 存在するmainを指定。新規作成・renameはしない                                                                |
-| main ruleset   | PR経由、force push・削除禁止、linear history、未解決スレッド禁止、CIのcheck jobを必須化、管理者バイパスなし |
-| Actions        | 有効、GitHub製とAzure/login等の選択Actionのみ、SHA固定必須、既定tokenはread、PRの自己approve不可            |
-| 依存脆弱性     | alertsとDependabot security updatesを有効化                                                                 |
-| secret検出     | public repoのsecret scanningとpush protectionを有効化                                                       |
-| 更新対象と頻度 | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない     |
+| 対象            | 宣言                                                                                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------------- |
+| リポジトリ      | 公開範囲は明示入力、Issues有効、squashのみ、native auto-merge無効、マージ後のブランチ削除                   |
+| default branch  | 存在するmainを指定。新規作成・renameはしない                                                                |
+| main ruleset    | PR経由、force push・削除禁止、linear history、未解決スレッド禁止、CIのcheck jobを必須化、管理者バイパスなし |
+| Actions         | 有効、GitHub製とAzure/login等の選択Actionのみ、SHA固定必須、既定tokenはread、PRの自己approve不可            |
+| 依存脆弱性      | alertsとDependabot security updatesを有効化                                                                 |
+| secret検出      | public repoのsecret scanningとpush protectionを有効化                                                       |
+| 配備environment | `azure-production`を管理者bypassなし・custom policyの`main`だけに限定                                       |
+| 更新対象と頻度  | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない     |
 
 CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。[merge gate ADR](../../docs/adr/0005-trusted-merge-gate.md)のmarkerは、別会話で実施した独立Sol reviewのcurrent-head受入記録であり、GitHub identityの独立性を証明しない。
 

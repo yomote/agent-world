@@ -22,13 +22,13 @@
 
 ## 開発のPMとワーカー
 
-- 開発作業では、PMをユーザー窓口と指示・担当調整だけに限定する。PMは調査、編集、検証、レビュー、統合、commit、push、PR作成を行わず、具体的に独立したタスクとしてworkerへ委任する。委任のためだけにタスクを細分化しない。
-- PMはAstra、限定調査はLuna、通常実装はTerra、複雑実装と独立レビューはSolを使う。子エージェントは担当タスクを実行し、PMの役割を継承しない。具体的な流れは [PMワークフロー](docs/runbooks/pm-workflow.md) を参照する。
+- 開発作業では、単一のユーザー窓口をSol / mediumのFront Desk、実質PMをread-only Astra controllerに分ける。両者は調査、編集、検証、レビュー、統合、commit、push、PR作成を行わず、具体的なwork unitとしてworkerへ委任する。委任のためだけにタスクを細分化しない。
+- Front Deskは即時受付、既知の状態表示、既決事項の回答を行い、Astra PMは長期方針、優先順位、依存関係、owner、DoD、リスクと状態遷移を管理する。限定調査はLuna、通常実装はTerra、複雑実装と独立レビューはSolを使う。具体的な流れは [PMワークフロー](docs/runbooks/pm-workflow.md) を参照する。
 - 並行セッションの担当範囲を確認し、同じファイルを無調整で編集しない。実行中のタスクの担当は合意なく変更しない。
 - モデル指定、限定した文脈の受け渡し、レビュー、共有ディレクトリでの注意は [Codexチーム運用](docs/runbooks/codex-team.md) に従う。CIと外部アクセスの予算は引き続き全担当が守る。
-- ユーザーの窓口は単一のPMに集約する。PMの分配、承認境界、Remote継続、GitHubへの反映は [PMワークフロー](docs/runbooks/pm-workflow.md) に従う。
+- ユーザーの窓口は単一のFront Deskに集約する。Astra PMの分配、承認境界、Remote継続、GitHubへの反映は [PMワークフロー](docs/runbooks/pm-workflow.md) に従う。
 
-PMの実務禁止は現在から適用する。稼働中workerの担当所有権は、本人の修正完了まで維持し、後で統合workerが統合する。
+Front DeskとAstra PMの実務禁止は現在から適用する。稼働中workerの担当所有権は、本人の修正完了まで維持し、後で統合workerが統合する。
 
 ## CIと外部アクセスの予算
 
