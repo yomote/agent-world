@@ -10,9 +10,7 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--source", choices=("codex-event", "pm-confirmed", "fixture"), required=True
-    )
+    parser.add_argument("--source", choices=("pm-confirmed", "fixture"), required=True)
     parser.add_argument("--observed-at", required=True)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--output", type=Path, default=Path("artifacts/status/current.json"))

@@ -30,6 +30,8 @@ work itemはagent label、role、task、`running` / `review-wait` / `blocked`、
 
 writerは検証済みsnapshotを一時fileからrenameして置き換える。履歴は保存せず`artifacts/status/current.json`だけを読む。ブラウザcacheとAPI response cacheは使わない。
 
+現在の手動writerは`pm-confirmed`と`fixture`だけを許可する。実adapterが未実装の間は`codex-event`指定を拒否し、手動入力をlive eventとして保存できない。
+
 ## 現在の接続範囲
 
 ローカルHTTP表示とPM確認snapshotは実装済み。Codex CLIの`app-server` commandとJSON schema生成機能が存在することは確認したが、この版はDesktopが使用中のApp Server sessionへ接続していない。`thread/status/changed`を受けるadapterは次の差分で実装・検証し、それまでは`pm-confirmed`を`codex-event`へ変更しない。
