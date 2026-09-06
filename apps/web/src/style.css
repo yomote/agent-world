@@ -196,6 +196,9 @@ dd {
 }
 .direction-pad button {
   font-size: 1.3rem;
+  min-width: 48px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 .up {
   grid-area: 1 / 2;
@@ -223,6 +226,8 @@ dd {
   background: #133b3b;
   border-color: #2b7267;
   color: #7aebd3;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 .random-button[aria-pressed="true"] {
   background: #4d3423;

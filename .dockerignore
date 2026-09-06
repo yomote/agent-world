@@ -1,0 +1,13 @@
+.git
+.github
+.venv
+node_modules
+dist
+artifacts
+.terraform
+*.tfstate*
+__pycache__
+.pytest_cache
+.ruff_cache
+docs
+infra
