@@ -78,6 +78,8 @@ task-primary ownerは対象commitとDraft PRを完了まで所有します。[�
 
 独立worktreeで作業し、primary ownerが自分の変更をcommitします。担当packetで許可された場合に限り、ownerがpushし、Draft PRを作成または更新します。他worktreeの未コミット成果は、担当との移管合意なしに取り込みません。
 
+作業・review中にmainが進んだ場合は、着手base、確認したmain、review対象headのSHAを分けて報告し、PRのbase branchはmainのまま維持します。rebase禁止のpacketでは、mainの進行だけを理由に履歴を書き換えません。最新mainとの比較ではmerge baseと変更ファイルを確認し、branch上のcheck成功を最新mainとの統合検証やCI成功に読み替えません。統合後の差分・競合・CIを確認していなければ、その範囲は未検証として残します。
+
 review待ちはPASSや完了ではありません。dirty stateのcheck結果はその状態の結果として記録し、current headへの検証と区別します。Draft PR納品がDoDならそこで報告し、mergeやCI実行済みを意味するものとは扱いません。mergeまで許可・依頼されている場合だけ、以下の既存条件に従ってmerge gateへ進みます。
 
 - ブランチは `codex/<issue>-<slug>` を使う。小さな文書などIssueが不要な変更は `codex/<slug>` を使う。
