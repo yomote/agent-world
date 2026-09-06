@@ -4,8 +4,8 @@
 
 ```mermaid
 flowchart TD
-  Start[PMが1課題のpacketを分配] --> Check[着工workerがIssueのowner・open PR・依存を確認]
-  Check -->|重複または未合意の引継ぎ| Record[該当状態をIssueへ記録しPMが次を分配]
+  Start[Astra PMが1課題のpacketを分配] --> Check[着工workerがIssueのowner・open PR・依存を確認]
+  Check -->|重複または未合意の引継ぎ| Record[該当状態をIssueへ記録しAstra PMが次を分配]
   Check -->|着手可能| Implement[実装worker: 変更と適切なローカル検証]
   Implement --> Commit[統合worker: 意味のあるcommitを固定]
   Commit --> Review[独立Sol reviewer: 対象SHAを明記して確認]
@@ -15,18 +15,18 @@ flowchart TD
   Evidence --> Gate[統合worker: mainのmerge gateを固定headでdispatch]
   Gate -->|条件成立| Merge[squash merge]
   Gate -->|不合格・不明| Record
-  Merge --> Handoff[PMが成果・未検証をユーザーへ報告]
+  Merge --> Handoff[Front Deskが成果・未検証をユーザーへ報告]
   Implement -. failure / unknown .-> Record
   Fix -. failure / unknown .-> Record
 ```
 
 ## 正本と着工packet
 
-Issueは目的、DoD、状態の正本です。PRは変更差分と受入証跡の正本です。同じ情報を台帳や長いjournalへ複製しません。
+Issueは目的、DoD、状態の正本です。PRは変更差分と受入証跡の正本です。同じ情報を台帳や長いjournalへ複製しません。状態はIssueの`status:*` labelで表し、本文にはowner、次手順、関連PRだけを置く。labelの運用と一覧は[PMワークフロー](pm-workflow.md#githubでの進捗表示)に従う。
 
-着工workerは、着手前にIssueの既存ownerとopen PRを確認してPMへ報告する。すでに担当がいる場合は、その担当と合意した引継ぎが記録されるまで着手しない。期限や応答待ちだけを理由に所有権を奪わない。PMはこの結果に基づいて担当を分配または調整する。専用のclaim台帳、CAS、WIP制御は現在の対象外です。
+着工workerは、着手前にIssueの既存ownerとopen PRを確認してAstra PMへ報告する。すでに担当がいる場合は、その担当と合意した引継ぎが記録されるまで着手しない。期限や応答待ちだけを理由に所有権を奪わない。Astra PMはこの結果に基づいて担当を分配または調整する。専用のclaim台帳、CAS、WIP制御は現在の対象外です。
 
-packetには次を一括で書く。PMはpacketを渡した後、技術調査・編集・検証・レビュー・Git操作をせず、結果に基づいて次の担当を分配する。
+packetには次を一括で書く。Astra PMはpacketを渡した後、技術調査・編集・検証・レビュー・Git操作をせず、結果に基づいて次の担当を分配する。
 
 ```text
 Issue: <URL または #番号>
@@ -44,28 +44,26 @@ review: <独立reviewの対象commit SHAを後で記録する>
 
 ## 状態と停止
 
-Issueには状態ごとに、次の担当、具体的な次手順、既実施と未実施、PRへのリンクを短く残す。通常の状態は `in_progress`、`review_pending`、`blocked`、`failed`、`unknown`、`delivery_ready` とする。`delivery_ready` はcurrent headのPR証跡を揃えてDraft PRへ納品済みであることを表す。Issueはmergeまたは本来のDoDまでopenのまま保持し、次担当はそのDoDに必要な作業を引き継ぐ。Draft PRを出しただけでIssueをcloseしない。
+Issue本文には次の担当、具体的な次手順、既実施と未実施、PRへのリンクを短く残す。通常の状態labelは `status: in-progress`、`status: review`、`status: blocked`、`status: ready` とする。通信や書込み結果の`failed` / `unknown`は`status: blocked`とし、本文に事実を明記する。`status: ready`はcurrent headのPR証跡を揃えて納品可能であることを表す。Issueはmergeまたは本来のDoDまでopenのまま保持し、次担当はそのDoDに必要な作業を引き継ぐ。Draft PRを出しただけでIssueをcloseしない。
 
-| 状態             | 記録する事実                               | PMの次の分配                                           |
-| ---------------- | ------------------------------------------ | ------------------------------------------------------ |
-| `in_progress`    | owner、編集境界、実施中の作業              | 実装workerの完了報告を待ち、独立した作業だけを分配する |
-| `review_pending` | review依頼済み、PRリンク、未検証           | 独立Sol reviewerへ対象SHAを渡す                        |
-| `blocked`        | 阻害要因、既に試したこと、必要な判断       | 必要な判断または依存の担当を分配する                   |
-| `failed`         | 失敗したコマンド・操作、終了結果、再現条件 | 修正または原因調査を具体的に分配する                   |
-| `unknown`        | 結果不明になった操作、確認できた範囲       | 書き込みを再送せず、事実確認または判断を分配する       |
-| `delivery_ready` | PRリンク、納品範囲、残るDoD                | mergeまたは残るDoDの担当を分配する                     |
+| label                 | 記録する事実                         | Astra PMの次の分配                                     |
+| --------------------- | ------------------------------------ | ------------------------------------------------------ |
+| `status: in-progress` | owner、編集境界、実施中の作業        | 実装workerの完了報告を待ち、独立した作業だけを分配する |
+| `status: review`      | review依頼済み、PRリンク、未検証     | 独立Sol reviewerへ対象SHAを渡す                        |
+| `status: blocked`     | 阻害要因、失敗・結果不明、必要な判断 | 再送せず、事実確認または依存の担当を分配する           |
+| `status: ready`       | PRリンク、納品範囲、残るDoD          | mergeまたは残るDoDの担当を分配する                     |
 
 認証・権限拒否、ツール拒否、通信失敗、外部書き込みの結果不明は、別経路で迂回しない停止条件である。同じ失敗を無限に再試行しない。CIの照会と制限応答は[CI運用](ci.md)の予算に従う。アプリが担当を自動wakeしたり、常駐で状態を監視したりする前提は置かない。
 
 ## 実装から納品まで
 
 1. 実装workerはpacketの編集境界で変更し、検証結果を `pass`、`fail`、`not_run`、`skipped`、`unknown` の事実として区別する。dirty stateで実行したcheckは、そのdirty stateの結果であり、最新commitのPASSとは記録しない。
-2. 統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAをreviewerへ渡す。Issueには `review_pending` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
+2. 統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAをreviewerへ渡す。Issueには `status: review` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
 3. 独立Sol reviewerは実装会話を継承せず、対象SHA、確認したDoD、検証結果と未検証、指摘の有無を返す。SHAが変わったら、その旧reviewは新しい変更の受入証跡にならない。
 4. 指摘があれば担当workerが修正し、影響に応じて再検証する。統合workerは新しいcommitを作り、最新SHAに対する独立reviewを再依頼する。
 5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、review結果、検証結果、未検証を記録する。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[ADR 0005](../adr/0005-trusted-merge-gate.md)の独立review markerも同じコメントの先頭へ記録する。
 6. 統合workerはPRをReadyにしcurrent-head CIを確認する。GitHub設定とrulesetが適用済みなら、`main`のmerge gateへPR番号、40桁head、merge実行の明示trueを渡す。gateは条件後のsquash mergeまで同じ実行で進める。初回PRだけはADRのbootstrap手順を使う。
-7. merge後にIssueを完了し、PMは証跡に基づき成果、検証、未検証をユーザーへ報告する。条件が不足または不明ならmergeせず状態と次手順を記録する。
+7. merge後にIssueを完了し、Front Deskは証跡に基づき成果、検証、未検証をユーザーへ報告する。条件が不足または不明ならmergeせず状態と次手順を記録する。
 
 「実装・レビュー・検証完了しDraft PRで納品」は、このループの完了として報告できる。一方、merge済み、GitHub Actionsの実行済み、本番確認済みは別の事実であり、未実施なら未検証として残す。
 

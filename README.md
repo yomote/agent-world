@@ -39,6 +39,8 @@ Traceはこのタブの直近80件。他タブのActionはStateのみ1秒ごと�
 
 ## 開発資料
 
+- [進捗dashboard（Factory rollout Issues）](https://github.com/yomote/agent-world/issues?q=is%3Aissue+milestone%3A%22Factory+rollout%22)
+
 - [Mind Inboxの移植計画・参照履歴](docs/porting-plan.md)
 - [設計とAPI契約](docs/architecture.md) / [ADR](docs/adr/0001-authoritative-world.md)
 - [起動・品質チェック・トラブルシュート](docs/runbooks/local-dev.md)
