@@ -6,6 +6,25 @@
 
 このpacketは実装・ローカル検証・独立reviewまでを承認前に終える。Azure、Entra、GHCR、OIDC、credential、Internet公開のwriteは本人の明示承認後に行う。
 
+## 依存と承認対象
+
+local statusの[PR #16](https://github.com/yomote/agent-world/pull/16)は通常squash merge済みで、依存先mainは`910952672fcfef1e2e0626a402e51646b9d5fe1c`に固定する。[PR #18](https://github.com/yomote/agent-world/pull/18)のAzureコミットだけをこのmainへ移す。旧base `f098727094ca49f2471d7245143a447c87829c0a`とmainのtreeは一致し、`e2967f4`から移した`c0a808c`のrange-diffも一致した。この文書更新はその後の独立した差分である。最終review対象の40文字SHA、child ID、検証とCIはPRのcurrent-head証跡を正本とする。
+
+公開の依存順は、#16の固定main → PR #18のreview・CI・別途許可されたmerge → 両差分を含むmainの40文字SHA固定 → image build/smoke → immutable registry digest確定 → 本人の公開承認 → 匿名pull → what-if → plan/parameter承認 → applyである。このunitはmain mergeも以下のlive操作も実行しない。
+
+registry digestを得るための非公開GHCRへのpushと、package public化・Azure公開は別々に承認する。既存workflowの`publish=false`はdigestを生成しないため、それだけでimage確定済みとは扱わない。`publish=true`は同じmain SHAを再buildしてsmokeするので、そのrunで実際にpushしたdigestとrun URLを採用し、先行dry runのimageと同一だとは推定しない。事前に対象packageが非公開であることを確認できない場合は、digest確定用のpushを開始しない。
+
+| 承認記録   | 現在の状態と必要な証拠                                                                                                                                                           |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| source     | #16/mainは上記SHAで確定。PR #18 merge後のmain SHAは未取得。PR review SHAとの対応、差分、CIを記録してからimage workflowの`expected_head`に渡す                                    |
+| image      | build/smoke run、非公開GHCRへの1回pushの許可、実際の`@sha256:` digestは未取得。package public化の明示承認と、そのdigestの匿名pull成功日時も未取得                                |
+| 請求と通知 | 実請求通貨のread-only出典・確認日時、本人確認済み通知メール・確認日時は未取得。既存候補値を確認済み実値へ読み替えない                                                            |
+| identity   | subscription / tenant / deploy本人OID / API app client ID / ingest service principal OIDの実照合は未実施。CLIのsigned-in user OIDと`OperatorObjectId`の一致をwhat-if前に確認する |
+| deployment | Core / Protectedごとのhead、全parameter、confirmation hash、保存planとplan hash、本人の明示承認は未取得。phase間で承認を流用しない                                               |
+| rollback   | 下記回収手順を公開承認に含める。初回は直前の稼働digestがないため、認証失敗時はexternal ingress無効化とpublisher停止を選ぶ。RG削除・Key Vault purgeは別承認                       |
+
+未取得値は空欄のまま承認対象から外すのではなく、該当するlive操作の停止条件とする。承認者・確認時刻・対象操作をPRの承認記録へ残す。credential値やprivate keyは記録しない。
+
 ## 固定候補
 
 | 項目               | 値・境界                                                                                               |
@@ -66,9 +85,9 @@ scriptはreview済み40文字headが現在のcheckoutと一致することを検
 
 ## 承認前停止条件
 
-次が1つでも成立しなければapplyを開始しない。
+次のいずれかに該当する場合はapplyを開始しない。
 
-1. 独立review済みcurrent headとdigestが一致しない。
+1. 独立review済み変更を含む承認済みmain headと、実build/smoke runおよび採用digestの対応を確認できない。
 2. 実請求通貨がJPYと確認できない、確認日時・read-only出典を記録できない、またはBudget通知メールを本人が確認していない。
 3. subscription / tenant / signed-in本人OID、Japan East利用可否、候補名の非衝突を再確認できない。
 4. Core what-ifがCreate / NoChange以外を含む。
@@ -80,9 +99,9 @@ scriptはreview済み40文字headが現在のcheckoutと一致することを検
 
 ## 承認後の順序
 
-0. 依存するlocal status PR #16を通常のreview・required checks・merge gateでmainへmergeする。管理Azure差分はstacked Draft PRとして別にreviewし、#16 merge後にmainとの差分とcurrent-head checksを再確認して通常の保護条件でmergeする。このunitのためにbranch protectionを緩和せず、権限bypassを使わない。
-1. 両差分が入ったcurrent approved main headで、手動`Management status image` workflowを同じ40文字head、`publish=false`で実行し、buildとhealth smokeを確認する。本人承認後の1回だけ`publish=true`でGHCRへpushする。packageをpublicにし、匿名pullできるdigestを記録する。
-2. Azure context、region、候補名、請求通貨、当月costをread-onlyで1回確認する。出典と確認日時、本人が確認したBudget通知先をscript parameterへ渡し、confirmation recordを承認packetへ添付する。
+0. #16は上記mainへ統合済み。PR #18のAzure-only差分、current-head reviewとCIを確認し、別途許可された担当が通常の保護条件でmergeする。merge後のmain SHAとreview済み差分の対応を確認し、imageとdeploymentに使う40文字SHAを改めて固定する。branch protectionを緩和せず、権限bypassを使わない。
+1. 両差分が入った承認済みmain headで、手動`Management status image` workflowを同じ40文字head、`publish=false`で実行し、buildとhealth smokeを確認する。Actions利用枠・料金と非公開GHCR packageを確認し、非公開pushの本人承認後に1回だけ`publish=true`を実行する。このrunのbuild/smokeとimmutable digestを記録し、実請求通貨の証拠・時刻、通知メール本人確認、identity照合予定、rollbackを含む具体的packetでpackage public化・Azure公開の本人承認を得る。その後にpackageをpublicにし、同じdigestの匿名pullを確認してからwhat-ifへ進む。途中の値や結果が不明なら停止する。
+2. 公開承認用のAzure context、region、候補名、請求通貨、当月costをread-onlyで確認する。これらの確認は手順1のpublic化承認より前に揃える。既に429で上限に達したCost API照会は再試行せず、本人が確認したportal等の出典と日時を使う。本人が確認したBudget通知先もscript parameterへ渡し、confirmation recordを承認packetへ添付する。
 3. Core what-ifを実行し、専用RGのCreateだけをreviewする。同じ引数でCore applyを1回行う。この時点はinternal ingressである。
 4. API app / service principalを作り、callbackを`https://<fqdn>/.auth/login/aad/callback`、single tenant、`Status.Ingest` roleにする。本人OIDを記録する。
 5. API appの1年secretを作り、値を表示・file保存せずKey Vaultへ直送する。失敗時はkey IDでcredentialを削除する。
