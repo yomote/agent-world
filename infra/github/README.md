@@ -9,7 +9,7 @@
 | リポジトリ     | 公開範囲は明示入力、Issues有効、squashのみ、native auto-merge無効、マージ後のブランチ削除                   |
 | default branch | 存在するmainを指定。新規作成・renameはしない                                                                |
 | main ruleset   | PR経由、force push・削除禁止、linear history、未解決スレッド禁止、CIのcheck jobを必須化、管理者バイパスなし |
-| Actions        | 有効、許可するActionの制限、SHA固定必須、既定tokenはread、PRの自己approve不可                               |
+| Actions        | 有効、GitHub製とAzure/login等の選択Actionのみ、SHA固定必須、既定tokenはread、PRの自己approve不可            |
 | 依存脆弱性     | alertsとDependabot security updatesを有効化                                                                 |
 | secret検出     | public repoのsecret scanningとpush protectionを有効化                                                       |
 | 更新対象と頻度 | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない     |

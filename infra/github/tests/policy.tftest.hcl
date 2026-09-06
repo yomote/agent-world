@@ -52,6 +52,10 @@ run "factory_policy" {
     error_message = "ActionのSHA固定と依存脆弱性の検出・修正提案を有効にする。"
   }
   assert {
+    condition     = contains(github_actions_repository_permissions.project.allowed_actions_config[0].patterns_allowed, "Azure/login@*")
+    error_message = "Azure deployが使うSHA固定Azure/loginをselected Actionに許可する。"
+  }
+  assert {
     condition     = !github_repository.project.allow_auto_merge && github_repository.project.allow_squash_merge && !github_repository.project.allow_merge_commit && !github_repository.project.allow_rebase_merge
     error_message = "native auto-mergeを無効にし、merge gateが使うsquashだけを有効にする。"
   }

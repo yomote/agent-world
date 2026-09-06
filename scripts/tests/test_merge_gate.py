@@ -1,7 +1,9 @@
 """merge gateが古い・不完全な証跡でmergeしないことを検証する。"""
 
 import importlib.util
+import io
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -265,3 +267,51 @@ def test_post_merge_dispatch_contract_contains_verified_shas():
             },
         ),
     ]
+
+
+def test_uncertain_write_http_error_is_unknown_but_known_rejection_is_not(monkeypatch):
+    """書込み408/429/5xxだけを結果不明にし、既知403やread失敗と混同しない。"""
+
+    def fail_with(code):
+        def urlopen(request, timeout):
+            raise urllib.error.HTTPError(
+                request.full_url, code, "failure", {}, io.BytesIO(b"failure")
+            )
+
+        return urlopen
+
+    client = merge_gate.GitHubClient("owner/repo", "token")
+    for code in (408, 429, 502):
+        monkeypatch.setattr(merge_gate.urllib.request, "urlopen", fail_with(code))
+        with pytest.raises(merge_gate.GitHubUnknownError):
+            client.put("/write", {})
+    monkeypatch.setattr(merge_gate.urllib.request, "urlopen", fail_with(403))
+    with pytest.raises(merge_gate.GitHubError) as known:
+        client.put("/write", {})
+    assert not isinstance(known.value, merge_gate.GitHubUnknownError)
+    monkeypatch.setattr(merge_gate.urllib.request, "urlopen", fail_with(502))
+    with pytest.raises(merge_gate.GitHubError) as read_failure:
+        client.get("/read")
+    assert not isinstance(read_failure.value, merge_gate.GitHubUnknownError)
+
+
+def test_post_merge_failure_reports_irreversible_partial_state():
+    """merge済みなのに後続失敗を未mergeと誤読する回帰を防ぐ。"""
+
+    class Client:
+        repository = "owner/repo"
+
+        def __init__(self, fail_at):
+            self.fail_at = fail_at
+            self.calls = 0
+
+        def post(self, path, body):
+            self.calls += 1
+            if self.calls == self.fail_at:
+                raise merge_gate.GitHubUnknownError("unknown")
+
+    target = merge_gate.GateTarget(7, SHA)
+    with pytest.raises(merge_gate.GateError, match="main CI dispatch=unknown.*not_run"):
+        merge_gate.dispatch_post_merge(Client(1), target, OTHER_SHA)
+    with pytest.raises(merge_gate.GateError, match="main CI dispatch=sent.*azure dispatch=unknown"):
+        merge_gate.dispatch_post_merge(Client(2), target, OTHER_SHA)

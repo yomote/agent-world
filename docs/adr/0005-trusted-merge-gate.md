@@ -25,7 +25,7 @@
 - current headの`CI` workflow runが`pull_request`イベントで`completed/success`になったことをAPIから確認する。`skipped`、古いhead、別PR、自己発行commit statusは根拠にしない。
 - activeなmain rulesetに管理者を含むbypassがなく、PR必須、未解決thread禁止、strictな`check`必須が適用済みであることをAPIから確認する。
 - すべて揃った時だけexpected SHA付きsquash merge APIを1回呼ぶ。native auto-mergeは条件変化後も有効状態が残る可能性があるため無効のままにする。API結果が不明なら再送せず、同じheadのmerge完了をread-onlyで1回だけ確認する。
-- `GITHUB_TOKEN`によるmerge pushは別workflowを起動しないため、merge成功後にmain CIを`workflow_dispatch`し、`agent-world-merged` repository dispatchへPR番号、PR head、merge commit SHAを渡す。Azure deployはpayloadと現行main/PRを再検証する。どちらかのdispatch結果が不明なら再送せず、merge済み・後続unknownとして止める。
+- `GITHUB_TOKEN`によるmerge pushは別workflowを起動しないため、merge成功後にmain CIを`workflow_dispatch`し、`agent-world-merged` repository dispatchへPR番号、PR head、merge commit SHAを渡す。Azure deployはpayloadと現行main/PRを再検証する。どちらかのdispatchが失敗または不明なら再送せず、merge済みであることと各dispatchの`sent` / `failed` / `unknown` / `not_run`を明示して止める。
 - CI待ちは60秒以上の間隔で最大10回とする。権限不足、取得不能、100件を超えて全量を確認できないコメント／thread、書き込み結果不明、head/baseのraceは失敗として止め、書き込みを再送しない。
 
 ## 初回bootstrap

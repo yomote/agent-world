@@ -71,6 +71,13 @@ class GitHubClient:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             detail = error.read().decode(errors="replace")[:500]
+            if method in {"POST", "PUT", "PATCH", "DELETE"} and (
+                error.code in {408, 429} or error.code >= 500
+            ):
+                # 書込みがGitHubへ届いた後の応答障害を、既知の拒否と誤認しない。
+                raise GitHubUnknownError(
+                    f"GitHub API {method} {path}: HTTP {error.code}, result unknown: {detail}"
+                ) from error
             raise GitHubError(f"GitHub API {method} {path}: HTTP {error.code}: {detail}") from error
         except (OSError, ValueError) as error:
             # 書き込み結果が不明な場合も再送しない。
@@ -322,21 +329,40 @@ def verify_bootstrap_source(expected_head: str) -> None:
 
 
 def dispatch_post_merge(client: GitHubClient, target: GateTarget, merge_sha: str) -> None:
-    client.post(
-        _repo_path(client, f"/actions/workflows/{EXPECTED_WORKFLOW}/dispatches"),
-        {"ref": "main"},
-    )
-    client.post(
-        _repo_path(client, "/dispatches"),
-        {
-            "event_type": "agent-world-merged",
-            "client_payload": {
-                "pr_number": target.number,
-                "head_sha": target.expected_head,
-                "merge_commit_sha": merge_sha,
+    try:
+        client.post(
+            _repo_path(client, f"/actions/workflows/{EXPECTED_WORKFLOW}/dispatches"),
+            {"ref": "main"},
+        )
+    except GitHubUnknownError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=unknown; azure dispatch=not_run"
+        ) from error
+    except GitHubError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=failed; azure dispatch=not_run"
+        ) from error
+
+    try:
+        client.post(
+            _repo_path(client, "/dispatches"),
+            {
+                "event_type": "agent-world-merged",
+                "client_payload": {
+                    "pr_number": target.number,
+                    "head_sha": target.expected_head,
+                    "merge_commit_sha": merge_sha,
+                },
             },
-        },
-    )
+        )
+    except GitHubUnknownError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=sent; azure dispatch=unknown"
+        ) from error
+    except GitHubError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=sent; azure dispatch=failed"
+        ) from error
 
 
 def execute(

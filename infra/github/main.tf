@@ -44,7 +44,11 @@ resource "github_actions_repository_permissions" "project" {
   allowed_actions_config {
     github_owned_allowed = true
     verified_allowed     = false
-    patterns_allowed     = ["hashicorp/setup-terraform@*", "lycheeverse/lychee-action@*"]
+    patterns_allowed = [
+      "Azure/login@*",
+      "hashicorp/setup-terraform@*",
+      "lycheeverse/lychee-action@*",
+    ]
   }
 }
 
