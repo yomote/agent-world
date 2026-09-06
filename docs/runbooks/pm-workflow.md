@@ -1,6 +1,6 @@
 # PMワークフロー
 
-スマートフォンとデスクトップから同じ開発を進めるとき、ユーザーの窓口を単一のPMに集約する運用です。プロダクト内のAgent / Worldの仕様や、自動化された承認・mergeを追加するものではありません。
+スマートフォンとデスクトップから同じ開発を進めるとき、ユーザーの窓口を単一のPMに集約する運用です。プロダクト内のAgent / Worldの仕様とは独立しています。
 
 ## 状態
 
@@ -33,7 +33,8 @@ flowchart TD
   Review -->|指摘あり| Fix[担当worker<br/>修正]
   Fix --> Commit
   Review -->|指摘なし| Integrate[統合worker<br/>非変更の最終確認・push・Draft PR証跡]
-  Integrate --> PM
+  Integrate --> Gate[統合worker: 条件成立後のmerge gate]
+  Gate --> PM
   PM --> User
   Luna -. blocked .-> PM
   Terra -. blocked .-> PM
@@ -49,7 +50,7 @@ flowchart TD
 
 Lunaは限定した読み取り調査、Terraは通常実装、Solは複雑実装と独立reviewを担う。読み取り調査だけを一律に独立reviewへ回さず、変更物をreview対象とする。子へ渡す文脈は必要最小限にし、独立した作業だけを並列にする。調査や全体検証を重複させず、最終チェックは統合workerへ一元化する。難航したworkerは無限に反復せず、PMへ状況を返して担当の引き上げ判断を受ける。金額と高速化率は未測定のため主張しない。
 
-Mind Inboxの単一窓口、Issue/PRでの状態管理、分配packet、短命branch/worktreeの考え方を踏襲します。PMの実務はすべてworkerへ委任する。このリポジトリへ持ち込まないのは、Claude固有のRoutineやreview-gate、全自動の承認・mergeです。参照: [team.md](https://github.com/yomote/mind-inbox/blob/main/docs/team.md)、[child-sessions.md](https://github.com/yomote/mind-inbox/blob/main/docs/runbooks/child-sessions.md)、[branch-naming-and-cleanup.md](https://github.com/yomote/mind-inbox/blob/main/docs/runbooks/branch-naming-and-cleanup.md)。
+Mind Inboxの単一窓口、Issue/PRでの状態管理、分配packet、短命branch/worktreeの考え方を踏襲します。PMの実務はすべてworkerへ委任する。review-gateはcurrent headとGitHub保護を再検査する単発dispatchへ縮小して採用する。Claude固有のRoutine、常駐sweep、自動承認は持ち込まない。参照: [team.md](https://github.com/yomote/mind-inbox/blob/main/docs/team.md)、[child-sessions.md](https://github.com/yomote/mind-inbox/blob/main/docs/runbooks/child-sessions.md)、[branch-naming-and-cleanup.md](https://github.com/yomote/mind-inbox/blob/main/docs/runbooks/branch-naming-and-cleanup.md)。
 
 ## GitとDraft PR
 
@@ -60,7 +61,7 @@ Mind Inboxの単一窓口、Issue/PRでの状態管理、分配packet、短命br
 - ブランチは `codex/<issue>-<slug>` を使う。小さな文書などIssueが不要な変更は `codex/<slug>` を使う。
 - Issueには目的、owner、作業状態、次手順とPRへのリンクを記録する。Draft PRには差分と、current head SHAに対応するreview・検証・未検証の証跡を記録する。詳細は[単一課題の完遂ループ](single-task-loop.md)を参照する。
 - DraftでCI jobがskipされたことはPASSではない。Ready for review後の該当runを確認できない場合は、未完了・未検証として扱う。
-- CIは1 job・最大10分の予算を守る。照会は対象runを60秒以上空けて最大10回までとし、常駐の定期監視とauto-mergeは追加しない。詳細は [CIと外部アクセスの運用](ci.md) を参照する。
+- CIは1 job・最大10分の予算を守る。照会は対象runを60秒以上空けて最大10回までとする。独立review証跡とcurrent-head CI、rulesetが揃ったPRは、統合workerが[信頼済みmerge gate](../adr/0005-trusted-merge-gate.md)を起動してsquash mergeまで進める。常駐監視は追加しない。詳細は [CIと外部アクセスの運用](ci.md) を参照する。
 
 GitHub設定のapply、公開範囲の変更、mergeは、具体的な内容について既存の許可を確認する。足りない許可だけをまとめてユーザーへ尋ねる。結果不明の書き込みや拒否された操作を成功扱いせず、自動再送もしない。
 

@@ -1,6 +1,6 @@
 # 単一課題の完遂ループ
 
-1回の指示で、1つの課題を実装・独立レビュー・検証・Draft PRへの納品まで進める運用です。PMの役割、モデル選択、共有ディレクトリの扱いは[PMワークフロー](pm-workflow.md)と[Codexチーム運用](codex-team.md)を正典とします。この文書は課題単位の記録と受渡しだけを定めます。自動承認、auto-merge、常駐watchdog、専用Routineは追加しません。
+1回の指示で、1つの課題を実装・独立レビュー・検証・条件成立後のmergeまで進める運用です。PMの役割、モデル選択、共有ディレクトリの扱いは[PMワークフロー](pm-workflow.md)と[Codexチーム運用](codex-team.md)を正典とします。この文書は課題単位の記録と受渡しを定めます。常駐watchdogや専用Routineは追加しません。
 
 ```mermaid
 flowchart TD
@@ -12,7 +12,10 @@ flowchart TD
   Review -->|指摘あり| Fix[担当worker: 修正・必要な再検証]
   Fix --> Commit
   Review -->|指摘なし| Evidence[統合worker: 最新SHAの検証・review証跡をPRへ記録]
-  Evidence --> Handoff[PMが成果・未検証をユーザーへ報告]
+  Evidence --> Gate[統合worker: mainのmerge gateを固定headでdispatch]
+  Gate -->|条件成立| Merge[squash merge]
+  Gate -->|不合格・不明| Record
+  Merge --> Handoff[PMが成果・未検証をユーザーへ報告]
   Implement -. failure / unknown .-> Record
   Fix -. failure / unknown .-> Record
 ```
@@ -60,8 +63,9 @@ Issueには状態ごとに、次の担当、具体的な次手順、既実施と
 2. 統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAをreviewerへ渡す。Issueには `review_pending` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
 3. 独立Sol reviewerは実装会話を継承せず、対象SHA、確認したDoD、検証結果と未検証、指摘の有無を返す。SHAが変わったら、その旧reviewは新しい変更の受入証跡にならない。
 4. 指摘があれば担当workerが修正し、影響に応じて再検証する。統合workerは新しいcommitを作り、最新SHAに対する独立reviewを再依頼する。
-5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、review結果、検証結果、未検証を記録する。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。
-6. 統合workerはPR証跡を揃えたらIssueを `delivery_ready` とし、残るDoDと次担当を記録する。PMは証跡に基づき、成果、検証、未検証、次のDoD上の作業をユーザーへ報告する。既存許可の範囲では、毎回形式的なユーザー承認を求めない。
+5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、review結果、検証結果、未検証を記録する。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[ADR 0005](../adr/0005-trusted-merge-gate.md)の独立review markerも同じコメントの先頭へ記録する。
+6. 統合workerはPRをReadyにしcurrent-head CIを確認する。GitHub設定とrulesetが適用済みなら、`main`のmerge gateへPR番号、40桁head、merge実行の明示trueを渡す。gateは条件後のsquash mergeまで同じ実行で進める。初回PRだけはADRのbootstrap手順を使う。
+7. merge後にIssueを完了し、PMは証跡に基づき成果、検証、未検証をユーザーへ報告する。条件が不足または不明ならmergeせず状態と次手順を記録する。
 
 「実装・レビュー・検証完了しDraft PRで納品」は、このループの完了として報告できる。一方、merge済み、GitHub Actionsの実行済み、本番確認済みは別の事実であり、未実施なら未検証として残す。
 
@@ -83,4 +87,4 @@ DraftのCI jobが`skipped`なら、その事実を記録し、`pass`と書かな
 
 統合workerはIssueまたはPRの受渡しに「学び: なし」または1〜2文の学びを残す。再発防止が必要な場合だけ、原因に応じて規約、回帰test、検査、または別Issueへ反映する。毎回の規約追加やtestの増殖は行わない。
 
-この運用は手作業のreview-gateを明確化するが、新しい強制CI checker、bot、定期処理を導入しない。自動化やclaimの採用は、必要な利用枠・権限・実行痕跡・異常時の回収を設計できた別課題で判断する。
+この運用は単発のmerge gateまで自動化するが、新しい自動承認、コメントbot、定期処理は導入しない。claimの採用は、必要な利用枠・権限・実行痕跡・異常時の回収を設計できた別課題で判断する。

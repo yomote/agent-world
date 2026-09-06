@@ -52,6 +52,14 @@ run "factory_policy" {
     error_message = "ActionのSHA固定と依存脆弱性の検出・修正提案を有効にする。"
   }
   assert {
+    condition     = !github_repository.project.allow_auto_merge && github_repository.project.allow_squash_merge && !github_repository.project.allow_merge_commit && !github_repository.project.allow_rebase_merge
+    error_message = "native auto-mergeを無効にし、merge gateが使うsquashだけを有効にする。"
+  }
+  assert {
+    condition     = github_repository.project.security_and_analysis[0].secret_scanning[0].status == "enabled" && github_repository.project.security_and_analysis[0].secret_scanning_push_protection[0].status == "enabled"
+    error_message = "public repoのsecret scanningとpush protectionを有効にする。"
+  }
+  assert {
     condition = (
       length(yamldecode(file("${path.module}/../../.github/workflows/ci.yml")).jobs) == 1 &&
       yamldecode(file("${path.module}/../../.github/workflows/ci.yml")).jobs.check.timeout-minutes == 10 &&

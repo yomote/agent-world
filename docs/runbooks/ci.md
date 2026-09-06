@@ -14,6 +14,7 @@ CIはローカル検証を終えた変更を確認するために使う。Agent�
 | main / masterへのpush                        | 統合後のcheckを実行する                                         |
 | 同じPRまたは同じ対象ブランチの次の実行       | 古い実行・待機を取り消し、最新だけを残す                        |
 | コメント・ラベル・レビュー投稿・CI完了・定刻 | 起動しない                                                      |
+| mainを指定したmerge gateの手動dispatch       | current headと保護条件を再検査し、成立時だけsquash mergeする    |
 
 設定は [ci.yml](../../.github/workflows/ci.yml)。1回につき1job、実行時間は最大10分。npm/pipのダウンロードキャッシュを利用する。別PRは別グループであり、リポジトリ全体の同時実行数や時間あたりの起動回数を制限する設定ではない。連続pushのたびにworkflow自体は作られるため、pushをまとめる運用も必要になる。
 
@@ -25,7 +26,7 @@ lychee本体は固定バージョン・OS・CPUアーキテクチャをキーに
 
 PRの検証とmain / masterの検証は、マージ前後の異なる内容を確認するため両方残す。ドキュメントも整形チェックの対象なのでpath filterは設けない。workflow単位のスキップによって必須チェックがPendingのままになる運用も避ける。Draftのskipは検証成功を意味しない。Ready for review後の最新の結果を確認する。
 
-現時点ではCD、外部データ収集、GitHub APIを巡回するスクリプトは実装していない。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
 
 ## 開発エージェントの確認予算
 

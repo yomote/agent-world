@@ -13,16 +13,17 @@
 | 自動化の実行痕跡             | [status runbook](https://github.com/yomote/mind-inbox/blob/d3c15275b50d3686dba226fd98a1bdffc581a8dd/docs/runbooks/status-page.md)に実装・制約の記録                                                                  | ローカルJSON/Markdown/ログ、CIのjob summaryとartifactに縮小。失敗・timeout・未完了を成功と分ける                                                      |
 | 文書リンクの既製ツール化     | [#393](https://github.com/yomote/mind-inbox/issues/393)でlycheeを提案。参照時のdebt-checkは自作検出器                                                                                                                | lycheeを導入。インライン・参照形式のローカルリンクを検査。外部URLの死活は対象外                                                                       |
 | 依存更新とActionのSHA固定    | [.github/dependabot.yml](https://github.com/yomote/mind-inbox/blob/d3c15275b50d3686dba226fd98a1bdffc581a8dd/.github/dependabot.yml)に実装                                                                            | npm / pip / Actions / Terraformの更新設定を追加。脆弱性通知・security updatesの有効化はTerraformに含める                                              |
+| secret scanning              | GitHubのrepository security設定で運用                                                                                                                                                                                | public repoのsecret scanningとpush protectionをTerraformへ追加。CodeQL default setupは別API適用と実run確認が必要なため未実施                          |
 | GitHub設定のIaC              | [Terraform runbook](https://github.com/yomote/mind-inbox/blob/d3c15275b50d3686dba226fd98a1bdffc581a8dd/docs/runbooks/github-terraform.md): YAMLとTerraformが併存。CIはfmt/validateまで、実環境planの認証経路は未配線 | [infra/github](../infra/github/README.md)を設定の正本にする。repo・default branch・ruleset・Actions・依存脆弱性を宣言し、importとplan/apply手順を用意 |
 | 規約と実装のずれ検出         | [#351](https://github.com/yomote/mind-inbox/issues/351)でworkflowとwatcherの照合などを提案                                                                                                                           | 最初の適用は「必須チェック名とCI job名の一致」。Terraform mock testで検査                                                                             |
-| 独立レビュー / review-gate   | [docs/team.md](https://github.com/yomote/mind-inbox/blob/d3c15275b50d3686dba226fd98a1bdffc581a8dd/docs/team.md)に実装記録と自動judge起動の欠落                                                                       | GitHub rulesetでPR・未解決スレッド・機械検査を管理。独立レビューの自動起動は未導入。自己承認不能の単独開発で承認数1を必須にしない                     |
+| 独立レビュー / review-gate   | [review-gate](https://github.com/yomote/mind-inbox/blob/d3c15275b50d3686dba226fd98a1bdffc581a8dd/cicd/scripts/review-gate/check.py)にcurrent head・review・thread・auto-merge検査を実装                              | 信頼済みmainの単発dispatchへ縮小。current-head CI・review証跡・ruleset・threadを再検査し、条件成立時だけsquash mergeする                              |
 | 定期PM / レビューRoutine     | 同team.mdに未登録・呼び忘れ時の沈黙を記録                                                                                                                                                                            | 後続候補。起動経路・利用枠・実行痕跡・欠落検出を確保してから導入                                                                                      |
 | 二重着工防止 (claim ref)     | 同team.mdでは設計のみ。[#349](https://github.com/yomote/mind-inbox/issues/349)に失効条件の問題                                                                                                                       | 後続候補。共有GitHubと並行担当が必要になった時、取得・heartbeat・解放・異常終了からの回収を一式で設計                                                 |
 | 並行作業の隔離               | [#402](https://github.com/yomote/mind-inbox/issues/402)、[#456](https://github.com/yomote/mind-inbox/issues/456)に同一ブランチ競合・許可待ち沈黙の実害                                                               | 現在のセッション規約を使用。元リポジトリの全件委任・モデル指定・常設承認は移植しない                                                                  |
 | 合成ユーザー / UX自律改善    | [#304](https://github.com/yomote/mind-inbox/issues/304)に構想と着手条件                                                                                                                                              | 後続候補。まずSandboxの操作仕様と再現可能なブラウザ検証を確立し、探索と評価・コスト上限を決める                                                       |
 | Azure / deploy / コスト監視  | 環境再構築の宣言・runbookが存在                                                                                                                                                                                      | 配備先が未決定。クラウドを導入する時点でネットワーク、権限、予算、state保管を同じIaC方針で追加                                                        |
 
-2026-09-06に、手作業の単一課題ループを[runbook](runbooks/single-task-loop.md)として採用した。Issueの目的・状態、PRのcurrent headに結び付くreviewと検証証跡、短い振返りを定型化する。Mind Inboxの専用Routine、bot、強制CI checker、auto-merge、claim/CAS/WIPと大きなjournalは後回しとし、必要な権限・異常時の回収・実行痕跡を別課題で設計する。
+2026-09-06に、手作業の単一課題ループを[runbook](runbooks/single-task-loop.md)として採用した。Issueの目的・状態、PRのcurrent headに結び付くreviewと検証証跡、短い振返りを定型化する。その後、条件成立後も人手で止まる不足を補うため[信頼済みmerge gate](adr/0005-trusted-merge-gate.md)を追加した。Mind Inboxの常駐sweep、advisory bot、claim/CAS/WIP、大きなjournalは持ち込まない。
 
 ## 実行する
 
@@ -44,9 +45,9 @@ CIは[ci.yml](../.github/workflows/ci.yml)の1 job・最大10分に統合する�
 ## 次に満たす条件
 
 1. 適用先GitHubリポジトリ、公開範囲、mainの初期内容を確定する。
-2. 初回CIのcheck jobが実際に完走してから、[GitHub IaC手順](../infra/github/README.md)でimport・planを確認し適用する。
+2. 初回PRをReadyにしてCIのcheck jobが実際に完走してから、[GitHub IaC手順](../infra/github/README.md)でimport・planを確認し適用する。
 3. 再planで差分なしを確認して初めて「設定が実環境と一致」と記録する。
-4. 継続的な管理APIの認証と共有stateの保管先が決まったら、定期drift検知を追加する。
+4. current-head review証跡を記録し、初回はローカルgate、以後はmainのworkflow dispatchで条件後のmergeまで完走する。
 
 設定ファイルの追加だけではGitHub上の機能は稼働しない。CIの実行結果、適用結果、未導入項目を混同しない。
 
