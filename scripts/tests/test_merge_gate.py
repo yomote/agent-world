@@ -190,7 +190,13 @@ def test_execute_uses_expected_sha_once_and_dispatches_verified_merge(monkeypatc
             self.put_calls.append((path, body))
             return {"merged": True, "sha": OTHER_SHA}
 
-    monkeypatch.setattr(merge_gate, "evaluate", lambda *args, **kwargs: "sol-reviewer")
+    evaluate_calls = []
+
+    def evaluate(client, target, *, require_ci=True):
+        evaluate_calls.append(require_ci)
+        return "sol-reviewer"
+
+    monkeypatch.setattr(merge_gate, "evaluate", evaluate)
     monkeypatch.setattr(merge_gate, "wait_for_ci", lambda *args, **kwargs: None)
     dispatched = []
     monkeypatch.setattr(
@@ -210,6 +216,7 @@ def test_execute_uses_expected_sha_once_and_dispatches_verified_merge(monkeypatc
     assert client.put_calls == [
         ("/repos/owner/repo/pulls/7/merge", {"sha": SHA, "merge_method": "squash"})
     ]
+    assert evaluate_calls == [False, False]
     assert dispatched == [(merge_gate.GateTarget(7, SHA), OTHER_SHA)]
 
 
@@ -330,6 +337,60 @@ def test_rate_limit_defers_client_and_reports_safe_usage(monkeypatch):
     assert "opaque=value" not in client.rate_summary()
 
 
+def test_unhinted_rate_limit_backoff_increases_after_defer(monkeypatch):
+    """待機指定なしの連続429を60秒、120秒へ延長する。"""
+
+    now = [1000.0]
+
+    def rate_limited(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 429, "rate limited", {}, io.BytesIO(b"rate limit")
+        )
+
+    monkeypatch.setattr(merge_gate.time, "time", lambda: now[0])
+    monkeypatch.setattr(merge_gate.urllib.request, "urlopen", rate_limited)
+    client = merge_gate.GitHubClient("owner/repo", "token")
+    with pytest.raises(merge_gate.GitHubRateLimitError):
+        client.get("/first")
+    assert client.defer_until == 1060.0
+    now[0] = 1060.0
+    with pytest.raises(merge_gate.GitHubRateLimitError):
+        client.get("/second")
+    assert client.defer_until == 1180.0
+
+
+def test_conditional_get_reuses_etag_on_304(monkeypatch):
+    """反復GETがETagを送り、304を取得成功としてキャッシュから返す。"""
+
+    class Response(io.BytesIO):
+        status = 200
+        headers = {"ETag": '"revision-1"'}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    requests = []
+
+    def conditional(request, timeout):
+        requests.append({key.lower(): value for key, value in request.header_items()})
+        if len(requests) == 1:
+            return Response(b'{"value": 1}')
+        raise urllib.error.HTTPError(request.full_url, 304, "not modified", {}, io.BytesIO(b""))
+
+    monkeypatch.setattr(merge_gate.urllib.request, "urlopen", conditional)
+    client = merge_gate.GitHubClient("owner/repo", "token")
+    assert client.get("/read?fixed=1") == {"value": 1}
+    assert client.get("/read?fixed=1") == {"value": 1}
+    assert "if-none-match" not in requests[0]
+    assert requests[1]["if-none-match"] == '"revision-1"'
+    assert client.request_count == 2
+    assert client.last_http_status == 304
+    assert client.last_success_at is not None
+
+
 def test_success_with_zero_remaining_defers_before_next_request(monkeypatch):
     """成功応答で残量0なら、次のAPI要求を送らない回帰を防ぐ。"""
 
@@ -416,6 +477,59 @@ def test_non_rate_403_stops_without_deferring(monkeypatch):
     with pytest.raises(merge_gate.GitHubError):
         client.get("/read")
     assert client.defer_until is None
+
+
+@pytest.mark.parametrize(
+    ("headers", "detail"),
+    [
+        ({"Retry-After": "60"}, b"forbidden"),
+        ({"X-RateLimit-Remaining": "0"}, b"forbidden"),
+        ({}, b"secondary rate limit"),
+    ],
+)
+def test_rate_limit_403_defers_without_sending_again(monkeypatch, headers, detail):
+    """3種のrate-limit 403を判定し、defer中の追加要求を送らない。"""
+
+    calls = []
+
+    def forbidden(request, timeout):
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "forbidden", headers, io.BytesIO(detail)
+        )
+
+    monkeypatch.setattr(merge_gate.urllib.request, "urlopen", forbidden)
+    client = merge_gate.GitHubClient("owner/repo", "token")
+    with pytest.raises(merge_gate.GitHubRateLimitError):
+        client.get("/first")
+    with pytest.raises(merge_gate.GitHubRateLimitError):
+        client.get("/second")
+    assert calls == ["https://api.github.com/first"]
+
+
+@pytest.mark.parametrize(
+    ("fail_at", "expected"),
+    [
+        (1, "main CI dispatch=deferred/not_run; azure dispatch=not_run"),
+        (2, "main CI dispatch=sent; azure dispatch=deferred/not_run"),
+    ],
+)
+def test_post_merge_deferred_dispatch_is_reported_as_not_run(fail_at, expected):
+    """deferで未送信の後続writeを通信失敗と誤記しない。"""
+
+    class Client:
+        repository = "owner/repo"
+
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, path, body):
+            self.calls += 1
+            if self.calls == fail_at:
+                raise merge_gate.GitHubRateLimitError("deferred")
+
+    with pytest.raises(merge_gate.GateError, match=expected):
+        merge_gate.dispatch_post_merge(Client(), merge_gate.GateTarget(7, SHA), OTHER_SHA)
 
 
 def test_post_merge_failure_reports_irreversible_partial_state():

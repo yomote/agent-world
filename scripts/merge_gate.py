@@ -65,6 +65,8 @@ class GitHubClient:
         self.defer_until: float | None = None
         self.last_http_status: int | None = None
         self.last_operation = "none"
+        self.unhinted_rate_limits = 0
+        self.etag_cache: dict[str, tuple[str, Any]] = {}
 
     @staticmethod
     def _header(headers: Any, name: str) -> str | None:
@@ -112,8 +114,14 @@ class GitHubClient:
                     candidates.append(float(reset))
                 except ValueError:
                     pass
-        # GitHubが待機値を返さない二次制限もあり得る。sleepせず状態を返す。
-        until = max(candidates, default=now + 60)
+        if candidates:
+            self.unhinted_rate_limits = 0
+            until = max(candidates)
+        else:
+            # 読み取り再試行は最大2回なので、指定なしの待機も60秒、以後120秒で止める。
+            self.unhinted_rate_limits += 1
+            until = now + (60 if self.unhinted_rate_limits == 1 else 120)
+        # sleepでworkerを占有せず、次に要求できる時刻を状態として返す。
         self.defer_until = max(self.defer_until or 0, until)
         return self.defer_until
 
@@ -134,16 +142,20 @@ class GitHubClient:
                 "GitHub API is deferred until " + self._format_timestamp(self.defer_until)
             )
         data = json.dumps(body).encode() if body is not None else None
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self.token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "agent-world-merge-gate",
+        }
+        cached = self.etag_cache.get(path) if method == "GET" else None
+        if cached is not None:
+            headers["If-None-Match"] = cached[0]
         request = urllib.request.Request(
             f"https://api.github.com{path}",
             data=data,
             method=method,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self.token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "agent-world-merge-gate",
-            },
+            headers=headers,
         )
         self.last_operation = self._operation(method, path)
         try:
@@ -154,15 +166,29 @@ class GitHubClient:
                     self.last_success_at = time.time()
                     if self._header(response.headers, "X-RateLimit-Remaining") == "0":
                         self._defer_from_rate_limit(response.headers)
+                    else:
+                        self.unhinted_rate_limits = 0
                     return None
                 result = json.load(response)
                 self.last_success_at = time.time()
+                etag = self._header(response.headers, "ETag")
+                if method == "GET" and etag is not None:
+                    self.etag_cache[path] = (etag, result)
                 if self._header(response.headers, "X-RateLimit-Remaining") == "0":
                     self._defer_from_rate_limit(response.headers)
+                else:
+                    self.unhinted_rate_limits = 0
                 return result
         except urllib.error.HTTPError as error:
             self.last_http_status = error.code
             detail = error.read().decode(errors="replace")[:500]
+            if error.code == 304 and method == "GET" and cached is not None:
+                self.last_success_at = time.time()
+                if self._header(error.headers, "X-RateLimit-Remaining") == "0":
+                    self._defer_from_rate_limit(error.headers)
+                else:
+                    self.unhinted_rate_limits = 0
+                return cached[1]
             if self._is_rate_limited(error.code, error.headers, detail):
                 until = self._defer_from_rate_limit(error.headers)
                 message = (
@@ -439,6 +465,11 @@ def dispatch_post_merge(client: GitHubClient, target: GateTarget, merge_sha: str
         raise GateError(
             f"merge succeeded at {merge_sha}; main CI dispatch=unknown; azure dispatch=not_run"
         ) from error
+    except GitHubRateLimitError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=deferred/not_run; "
+            "azure dispatch=not_run"
+        ) from error
     except GitHubError as error:
         raise GateError(
             f"merge succeeded at {merge_sha}; main CI dispatch=failed; azure dispatch=not_run"
@@ -460,6 +491,11 @@ def dispatch_post_merge(client: GitHubClient, target: GateTarget, merge_sha: str
         raise GateError(
             f"merge succeeded at {merge_sha}; main CI dispatch=sent; azure dispatch=unknown"
         ) from error
+    except GitHubRateLimitError as error:
+        raise GateError(
+            f"merge succeeded at {merge_sha}; main CI dispatch=sent; "
+            "azure dispatch=deferred/not_run"
+        ) from error
     except GitHubError as error:
         raise GateError(
             f"merge succeeded at {merge_sha}; main CI dispatch=sent; azure dispatch=failed"
@@ -478,7 +514,9 @@ def execute(
     reviewer = evaluate(client, target, require_ci=False)
     wait_for_ci(client, target, attempts, interval)
     # 待機中のコメント削除、thread追加、ruleset変更もmerge直前に検出する。
-    reviewer = evaluate(client, target)
+    # CI成功は直前のwait_for_ciで確認済み。ここでは非CI条件だけを再検査し、
+    # 最大10回・60秒間隔のCI取得予算へ即時の11回目を加えない。
+    reviewer = evaluate(client, target, require_ci=False)
     try:
         result = client.put(
             _repo_path(client, f"/pulls/{target.number}/merge"),
