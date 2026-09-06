@@ -1,0 +1,12 @@
+using './main.bicep'
+
+param resourceGroupName = 'rg-agent-world-mgmt-jpe'
+param location = 'japaneast'
+param appName = 'agent-world-status-yomote-jpe'
+param image = 'ghcr.io/yomote/agent-world-status@sha256:<approved-digest>'
+param confirmedBillingCurrency = 'JPY'
+param budgetContactEmail = '<confirmed-email>'
+param budgetAmount = 1000
+param budgetStartDate = '2026-09-01T00:00:00Z'
+param enableProtectedIngress = false
+param operatorObjectId = '<signed-in-user-object-id>'
