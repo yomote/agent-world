@@ -13,11 +13,12 @@
 
 ## 開発ループ
 
-1. 変更対象の仕様と影響範囲を確認する。設計判断は `docs/adr/` に理由とトレードオフを記録する。
-2. 必要最小限の変更を行い、静かに壊れる性質をテストする。各テストには防ぐ回帰をコメントで説明する。
-3. `npm run check` でlint・format・unit・buildを実行する。単体だけで画面の動作確認済みとしない。
-4. API変更時は `npm run api:generate`。`docs/api/openapi.json` と `apps/web/src/api/schema.d.ts` は生成物で手編集しない。
-5. 動作・起動方法・制約が変わったら関連ドキュメントを同時に更新する。
+1. 課題ごとの着工packet、状態、独立レビュー、current headへの証跡、短い振返りは[単一課題の完遂ループ](docs/runbooks/single-task-loop.md)に従う。正本は目的・状態がIssue、差分・証跡がPRであり、DraftのCI skipやdirty stateの結果をPASSとしない。
+2. 変更対象の仕様と影響範囲を確認する。設計判断は `docs/adr/` に理由とトレードオフを記録する。
+3. 必要最小限の変更を行い、静かに壊れる性質をテストする。各テストには防ぐ回帰をコメントで説明する。
+4. `npm run check` でlint・format・unit・buildを実行する。単体だけで画面の動作確認済みとしない。
+5. API変更時は `npm run api:generate`。`docs/api/openapi.json` と `apps/web/src/api/schema.d.ts` は生成物で手編集しない。
+6. 動作・起動方法・制約が変わったら関連ドキュメントを同時に更新する。
 
 ## 開発のPMとワーカー
 

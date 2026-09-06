@@ -22,6 +22,8 @@
 | 合成ユーザー / UX自律改善    | [#304](https://github.com/yomote/mind-inbox/issues/304)に構想と着手条件                                                                                                                                              | 後続候補。まずSandboxの操作仕様と再現可能なブラウザ検証を確立し、探索と評価・コスト上限を決める                                                       |
 | Azure / deploy / コスト監視  | 環境再構築の宣言・runbookが存在                                                                                                                                                                                      | 配備先が未決定。クラウドを導入する時点でネットワーク、権限、予算、state保管を同じIaC方針で追加                                                        |
 
+2026-09-06に、手作業の単一課題ループを[runbook](runbooks/single-task-loop.md)として採用した。Issueの目的・状態、PRのcurrent headに結び付くreviewと検証証跡、短い振返りを定型化する。Mind Inboxの専用Routine、bot、強制CI checker、auto-merge、claim/CAS/WIPと大きなjournalは後回しとし、必要な権限・異常時の回収・実行痕跡を別課題で設計する。
+
 ## 実行する
 
 依存が揃った状態で、リポジトリ直下から実行する。
@@ -56,3 +58,5 @@ CIは[ci.yml](../.github/workflows/ci.yml)の1 job・最大10分に統合する�
 - `terraform fmt -check -recursive` / `validate` / `test`: 成功。mock policy test 1件で設定とCIの整合性を確認。provider lockはWindows/Linux両方を生成。
 - lychee: ローカルリンクのエラー0。外部URLへのリクエストはoffline設定で0件。対象は直下・docs・.github・infraのMarkdownで、依存providerの文書は除外する。外部URLの死活・文書内容の正しさ・リンクのfragmentはこの検査の対象外。
 - GitHub Actions上の実行、実環境のTerraform plan/apply、適用後の差分なし確認、共有backendは未実施。リポジトリの接続先はこの検証時点で未設定。
+
+この節のVitest 6件・pytest 23件は、この棚卸し時点の検証履歴である。[Vertical Sliceの検証記録](verification.md)のVitest 6件・pytest 22件はそれ以前の履歴であり、異なる時点の合計を現在の検証結果として扱わない。
