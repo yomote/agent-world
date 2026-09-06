@@ -1,0 +1,16 @@
+[project]
+name = "ai-agent-sandbox-world"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["apps/world/tests", "scripts/tests"]
+pythonpath = ["apps"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
