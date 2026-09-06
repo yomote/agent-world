@@ -2,6 +2,7 @@ import os
 import secrets
 from pathlib import Path
 from threading import Lock
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -17,7 +18,10 @@ def principal_allowed(request: Request, expected_environment_key: str) -> bool:
         return True
     expected = os.environ.get(expected_environment_key, "")
     actual = request.headers.get("x-ms-client-principal-id", "")
-    return bool(expected and actual and secrets.compare_digest(actual, expected))
+    try:
+        return secrets.compare_digest(UUID(actual).bytes, UUID(expected).bytes)
+    except ValueError:
+        return False
 
 
 def create_app(store: SnapshotStore | None = None) -> FastAPI:

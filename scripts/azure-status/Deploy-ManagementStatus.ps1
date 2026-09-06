@@ -31,6 +31,9 @@ $guidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 foreach ($value in @($SubscriptionId, $TenantId, $OperatorObjectId)) {
     if ($value -notmatch $guidPattern) { throw 'Subscription, tenant, and operator IDs must be GUIDs.' }
 }
+$SubscriptionId = ([guid] $SubscriptionId).ToString('D')
+$TenantId = ([guid] $TenantId).ToString('D')
+$OperatorObjectId = ([guid] $OperatorObjectId).ToString('D')
 if ($Image -notmatch '@sha256:[0-9a-f]{64}$') {
     throw 'Image must be an immutable sha256 digest reference.'
 }
@@ -54,6 +57,10 @@ if ($Phase -eq 'Protected' -and ([string]::IsNullOrWhiteSpace($IngestObjectId) -
 }
 if ($Phase -eq 'Protected' -and ($IngestObjectId -notmatch $guidPattern -or $AuthClientId -notmatch $guidPattern)) {
     throw 'Protected phase identity IDs must be GUIDs.'
+}
+if ($Phase -eq 'Protected') {
+    $IngestObjectId = ([guid] $IngestObjectId).ToString('D')
+    $AuthClientId = ([guid] $AuthClientId).ToString('D')
 }
 if ($Apply -and -not $ApproveReviewedPlan) {
     throw 'Apply requires -ApproveReviewedPlan after the saved what-if has been reviewed.'

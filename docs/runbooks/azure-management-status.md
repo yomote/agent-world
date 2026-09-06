@@ -8,7 +8,7 @@
 
 ## 依存と承認対象
 
-local statusの[PR #16](https://github.com/yomote/agent-world/pull/16)は通常squash merge済みで、依存先mainは`910952672fcfef1e2e0626a402e51646b9d5fe1c`に固定する。[PR #18](https://github.com/yomote/agent-world/pull/18)のAzureコミットだけをこのmainへ移す。旧base `f098727094ca49f2471d7245143a447c87829c0a`とmainのtreeは一致し、`e2967f4`から移した`c0a808c`のrange-diffも一致した。この文書更新はその後の独立した差分である。最終review対象の40文字SHA、child ID、検証とCIはPRのcurrent-head証跡を正本とする。
+local statusの[PR #16](https://github.com/yomote/agent-world/pull/16)は通常squash merge済みで、依存先mainは`910952672fcfef1e2e0626a402e51646b9d5fe1c`に固定する。[PR #18](https://github.com/yomote/agent-world/pull/18)のAzureコミットだけをこのmainへ移す。旧base `f098727094ca49f2471d7245143a447c87829c0a`とmainのtreeは一致し、`e2967f4`から移した`c0a808c`のrange-diffも一致した。その後のpacket更新と独立review指摘修正は別commitの差分として残す。最終review対象の40文字SHA、child ID、検証とCIはPRのcurrent-head証跡を正本とする。
 
 公開の依存順は、#16の固定main → PR #18のreview・CI・別途許可されたmerge → 両差分を含むmainの40文字SHA固定 → image build/smoke → immutable registry digest確定 → 本人の公開承認 → 匿名pull → what-if → plan/parameter承認 → applyである。このunitはmain mergeも以下のlive操作も実行しない。
 
@@ -58,7 +58,11 @@ workflowのpush結果が不明なら同じheadを自動または手動で再disp
 
 API app roleの正本は`infra/azure-status/api-app-roles.json`。Easy Authのallowed principalsは本人OIDとingest service principal OIDだけ。platformが認証済みrequestへ付与する`X-MS-CLIENT-PRINCIPAL-ID`をbackendでroute別に照合する。App Server、session log、local mappingを公開しない。
 
+deploymentのGUID入力は小文字の標準表記へ正規化してparameterとconfirmation recordに使う。backendもOIDをGUIDとして比較するため、同じOIDの大文字・小文字の差では拒否しない。空欄・不正GUID・別identityは拒否する。
+
 local publisherはAzure CLIが承認済みingest service principalでlogin中であることを確認してtokenを得る。新しい`local-event-record`だけを一度PUTし、応答不明では`artifacts/status/publish-state.json`を`unknown`にして停止する。同じpayloadも後続payloadも自動送信しない。本人が管理画面またはBlob actualを確認し、明示的な回収判断をするまでstateを消さない。
+
+送信前に保存した`attempting`がprocess/PC停止後に残った場合も未解決writeとして扱う。再起動後はtoken取得・同じsnapshotの再送・新しいsnapshotの送信をすべて停止し、本人のactual確認と回収判断を待つ。
 
 承認後の明示起動commandは次の形にする。`api://<auth-client-id>`は承認済みAPI appのaudienceであり、publisherはAzure CLIのlogin主体が`<ingest-client-id>`と一致しない場合に停止する。
 

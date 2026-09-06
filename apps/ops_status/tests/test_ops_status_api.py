@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from ops_status.api import create_app
 from ops_status.models import StatusSnapshot
@@ -78,23 +79,34 @@ def test_status_page_is_served_from_same_origin():
     assert "api.github.com" not in response.text
 
 
-def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch):
-    """ingest identityが管理画面を読め、本人がsnapshotを書ける権限逆転を防ぐ。"""
+@pytest.mark.parametrize("expected_upper", [False, True])
+def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch, expected_upper):
+    """同じOIDのcase差による拒否と、本人/ingestの権限逆転を防ぐ。"""
     current = datetime.now(UTC)
     data = snapshot(current)
     data["source"] = "local-event-record"
     store = MemoryStore(StatusSnapshot.model_validate(data))
     client = TestClient(create_app(store))
     monkeypatch.setenv("AGENT_WORLD_STATUS_REQUIRE_AUTH", "true")
-    monkeypatch.setenv("AGENT_WORLD_STATUS_OPERATOR_OBJECT_ID", "operator-oid")
-    monkeypatch.setenv("AGENT_WORLD_STATUS_INGEST_OBJECT_ID", "ingest-oid")
+    operator = "11111111-1111-4111-8111-aaaaaaaaaaaa"
+    ingest = "22222222-2222-4222-8222-bbbbbbbbbbbb"
+    expected_operator = operator.upper() if expected_upper else operator
+    expected_ingest = ingest.upper() if expected_upper else ingest
+    actual_operator = operator if expected_upper else operator.upper()
+    actual_ingest = ingest if expected_upper else ingest.upper()
+    monkeypatch.setenv("AGENT_WORLD_STATUS_OPERATOR_OBJECT_ID", expected_operator)
+    monkeypatch.setenv("AGENT_WORLD_STATUS_INGEST_OBJECT_ID", expected_ingest)
 
-    assert client.get("/", headers={"x-ms-client-principal-id": "ingest-oid"}).status_code == 403
-    assert client.get("/", headers={"x-ms-client-principal-id": "operator-oid"}).status_code == 200
+    assert client.get("/", headers={"x-ms-client-principal-id": actual_ingest}).status_code == 403
+    assert client.get("/", headers={"x-ms-client-principal-id": actual_operator}).status_code == 200
+    assert (
+        client.get("/api/status", headers={"x-ms-client-principal-id": actual_operator}).status_code
+        == 200
+    )
     assert (
         client.put(
             "/api/status",
-            headers={"x-ms-client-principal-id": "operator-oid"},
+            headers={"x-ms-client-principal-id": actual_operator},
             json=data,
         ).status_code
         == 403
@@ -102,11 +114,24 @@ def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch):
     assert (
         client.put(
             "/api/status",
-            headers={"x-ms-client-principal-id": "ingest-oid"},
+            headers={"x-ms-client-principal-id": actual_ingest},
             json=data,
         ).status_code
         == 204
     )
+
+
+@pytest.mark.parametrize(
+    "expected,actual",
+    [("", ""), ("invalid", "invalid"), ("11111111-1111-4111-8111-aaaaaaaaaaaa", "invalid")],
+)
+def test_azure_auth_rejects_invalid_principal_ids(monkeypatch, expected, actual):
+    """GUID正規化で空欄や一致する不正OIDまで認可する回帰を防ぐ。"""
+    monkeypatch.setenv("AGENT_WORLD_STATUS_REQUIRE_AUTH", "true")
+    monkeypatch.setenv("AGENT_WORLD_STATUS_OPERATOR_OBJECT_ID", expected)
+    client = TestClient(create_app(MemoryStore()))
+
+    assert client.get("/", headers={"x-ms-client-principal-id": actual}).status_code == 403
 
 
 def test_ingest_does_not_rewrite_blob_for_same_observation():

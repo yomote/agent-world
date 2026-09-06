@@ -2,7 +2,7 @@ import argparse
 import importlib.util
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -72,8 +72,9 @@ def test_publisher_does_not_send_older_snapshot(tmp_path):
     assert publish_if_new(settings, lambda *_: "token", lambda *_: 204) is False
 
 
-def test_publisher_stops_after_unknown_write_result(tmp_path):
-    """応答喪失後に同じPUTを自動再送する回帰を防ぐ。"""
+@pytest.mark.parametrize("next_observation_delay", [0, 1])
+def test_publisher_stops_after_unknown_write_result(tmp_path, next_observation_delay):
+    """応答喪失後に同じPUTや後続snapshotを自動送信する回帰を防ぐ。"""
     settings = args(tmp_path, datetime.now(UTC))
     sends = 0
 
@@ -84,9 +85,44 @@ def test_publisher_stops_after_unknown_write_result(tmp_path):
 
     with pytest.raises(TimeoutError):
         publish_if_new(settings, lambda *_: "token", fail)
+    observed_at = datetime.fromisoformat(json.loads(settings.snapshot.read_text())["observed_at"])
+    settings.snapshot.write_text(
+        json.dumps(snapshot(observed_at + timedelta(seconds=next_observation_delay))),
+        encoding="utf-8",
+    )
     with pytest.raises(RuntimeError, match="result is unknown"):
         publish_if_new(settings, lambda *_: "token", fail)
     assert sends == 1
+
+
+def test_publisher_stops_after_interrupted_attempt(tmp_path):
+    """送信後のprocess停止を挟み、未確定writeを新snapshotで上書きする回帰を防ぐ。"""
+    observed_at = datetime.now(UTC)
+    settings = args(tmp_path, observed_at)
+    token_calls = []
+    sends = []
+
+    def token(*_):
+        token_calls.append(True)
+        return "token"
+
+    def interrupt_after_send(*_):
+        sends.append(True)
+        raise KeyboardInterrupt("process stopped before confirmation was saved")
+
+    with pytest.raises(KeyboardInterrupt):
+        publish_if_new(settings, token, interrupt_after_send)
+    persisted = settings.state.read_bytes()
+    assert json.loads(persisted)["outcome"] == "attempting"
+    settings.snapshot.write_text(
+        json.dumps(snapshot(observed_at + timedelta(seconds=1))), encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="result is unknown"):
+        publish_if_new(settings, token, interrupt_after_send)
+
+    assert len(token_calls) == len(sends) == 1
+    assert settings.state.read_bytes() == persisted
 
 
 def test_publisher_rejects_manual_snapshot(tmp_path):

@@ -94,7 +94,7 @@ def publish_if_new(
     from ops_status.models import StatusSnapshot
 
     state = read_state(args.state)
-    if state.get("outcome") == "unknown":
+    if state.get("outcome") in {"attempting", "unknown"}:
         raise RuntimeError("previous write result is unknown; inspect actual before continuing")
     snapshot = StatusSnapshot.model_validate_json(args.snapshot.read_text(encoding="utf-8"))
     if snapshot.source != "local-event-record":
