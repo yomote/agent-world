@@ -3,7 +3,7 @@ name: Deploy Azure
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
     paths:
@@ -51,13 +51,17 @@ jobs:
           [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           git fetch --no-tags --depth=1 origin "${BASE_SHA}"
-          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+          set +e
+          git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
             apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
-            requirements-prod.txt .github/workflows/deploy-azure.yml; then
-            echo "container=false" >>"${GITHUB_OUTPUT}"
-          else
-            echo "container=true" >>"${GITHUB_OUTPUT}"
-          fi
+            requirements-prod.txt .github/workflows/deploy-azure.yml
+          diff_status=$?
+          set -e
+          case "${diff_status}" in
+            0) echo "container=false" >>"${GITHUB_OUTPUT}" ;;
+            1) echo "container=true" >>"${GITHUB_OUTPUT}" ;;
+            *) echo "Container input comparison failed with exit ${diff_status}." >&2; exit "${diff_status}" ;;
+          esac
 
       - name: Build and exercise production container
         if: steps.changes.outputs.container == 'true'
