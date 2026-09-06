@@ -4,15 +4,6 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "apps/world/**"
-      - "apps/web/**"
-      - "Dockerfile"
-      - ".dockerignore"
-      - "package.json"
-      - "package-lock.json"
-      - "requirements-prod.txt"
-      - ".github/workflows/deploy-azure.yml"
   push:
     branches: [main]
     paths:
@@ -45,9 +36,31 @@ jobs:
       - name: Check out pull request
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
           persist-credentials: false
 
+      - name: Detect container input changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
+            requirements-prod.txt .github/workflows/deploy-azure.yml; then
+            echo "container=false" >>"${GITHUB_OUTPUT}"
+          else
+            echo "container=true" >>"${GITHUB_OUTPUT}"
+          fi
+
       - name: Build and exercise production container
+        if: steps.changes.outputs.container == 'true'
         shell: bash
         env:
           CONTAINER_NAME: agent-world-pr-${{ github.run_id }}-${{ github.run_attempt }}
@@ -73,6 +86,11 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:8000/ >/dev/null
           curl --fail --silent --show-error http://127.0.0.1:8000/api/world | jq -e '.world_id and .revision == 0' >/dev/null
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/api/not-found)" = "404"
+
+      - name: Record skipped container build
+        if: steps.changes.outputs.container == 'false'
+        shell: bash
+        run: echo "No production-container input changed; the required check completed without a rebuild." >>"${GITHUB_STEP_SUMMARY}"
 
   deploy:
     if: github.ref == 'refs/heads/main'

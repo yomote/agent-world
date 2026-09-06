@@ -2,7 +2,7 @@
 
 ## deploy経路
 
-PRがReadyになると同じworkflowの`container-check`が実imageをbuildし、1 workerで起動してhealth、UI、World API、未知APIの404を確認する。DraftでskipされたrunはPASSとせず、merge前にcurrent headの成功を確認する。
+`Deploy Azure` workflowはmain向けの全PRで起動し、必須`container-check`を必ず生成する。PRがReadyかつproduction containerへの入力が変わった場合だけ、実imageをbuildして1 workerで起動し、health、UI、World API、未知APIの404を確認する。入力が変わらないPRは差分判定だけで成功し、不要なcontainer buildを消費しない。DraftでskipされたrunはPASSとせず、merge前にcurrent headの成功を確認する。
 
 `Deploy Azure`はmainへの通常push、手動実行、工場の`repository_dispatch: agent-world-merged`を受ける。dispatchはPR番号、PR head SHA、merge commit SHAをGitHub APIのmerged PRへ照合し、そのmergeがjob開始時に固定したcurrent mainの祖先であることを確認する。pushもevent commitがcurrent mainの祖先であることを確認する。どのeventでもcurrent mainからdeploy対象pathを最後に変更したcommitをdesired sourceにするため、後続のdocs-only mergeやconcurrencyのpending置換があっても対象変更を取りこぼさない。
 
