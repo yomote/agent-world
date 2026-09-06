@@ -62,7 +62,8 @@ Budget未作成は支出上限がないことを意味する。max replica 1、m
 
 ## 検証
 
-- `npm run check`: PASS（Vitest 6、pytest 42、buildを含む）
+- 独立レビュー: `d4e882d9a718abad1a3c6f4fa724cfbd9de6265d`で初回High 1件・Medium 1件の解消を確認し、追加指摘なし
+- `npm run check`: PASS（Vitest 6、pytest 43、buildを含む）
 - `npm run test:factory`: PASS（15）
 - 追加回帰test: PASS
 - workflow / runbookのPrettier、PythonのRuff: PASS
