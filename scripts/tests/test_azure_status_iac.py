@@ -1,0 +1,59 @@
+from pathlib import Path
+
+ROOT = Path(__file__).parents[2]
+
+
+def test_status_container_context_excludes_local_runtime_data():
+    """local mapping、session記録、artifact、credentialをimageへ混入する回帰を防ぐ。"""
+    dockerfile = (ROOT / "Dockerfile.status").read_text(encoding="utf-8")
+    ignore = (ROOT / "Dockerfile.status.dockerignore").read_text(encoding="utf-8")
+
+    assert "COPY ." not in dockerfile
+    assert "COPY apps/ops_status" in dockerfile
+    assert "COPY docs/status" in dockerfile
+    assert ignore.splitlines()[0] == "*"
+    assert "!artifacts/" not in ignore
+    assert "!.codex/" not in ignore
+
+
+def test_status_iac_keeps_storage_private_and_capacity_bounded():
+    """snapshot匿名公開や無制限scaleを構成に持ち込む回帰を防ぐ。"""
+    bicep = (ROOT / "infra/azure-status/resources.bicep").read_text(encoding="utf-8")
+
+    assert "allowBlobPublicAccess: false" in bicep
+    assert "allowSharedKeyAccess: false" in bicep
+    assert "publicAccess: 'None'" in bicep
+    assert "minReplicas: 0" in bicep
+    assert "maxReplicas: 1" in bicep
+    assert "external: enableProtectedIngress" in bicep
+    assert "'/healthz'" in bicep
+
+
+def test_deploy_gate_rejects_unreviewed_or_broad_changes():
+    """reviewしていないplanやDelete/Ignoreをapplyする回帰を防ぐ。"""
+    script = (ROOT / "scripts/azure-status/Deploy-ManagementStatus.ps1").read_text(encoding="utf-8")
+
+    assert "ApprovedPlanSha256" in script
+    assert "ApprovedConfirmationSha256" in script
+    assert "CostConfirmationSource" in script
+    assert "OperatorConfirmedBudgetContact" in script
+    assert "ad signed-in-user show" in script
+    assert "Signed-in Azure user object ID does not match OperatorObjectId" in script
+    assert "coreResourcePatterns" in script
+    assert "OutOfScope" in script
+    assert "ApproveReviewedPlan" in script
+    assert "changeType -eq 'Create'" in script
+    assert "What-if contains changes outside" in script
+    assert "deployment sub create" in script
+
+
+def test_status_image_publish_is_manual_and_head_pinned():
+    """未承認branchや自動triggerから管理status imageを公開する回帰を防ぐ。"""
+    workflow = (ROOT / ".github/workflows/status-image.yml").read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "push:" not in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"' in workflow
+    assert "if: inputs.publish" in workflow

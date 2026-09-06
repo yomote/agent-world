@@ -1,0 +1,8 @@
+*
+!apps/
+!apps/ops_status/
+!apps/ops_status/**
+!docs/
+!docs/status/
+!docs/status/**
+!requirements-status.txt

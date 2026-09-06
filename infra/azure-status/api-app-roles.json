@@ -1,0 +1,10 @@
+[
+  {
+    "allowedMemberTypes": ["Application"],
+    "description": "Sanitized management status snapshotを送信する",
+    "displayName": "Status snapshot ingest",
+    "id": "8d1caa89-05c8-43f0-b12d-d973f3cf9444",
+    "isEnabled": true,
+    "value": "Status.Ingest"
+  }
+]

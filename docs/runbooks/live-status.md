@@ -50,3 +50,5 @@ writerは検証済みsnapshotを一時fileからrenameして置き換える。�
 ローカルHTTP表示、PM確認snapshot、local event記録adapterは実装済み。Codex CLIの`app-server` commandとJSON schema生成機能が存在することは確認したが、この版はDesktopが使用中のApp Server sessionへ接続していない。別App Serverを起動して現在のDesktop / worker状態を取得したとは扱わない。
 
 Azure公開、認証、credential、外部ingest endpointはこのローカル版に含めない。公開時は管理用Resource Group、本人Entra認証、sanitized eventだけを送るcredential境界について別のHITL承認を得る。
+
+Azure公開の構成、停止条件、credential境界、rollbackは[Azure管理status 初回公開packet](azure-management-status.md)を正本とする。packetが承認されるまでlocal collectorとこの画面を維持し、Azure公開済みとは扱わない。

@@ -1,0 +1,81 @@
+name: Management status image
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: 承認済みmain commitの40文字SHA
+        required: true
+        type: string
+      publish:
+        description: GHCRへpushする
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: management-status-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and smoke test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 承認済みheadを固定
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: imageをbuild
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/agent-world-status:${{ github.sha }}
+        run: docker build --file Dockerfile.status --tag "$IMAGE" .
+      - name: container smoke test
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/agent-world-status:${{ github.sha }}
+        run: |
+          container_id=$(docker run --detach --publish 127.0.0.1:8020:8000 "$IMAGE")
+          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:8020/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$container_id"
+          exit 1
+      - name: GHCR login
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: imageを1回push
+        if: inputs.publish
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/agent-world-status:${{ github.sha }}
+        run: docker push "$IMAGE"
+      - name: immutable digestを記録
+        if: inputs.publish
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/agent-world-status:${{ github.sha }}
+        run: |
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          test -n "$digest"
+          echo "Image: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
