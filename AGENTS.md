@@ -22,13 +22,10 @@
 
 ## 開発のPMとワーカー
 
-- 開発作業では、PMをユーザー窓口と指示・担当調整だけに限定する。PMは調査、編集、検証、レビュー、統合、commit、push、PR作成を行わず、具体的に独立したタスクとしてworkerへ委任する。委任のためだけにタスクを細分化しない。
-- PMはAstra、限定調査はLuna、通常実装はTerra、複雑実装と独立レビューはSolを使う。子エージェントは担当タスクを実行し、PMの役割を継承しない。具体的な流れは [PMワークフロー](docs/runbooks/pm-workflow.md) を参照する。
+- 単一のユーザー窓口は低遅延のFront Desk、方針・優先順位・依存・担当の管理はPM controllerが担う。役割はモデル名に固定しない。両者の調査、編集、検証、レビュー、統合、commit、push、PR作成の禁止を維持し、実務は独立したwork itemとしてworkerへ委任する。
+- task-primary sessionのownerは実装workerであり、この実務禁止を継承しない。実装、固定commitへの最大1名のread-only child reviewer依頼、修正・再検証・同じreviewerへの再依頼、許可済みのpush・Draft PR納品まで所有する。責務とpacketは [PMワークフロー](docs/runbooks/pm-workflow.md) を参照する。
 - 並行セッションの担当範囲を確認し、同じファイルを無調整で編集しない。実行中のタスクの担当は合意なく変更しない。
-- モデル指定、限定した文脈の受け渡し、レビュー、共有ディレクトリでの注意は [Codexチーム運用](docs/runbooks/codex-team.md) に従う。CIと外部アクセスの予算は引き続き全担当が守る。
-- ユーザーの窓口は単一のPMに集約する。PMの分配、承認境界、Remote継続、GitHubへの反映は [PMワークフロー](docs/runbooks/pm-workflow.md) に従う。
-
-PMの実務禁止は現在から適用する。稼働中workerの担当所有権は、本人の修正完了まで維持し、後で統合workerが統合する。
+- work item、top-level session、child agentと、指示・報告とspawnの違いは [Codexチーム運用](docs/runbooks/codex-team.md) に従う。委任のためだけに細分化せず、CIと外部アクセスの予算は全担当が守る。
 
 ## CIと外部アクセスの予算
 
