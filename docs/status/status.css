@@ -133,6 +133,12 @@ summary:focus-visible {
   margin: 14px 2px 28px;
   color: var(--muted);
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.scope-note span {
+  display: block;
+  max-width: 100%;
+  word-break: break-all;
 }
 
 .filters {
@@ -186,7 +192,7 @@ summary:focus-visible {
 .card[data-status="in-progress"] {
   border-left: 4px solid #64b5ff;
 }
-.card[data-status="review"] {
+.card[data-status="review-wait"] {
   border-left: 4px solid var(--warning);
 }
 .card[data-status="ready"] {
@@ -367,7 +373,8 @@ footer {
     flex-direction: column;
   }
   .timestamps {
-    justify-content: space-between;
+    flex-direction: column;
+    gap: 10px;
   }
   .action-row {
     grid-template-columns: 1fr auto;
