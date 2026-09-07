@@ -363,7 +363,7 @@ def test_only_interrupted_read_only_review_can_resume(task, monkeypatch):
                 identifier,
                 task.name,
                 "independent_review",
-                json.dumps({"arguments": {"head": HEAD}}),
+                json.dumps({"arguments": {"head": HEAD, "workspace": str(task.root)}}),
             ),
         )
     monkeypatch.setattr(delivery, "git", lambda *args: HEAD)
@@ -381,6 +381,81 @@ def test_only_interrupted_read_only_review_can_resume(task, monkeypatch):
     with pytest.raises(transport.Stop, match="safe_review_resume_not_confirmed"):
         task.resume_review(identifier)
     assert task.data()["debrief"]["outcome"] == "unknown"
+
+
+def test_helper_review_recovery_uses_bound_checkout_and_is_atomic(task, monkeypatch):
+    """helperをrootで検証する誤りと、取消しだけcommitされる中断回帰を防ぐ。"""
+    helper = delivery.Campaign(task, "billing-helper")
+    helper.init(OWNER, "b" * 40)
+    helper.enter()
+    workspace = helper.directory / "checkout"
+    workspace.mkdir()
+    identifier = "22222222-2222-4222-8222-222222222222"
+    data = helper.data()
+    data.update(state="job_verified", head=HEAD, lease_until=time.time() - 1)
+    helper.save_event(data, "head_fixed")
+    before = helper.data()
+
+    def pending(path):
+        with helper.db:
+            helper.db.execute(
+                "INSERT OR REPLACE INTO delivery_operations VALUES (?,?,?,'inflight',?,NULL)",
+                (
+                    identifier,
+                    helper.name,
+                    "independent_review",
+                    json.dumps({"arguments": {"head": HEAD, "workspace": str(path)}}),
+                ),
+            )
+
+    pending(task.root)
+    with pytest.raises(transport.Stop, match="review_resume_workspace_mismatch"):
+        helper.resume_review(identifier)
+    pending(workspace)
+
+    def checkout_git(path, *args):
+        assert path == workspace
+        return "c" * 40 if args[0] == "rev-parse" else HEAD
+
+    def checkout_scope(path, head, *, base):
+        assert (path, head, base) == (workspace, "c" * 40, HEAD)
+
+    monkeypatch.setattr(delivery, "git", checkout_git)
+    monkeypatch.setattr(helper, "check_scope", checkout_scope)
+    original_save = helper.save
+
+    def interrupted_save(data):
+        assert (
+            helper.db.execute(
+                "SELECT state FROM delivery_operations WHERE id=?", (identifier,)
+            ).fetchone()[0]
+            == "cancelled_read_only"
+        )
+        raise RuntimeError("injected_interruption_after_cancellation")
+
+    monkeypatch.setattr(helper, "save", interrupted_save)
+    with pytest.raises(RuntimeError, match="injected_interruption"):
+        helper.resume_review(identifier)
+    assert helper.data() == before
+    assert (
+        helper.db.execute(
+            "SELECT state FROM delivery_operations WHERE id=?", (identifier,)
+        ).fetchone()[0]
+        == "inflight"
+    )
+    monkeypatch.setattr(helper, "save", original_save)
+    helper.resume_review(identifier)
+    after = helper.data()
+    assert after["head"] == "c" * 40
+    assert after["token"] is None
+    for key in ("deadline", "connector_calls", "http_requests", "cli_starts"):
+        assert after[key] == before[key]
+    assert (
+        helper.db.execute(
+            "SELECT state FROM delivery_operations WHERE id=?", (identifier,)
+        ).fetchone()[0]
+        == "cancelled_read_only"
+    )
 
 
 @pytest.mark.parametrize(

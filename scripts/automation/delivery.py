@@ -85,10 +85,19 @@ class Campaign:
             "INSERT OR REPLACE INTO delivery_campaigns VALUES (?,?)", (self.name, json.dumps(data))
         )
 
-    def save_event(self, data, kind):
+    def save_event(self, data, kind, *, cancelled_review=None):
         data["updated_at"] = time.time()
         data["last_event"] = kind
         with self.db:
+            if cancelled_review is not None:
+                changed = self.db.execute(
+                    "UPDATE delivery_operations SET state='cancelled_read_only' "
+                    "WHERE id=? AND campaign=? AND operation='independent_review' "
+                    "AND state='inflight'",
+                    (cancelled_review, self.name),
+                ).rowcount
+                if changed != 1:
+                    raise Stop("stopped", "safe_review_resume_not_confirmed")
             self.save(data)
             self.db.execute(
                 "INSERT INTO delivery_events(campaign,at,kind,data) VALUES (?,?,?,?)",
@@ -210,16 +219,14 @@ class Campaign:
         request = json.loads(row[3])
         if request["arguments"]["head"] != data["head"]:
             raise Stop("stopped", "review_resume_head_mismatch")
-        head = git(self.root, "rev-parse", "HEAD")
-        if git(self.root, "merge-base", data["head"], head) != data["head"]:
+        workspace = self.root if self.name == "runner" else self.directory / "checkout"
+        if Path(request["arguments"].get("workspace", "")).resolve() != workspace.resolve():
+            raise Stop("stopped", "review_resume_workspace_mismatch")
+        head = git(workspace, "rev-parse", "HEAD")
+        if git(workspace, "merge-base", data["head"], head) != data["head"]:
             raise Stop("stopped", "review_resume_requires_descendant")
-        base = git(self.root, "merge-base", "origin/main", head)
-        self.check_scope(self.root, head, base=base)
-        with self.db:
-            self.db.execute(
-                "UPDATE delivery_operations SET state='cancelled_read_only' WHERE id=?",
-                (request_id,),
-            )
+        base = git(workspace, "merge-base", "origin/main", head)
+        self.check_scope(workspace, head, base=base)
         data.update(
             head=head,
             integration_base=base,
@@ -227,7 +234,9 @@ class Campaign:
             lease_until=None,
             reason="read_only_review_resumed",
         )
-        self.save_event(data, "interrupted_review_saved_new_request_required")
+        self.save_event(
+            data, "interrupted_review_saved_new_request_required", cancelled_review=request_id
+        )
 
     def smoke(self):
         self.enter()
