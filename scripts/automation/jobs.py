@@ -131,8 +131,12 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
             else:
                 raise Stop("unknown", "cli_timeout_no_retry")
         code = child.wait(timeout=max(0.01, min(10, end - time.monotonic())))
-        if code != 0 or not completed or owner is None:
-            raise Stop("unknown", "cli_result_incomplete")
+        if owner is None:
+            raise Stop("unknown", "cli_start_event_missing")
+        if not completed:
+            raise Stop("unknown", "cli_completion_event_missing")
+        if code != 0:
+            raise Stop("unknown", "cli_exit_not_success")
         data = task.data()
         data["cli_exit_code"] = code
         data["cli_pid"] = None

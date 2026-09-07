@@ -21,8 +21,6 @@ export async function pump(root, campaign, tools) {
       let run = await tools.exec_command({
         cmd: `.venv/Scripts/python.exe -m scripts.automation.local_check ${quote(args.workspace)} ${quote(args.head)} ${quote(directory)}`,
         workdir: root,
-        sandbox_permissions: "require_escalated",
-        justification: "runnerが要求した固定headのnpm run checkを既存ローカル環境で実行します。",
         yield_time_ms: 1000,
         max_output_tokens: 2500,
       });

@@ -20,7 +20,7 @@ GCMの既存managerを対話無効で利用し、認証応答はadapter process�
 
 REST/GraphQLのHTTP予算はstore全体で30件。runner/helper、再起動、revision、ETagの304、失敗、unknown writeを同じSQLite counterへ合算する。送信前に予約し、31件目は未送信。予約後の失敗でも払い戻さない。redirect・自動retry・次page追跡は行わず、page欠落なら停止する。401/403は保存停止し、制限応答の待機headerを記録してその場で終了する。Git protocolの内部HTTP往復数はこのREST/GraphQL counterに含めない。
 
-そのほかの強制境界は保存した全体2時間、CLI最大3起動・各900秒（smoke180秒）、host配送最大40回、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
+そのほかの強制境界は保存した全体2時間、CLI最大3起動・各900秒（smoke180秒）、local delivery-stageはcampaignごと最大40操作（保存fieldは`max_connector_calls`）、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
 
 `transport.py`はGitHub操作を予約してnative adapterを同期実行し、実応答をDBへ保存する。正式reviewとlocal checkだけは `relay.mjs` の `pump(root, campaign, tools)` が `bridge take` で一度claimする。reviewの固定packetを同じread-only reviewerへ渡し、実回答を `complete` で返す。checkは既存factoryの180秒timeoutでclean current headの `npm run check` を実行する。後付けの外部成功receiptをimportするcommandはない。
 
@@ -37,6 +37,10 @@ python -m scripts.automation.delivery billing-helper init --owner <thread-uuid> 
 python -m scripts.automation.delivery billing-helper helper --source <confirmed-debrief.json>
 python -m scripts.automation.delivery billing-helper deliver --workspace <saved-checkout>
 ```
+
+read-only review要求をclaimした後にdispatcherが停止した場合は、`resume-review --request-id <保存ID>`で再開可否を確認する。OS lockを取得でき、leaseが失効し、最後の未完了操作が同headの独立reviewである場合に限り旧要求をcancelled_read_onlyとして保存する。新要求で正式reviewを受け直し、予算は保持する。approval_wait・unknown writeはこの判定を通らない。
+
+CLIのthread開始event欠落とturn完了event欠落は別の停止理由で保存する。各完了・停止にはoutcome、reason、head、job owner、PR、1文の学びだけの短いdebriefを残す。分散lease/CASや自動scope拡大は行わない。
 
 ## Mind Inboxからの採否
 

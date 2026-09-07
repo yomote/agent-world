@@ -1,5 +1,7 @@
 """外部操作の予約、再送防止、ownerとcurrent evidenceの境界を検証する。"""
 
+import io
+import json
 import subprocess
 import sys
 import time
@@ -346,3 +348,64 @@ def test_known_failure_revision_preserves_budget_but_unknown_cannot_resume(task,
     task.finish_step("unknown", "merge_result_unknown")
     with pytest.raises(transport.Stop, match="revision_not_allowed"):
         task.revise(task.root)
+
+
+def test_only_interrupted_read_only_review_can_resume(task, monkeypatch):
+    """承認待ちやunknown writeをread-only review再開に偽装する回帰を防ぐ。"""
+    identifier = "11111111-1111-4111-8111-111111111111"
+    data = task.data()
+    data.update(state="job_verified", head=HEAD, lease_until=time.time() - 1)
+    task.save_event(data, "head_fixed")
+    with task.db:
+        task.db.execute(
+            "INSERT INTO delivery_operations VALUES (?,?,?,'inflight',?,NULL)",
+            (
+                identifier,
+                task.name,
+                "independent_review",
+                json.dumps({"arguments": {"head": HEAD}}),
+            ),
+        )
+    monkeypatch.setattr(delivery, "git", lambda *args: HEAD)
+    monkeypatch.setattr(task, "check_scope", lambda *args, **kwargs: None)
+    task.resume_review(identifier)
+    assert task.data()["token"] is None
+    assert task.data()["http_requests"] == 0
+    assert (
+        task.db.execute(
+            "SELECT state FROM delivery_operations WHERE id=?", (identifier,)
+        ).fetchone()[0]
+        == "cancelled_read_only"
+    )
+    task.finish_step("unknown", "write_unknown")
+    with pytest.raises(transport.Stop, match="safe_review_resume_not_confirmed"):
+        task.resume_review(identifier)
+    assert task.data()["debrief"]["outcome"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "events,reason",
+    [
+        ([{"type": "turn.completed"}], "cli_start_event_missing"),
+        ([{"type": "thread.started", "thread_id": OWNER}], "cli_completion_event_missing"),
+    ],
+)
+def test_missing_cli_lifecycle_events_are_not_success(task, monkeypatch, events, reason):
+    """exit 0だけで起動・完了event漏れを成功扱いする回帰を防ぐ。fixtureはE2Eではない。"""
+    from scripts.automation import jobs
+
+    class Child:
+        pid = 1
+        stdin = io.BytesIO()
+        stdout = io.BytesIO(("\n".join(json.dumps(event) for event in events) + "\n").encode())
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout):
+            return 0
+
+    monkeypatch.setattr(jobs.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(jobs.subprocess, "Popen", lambda *args, **kwargs: Child())
+    with pytest.raises(transport.Stop, match=reason):
+        jobs.run_job(task, task.root, "fixed", read_only=True)

@@ -178,7 +178,56 @@ class Campaign:
     def finish_step(self, state, reason):
         data = self.data()
         data.update(state=state, reason=reason, token=None, lease_until=None)
+        data["debrief"] = {
+            "outcome": state,
+            "reason": reason,
+            "head": data.get("head"),
+            "job_owner": data.get("job_owner"),
+            "pr": data.get("pr"),
+            "lesson": "未完了・skip・結果不明を成功にせず、current証拠で判定する。",
+        }
         self.save_event(data, reason)
+
+    def resume_review(self, request_id):
+        """死んだdispatcherのread-only review待ちだけを再予約可能にする。"""
+        data = self.data()
+        row = self.db.execute(
+            "SELECT id,operation,state,request FROM delivery_operations WHERE campaign=? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (self.name,),
+        ).fetchone()
+        if (
+            not row
+            or row[0] != request_id
+            or row[1:3] != ("independent_review", "inflight")
+            or data["state"] != "job_verified"
+            or data.get("last_event") != "head_fixed"
+            or not data["token"]
+            or time.time() < data["lease_until"]
+            or time.time() >= data["deadline"]
+        ):
+            raise Stop("stopped", "safe_review_resume_not_confirmed")
+        request = json.loads(row[3])
+        if request["arguments"]["head"] != data["head"]:
+            raise Stop("stopped", "review_resume_head_mismatch")
+        head = git(self.root, "rev-parse", "HEAD")
+        if git(self.root, "merge-base", data["head"], head) != data["head"]:
+            raise Stop("stopped", "review_resume_requires_descendant")
+        base = git(self.root, "merge-base", "origin/main", head)
+        self.check_scope(self.root, head, base=base)
+        with self.db:
+            self.db.execute(
+                "UPDATE delivery_operations SET state='cancelled_read_only' WHERE id=?",
+                (request_id,),
+            )
+        data.update(
+            head=head,
+            integration_base=base,
+            token=None,
+            lease_until=None,
+            reason="read_only_review_resumed",
+        )
+        self.save_event(data, "interrupted_review_saved_new_request_required")
 
     def smoke(self):
         self.enter()
@@ -530,6 +579,8 @@ def main():
     sub.add_parser("smoke")
     handoff = sub.add_parser("handoff")
     handoff.add_argument("--reviewed-head", required=True)
+    resume_review = sub.add_parser("resume-review")
+    resume_review.add_argument("--request-id", required=True)
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
     revise = sub.add_parser("revise")
@@ -567,6 +618,8 @@ def main():
                     task.revise(args.workspace)
                 elif args.command == "handoff":
                     task.handoff(args.reviewed_head)
+                elif args.command == "resume-review":
+                    task.resume_review(args.request_id)
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)
                 return 0
             except Stop as error:
