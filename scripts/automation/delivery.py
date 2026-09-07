@@ -105,14 +105,17 @@ class Campaign:
             )
         atomic_json(self.directory / "status.json", data)
 
-    def init(self, owner: str, base: str, *, seconds=7200, cli_starts=3, connector_calls=40):
+    def init(self, owner: str, base: str, *, seconds=None, cli_starts=3, connector_calls=40):
         if self.db.execute(
             "SELECT 1 FROM delivery_campaigns WHERE name=?", (self.name,)
         ).fetchone():
             raise ValueError("campaign_exists_no_budget_reset")
+        if seconds is None:
+            seconds = 1800 if self.name == "billing-helper" else 7200
         if (
             not SHA.fullmatch(base)
             or not 60 <= seconds <= 7200
+            or (self.name == "billing-helper" and seconds != 1800)
             or not 1 <= cli_starts <= 3
             or not 1 <= connector_calls <= 40
         ):
@@ -140,6 +143,8 @@ class Campaign:
             upstream_http_hardcap="rest_graphql_shared_30",
             github_backend="native_gcm_rest_graphql",
         )
+        if self.name == "billing-helper":
+            data.update(campaign_seconds=1800, delivery_attempts=0, max_delivery_attempts=3)
         self.save_event(data, "initialized")
 
     def enter(self):
@@ -153,6 +158,14 @@ class Campaign:
             "completed",
         }:
             raise Stop(data["state"], data["reason"])
+        if self.name == "billing-helper" and (
+            data.get("campaign_seconds") != 1800
+            or data.get("max_delivery_attempts") != 3
+            or type(data.get("delivery_attempts")) is not int
+            or not 0 <= data["delivery_attempts"] <= 3
+        ):
+            self.finish_step("stopped", "helper_packet_not_representable")
+            raise Stop("stopped", "helper_packet_not_representable")
         if data["token"]:
             if time.time() < data["lease_until"]:
                 raise Stop("stopped", "previous_owner_lease_active")
@@ -272,6 +285,12 @@ class Campaign:
         if self.data()["state"] != "job_verified":
             raise Stop("stopped", "real_job_required_before_delivery")
         self.enter()
+        if self.name == "billing-helper":
+            data = self.data()
+            if data["delivery_attempts"] >= data["max_delivery_attempts"]:
+                raise Stop("stopped", "helper_delivery_attempt_budget")
+            data["delivery_attempts"] += 1
+            self.save_event(data, "helper_delivery_attempt_reserved")
         expected = self.root if self.name == "runner" else self.directory / "checkout"
         if workspace.resolve() != expected.resolve():
             raise Stop("stopped", "workspace_not_allowed")
@@ -614,7 +633,7 @@ def main():
                             raise Stop("stopped", "runner_merge_required")
                         parent = task.data()
                         task = Campaign(runner, "billing-helper")
-                        task.init(parent["owner"], parent["merge_sha"])
+                        task.init(parent["owner"], parent["merge_sha"], seconds=1800)
                         from .helper_job import implement
 
                         implement(task, args.helper_source)

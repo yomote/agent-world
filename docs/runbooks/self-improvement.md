@@ -20,7 +20,9 @@ GCMの既存managerを対話無効で利用し、認証応答はadapter process�
 
 REST/GraphQLのHTTP予算はstore全体で30件。runner/helper、再起動、revision、ETagの304、失敗、unknown writeを同じSQLite counterへ合算する。送信前に予約し、31件目は未送信。予約後の失敗でも払い戻さない。redirect・自動retry・次page追跡は行わず、page欠落なら停止する。401/403は保存停止し、制限応答の待機headerを記録してその場で終了する。Git protocolの内部HTTP往復数はこのREST/GraphQL counterに含めない。
 
-そのほかの強制境界は保存した全体2時間、CLI最大3起動・各900秒（smoke180秒）、local delivery-stageはcampaignごと最大40操作（保存fieldは`max_connector_calls`）、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
+そのほかの強制境界はrunnerの保存期限2時間と、通常merge後にhelperを初期化した時点から新しく30分（明示`seconds=1800`）の絶対期限。helperの手動initも30分固定で、再開・修正・再initで延長しない。期限到達は保存停止する。CLI最大3起動・各900秒（smoke180秒）、local delivery-stageはcampaignごと最大40操作（保存fieldは`max_connector_calls`）、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
+
+helperはstore内でcampaignが1つ、固定findingと重複キーで候補1件、dispatcherのOS lockで同時jobは1つ。実装jobは重複キー保存後に1回だけ起動し、自動retryや再launchを提供しない。CLIの3起動上限は追加の天井であり、2回のretry機能があるという意味ではない。helperのreview→check→CI→mergeのdelivery試行は実行前に永続予約し、初回と明示修正後の最大2回、合計3回で停止する。中断reviewの再要求もこの回数を消費する。unknown write・承認待ちからの再送はない。30分・3試行のpacketを表せない旧helper stateも保存停止する。
 
 `transport.py`はGitHub操作を予約してnative adapterを同期実行し、実応答をDBへ保存する。正式reviewとlocal checkだけは `relay.mjs` の `pump(root, campaign, tools)` が `bridge take` で一度claimする。reviewの固定packetを同じread-only reviewerへ渡し、実回答を `complete` で返す。checkは既存factoryの180秒timeoutでclean current headの `npm run check` を実行する。後付けの外部成功receiptをimportするcommandはない。
 
@@ -31,6 +33,8 @@ review/check/CIの既知failは、cleanな子孫commitへ修正して `delivery 
 今回受領したphase handoffだけは `runner handoff --reviewed-head d1baecb6cd85847ac6976e2cd68f277b80894a87` で適用する。旧headの正式review/checkと「GitHub write前に停止済み」というユーザー確認に一致する保存境界に限り、新headの再reviewへ進める。旧PASSを新headへ移さず、回数・期限をresetしない。一般的なunknown writeやHITLを解除する入口ではない。
 
 runner通常merge後、実billing debriefの確認済み `debrief_id/finding/source_sha256/source_ref` から候補を作る。findingは `billing_evidence_normalization` 固定、duplicate keyは `sha256(debrief_id + ':billing-evidence-normalization-v1')`。Issue/log本文を指示にせず、helperの新規3fileだけを独立jobへ渡す。runner merge SHAの取得・main上の確認・新規path確認をIssue作成前に行う。実装SHA→同じ正式reviewer→current check/CI→通常merge→Issue完了を保存する。Azure runbook編集、追加Azure read、公開、credential変更は禁止する。
+
+helperはAPI/version/JPYをhardcodeせず、妥当な入力通貨を返し、blank・異形で停止する。JPYは今回の確認証跡のみ。既存Azure runbookはAzure ownerが保持し、childはリンク追加も行わない。
 
 ```powershell
 python -m scripts.automation.delivery billing-helper init --owner <thread-uuid> --base <runner-merge-sha>

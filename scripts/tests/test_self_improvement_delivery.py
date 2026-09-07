@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,121 @@ def test_helper_requires_parent_merge_before_any_issue(task, monkeypatch, tmp_pa
     with pytest.raises(transport.Stop, match="runner_merge_required"):
         helper_job.implement(child, tmp_path / "missing.json")
     assert child.data()["connector_calls"] == 0
+
+
+def test_merged_runner_initializes_helper_with_new_persistent_thirty_minutes(tmp_path, monkeypatch):
+    """実CLI分岐でhelperに2時間を継承し、再起動で期限や共有予算をresetする回帰を防ぐ。"""
+    from scripts.automation import helper_job, jobs
+
+    now = [1000.0]
+    monkeypatch.setattr(delivery.time, "time", lambda: now[0])
+    with dispatcher(tmp_path), closing(Runner(tmp_path)) as store:
+        parent = delivery.Campaign(store, "runner")
+        parent.init(OWNER, "b" * 40)
+        with store.db:
+            store.db.execute("UPDATE delivery_http_budget SET used=17 WHERE id=1")
+
+    def merged(task, workspace):
+        assert task.name == "runner"
+        now[0] = 2000.0
+        data = task.data()
+        data.update(state="merged", merge_sha=HEAD)
+        task.save_event(data, "test_parent_merge")
+
+    def expire_helper(task, source):
+        assert task.name == "billing-helper"
+        data = task.data()
+        assert data["deadline"] == 3800.0
+        assert data["campaign_seconds"] == 1800
+        assert data["max_cli_starts"] == data["max_delivery_attempts"] == 3
+        assert data["http_requests"] == 17 and data["max_http_requests"] == 30
+        assert data["max_connector_calls"] == 40
+        assert data["cost_hardcap"] == "not_provided"
+        assert data["model_request_hardcap"] == "not_provided"
+        with pytest.raises(ValueError, match="dispatcher_busy"), dispatcher(tmp_path):
+            pytest.fail("second concurrent dispatcher")
+        with pytest.raises(ValueError, match="no_budget_reset"):
+            task.init(OWNER, HEAD, seconds=1800)
+        task.enter()
+        exhausted = task.data()
+        exhausted["cli_starts"] = 3
+        task.save_event(exhausted, "test_cli_exhausted")
+        with pytest.raises(transport.Stop, match="cli_start_budget"):
+            jobs.run_job(task, tmp_path, "must not launch")
+        now[0] = 3800.0
+        task.boundary()
+
+    monkeypatch.setattr(delivery, "ROOT", tmp_path)
+    monkeypatch.setattr(delivery.Campaign, "deliver", merged)
+    monkeypatch.setattr(helper_job, "implement", expire_helper)
+    monkeypatch.setattr(
+        sys, "argv", ["delivery", "runner", "deliver", "--helper-source", "unused.json"]
+    )
+    assert delivery.main() == 2
+    with closing(Runner(tmp_path)) as store:
+        helper = delivery.Campaign(store, "billing-helper")
+        data = helper.data()
+        assert data["state"] == "stopped" and data["reason"] == "campaign_time_budget"
+        assert data["debrief"]["outcome"] == "stopped" and data["token"] is None
+        assert data["deadline"] == 3800.0 and data["http_requests"] == 17
+        assert data["cli_starts"] == 3
+        with pytest.raises(transport.Stop, match="campaign_time_budget"):
+            helper.enter()
+        with pytest.raises(ValueError, match="no_budget_reset"):
+            helper.init(OWNER, HEAD, seconds=1800)
+        assert helper.data() == data
+
+
+def test_helper_delivery_stops_before_fourth_attempt_and_rejects_old_packet(task, monkeypatch):
+    """known failの修正で3試行上限を戻し、表現不能な旧packetで実行する回帰を防ぐ。"""
+    helper = delivery.Campaign(task, "billing-helper")
+    with pytest.raises(ValueError, match="invalid_campaign_budget"):
+        helper.init(OWNER, HEAD, seconds=7200)
+    helper.init(OWNER, HEAD, seconds=1800)
+    workspace = helper.directory / "checkout"
+    current = ["c" * 40]
+    calls = []
+
+    def checkout_git(path, *args):
+        if args[0] == "remote":
+            return "https://github.com/yomote/agent-world.git"
+        return current[0] if args[0] == "rev-parse" else helper.data()["head"]
+
+    def failed_review(operation, *args, **kwargs):
+        assert operation == "independent_review"
+        calls.append(operation)
+        raise transport.Stop("failed", "independent_review_not_pass")
+
+    monkeypatch.setattr(delivery, "git", checkout_git)
+    monkeypatch.setattr(helper, "check_scope", lambda *args, **kwargs: None)
+    monkeypatch.setattr(helper.transport, "call", failed_review)
+    data = helper.data()
+    data.update(state="job_verified", head=current[0])
+    helper.save_event(data, "test_job_verified")
+    for attempt in range(1, 4):
+        with pytest.raises(transport.Stop, match="independent_review_not_pass") as caught:
+            helper.deliver(workspace)
+        helper.finish_step(caught.value.state, caught.value.reason)
+        assert helper.data()["delivery_attempts"] == attempt
+        current[0] = str(attempt) * 40
+        helper.revise(workspace)
+        assert helper.data()["deadline"] == data["deadline"]
+    with pytest.raises(transport.Stop, match="helper_delivery_attempt_budget") as caught:
+        helper.deliver(workspace)
+    helper.finish_step(caught.value.state, caught.value.reason)
+    assert len(calls) == 3
+    assert helper.data()["delivery_attempts"] == 3
+    with pytest.raises(transport.Stop, match="helper_delivery_attempt_budget"):
+        delivery.Campaign(task, "billing-helper").enter()
+
+    # 旧schemaを安全な初回とみなしてcounterを0へ補完しない。
+    data = helper.data()
+    data.update(state="job_verified", token=None)
+    del data["delivery_attempts"]
+    helper.save_event(data, "test_old_packet")
+    with pytest.raises(transport.Stop, match="helper_packet_not_representable"):
+        helper.enter()
+    assert helper.data()["state"] == "stopped"
 
 
 def test_unprotected_main_never_reaches_merge(task, monkeypatch):
