@@ -47,6 +47,10 @@ class Event(ValueModel):
     world_revision: int
 
 
-class ActionResult(ValueModel):
-    event: Event
+class EventHistory(ValueModel):
     world: WorldState
+    events: Annotated[tuple[Event, ...], Field(max_length=80)]
+
+
+class ActionResult(EventHistory):
+    event: Event
