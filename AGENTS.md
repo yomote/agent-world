@@ -37,3 +37,5 @@
 - GitHubの公開上限を設計値にせず、イベント優先・共有budget・ETag・停止時の可視化は[外部APIのレート予算](docs/runbooks/api-rate-budget.md)に従う。
 
 細かい開発手順は [ローカル開発](docs/runbooks/local-dev.md)、テストの責務は [テスト方針](docs/testing.md)。秘密・本番認証・運用自動化を持ち込まない。作業ブランチは `codex/` を使用する。
+
+- bounded local改善の明示起動と停止・回復は[自律改善runner](docs/runbooks/self-improvement.md)に従う。
