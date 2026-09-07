@@ -111,6 +111,10 @@ export default function App() {
           aria-labelledby="world-title"
           aria-describedby="world-keyboard-hint"
           tabIndex={0}
+          onClick={(event) => {
+            // PhaserのCanvas入力が既定のフォーカス移動を抑えるため、明示的に選択する。
+            if (event.target instanceof HTMLCanvasElement) event.currentTarget.focus();
+          }}
           onKeyDown={(event) => handleMoveKeyDown(event, available && !running, move)}
         >
           <div className="panel-heading">
