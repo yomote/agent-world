@@ -88,13 +88,13 @@ python -m scripts.automation.delivery billing-helper helper --source artifacts/s
 
 ### attempt2の環境失敗後の最終別attempt
 
-PR30はproofとは別の通常開発unitとしてmergeされた。固定のPR30 result fileを追加引数`--development-receipt`で受け、別開発ledgerをread-onlyで開いて、実HTTP 200の通常merge要求/応答、expected SHA、review済head、merge SHA、purpose、current check/CI/保護を照合する。proof側は旧parent、旧attempt1のraw hashと凍結、attempt2とcurrent projection、Issue28/key、HTTP20/30・stage32/40と1/40・CLI2/3・旧開始/期限を照合する。この検証をread-only preflightと明示attempt3作成入口の両方が使う。proof parentの置換や旧attemptの成功への変換は行わない。
+runtime是正はproofとは別の通常開発unitとしてmergeする。`artifacts/self-improvement/`配下に保存した最新mainの`result.json`を追加引数`--development-receipt`で受け、同じdirectoryの別開発ledgerをread-onlyで開く。実HTTP 200の通常merge要求/応答、expected SHA、review済head/base、独立reviewer、merge SHA、purpose、current check/CI/保護と、merge SHAがlocalの`origin/main`に一致することを照合する。proof側は旧parent、旧attempt1のraw hashと凍結、attempt2とcurrent projection、Issue28/key、HTTP20/30・stage32/40と1/40・CLI2/3・旧開始/期限を照合する。この検証をread-only preflightと明示attempt3作成入口の両方が使う。proof parentの置換や旧attemptの成功への変換は行わない。
 
 ```powershell
 python -m scripts.automation.delivery billing-helper preflight --development-receipt artifacts/self-improvement/runtime-development/result.json
 ```
 
-`preflight_pass`はPR30証拠と旧proofの検査に合格した意味だけを持つ。DB更新、event追加、attempt3、child、deadlineを作らず、起動許可にも変換しない。作成packetまで確認する場合は同じ`new-helper-attempt`入口に`--dry-run`を付ける。read-only DBで通常の作成検査を全て通し、開始・期限の生成とattempt保存の直前で戻る。`attempt3_dry_run_pass`も実起動やE2E成功を意味しない。
+`preflight_pass`は指定した最新mainの通常merge証拠と旧proofの検査に合格した意味だけを持つ。DB更新、event追加、attempt3、child、deadlineを作らず、起動許可にも変換しない。作成packetまで確認する場合は同じ`new-helper-attempt`入口に`--dry-run`を付ける。read-only DBで通常の作成検査を全て通し、開始・期限の生成とattempt保存の直前で戻る。`attempt3_dry_run_pass`も実起動やE2E成功を意味しない。
 
 ```powershell
 python -m scripts.automation.delivery billing-helper new-helper-attempt --packet artifacts/self-improvement/validation-attempt-3.json --development-receipt artifacts/self-improvement/runtime-development/result.json --dry-run
@@ -104,9 +104,9 @@ python -m scripts.automation.delivery billing-helper new-helper-attempt --packet
 
 attempt2のVolta環境失敗は`failed/child_permission_failed`のまま保持する。この確認済みchild UUID・開始/期限・CLI完了log hash・新規3fileのraw hash・base・Issue28・重複キーに一致する場合だけ、旧attempt1と2を凍結して別attempt3を作成できる。一般permission失敗、人間承認、policy拒否、異なるlog/内容は受け付けない。旧attemptの成功への書換えや同attempt再開はない。
 
-環境補正はPR30の別開発ledgerで通常統合済みで、proof runnerはPR29の保存状態を保持する。receiptなしの従来入口は正式review/current check/通常merge後のrunner attempt3を要求する。PR30 receiptを渡した明示入口は検証済みhead/mergeとreceipt・ledger・旧parentのhashを新helper attemptの`development_parent`へ別記録し、baseをPR30 mergeへ結び付ける。続く`helper`もこの証拠とpacketのhead/mergeを再照合し、差替え時は外部I/O前に停止する。deliveryによる自動作成はなく、予算は全て継承する。helper統合には最短でも9 HTTP・11 local stageが必要なため、残量不足なら副作用前に停止する。CI待機が増えればさらに消費し、最短下限は完遂保証ではない。GitHub REST/GraphQL実HTTPの共有上限30とlocal stage上限40は別単位で、金額hardcapは未提供である。
+環境補正は別開発ledgerで通常統合し、proof runnerは保存状態を保持する。receiptなしの従来入口は正式review/current check/通常merge後のrunner attempt3を要求する。最新main receiptを渡した明示入口は検証済みhead/mergeとreceipt・ledger・旧parentのhashを新helper attemptの`development_parent`へ別記録し、baseをその最新mergeへ結び付ける。続く`helper`も保存したreceipt/ledger、packetのhead/merge、baseを再照合し、差替え時は外部I/O前に停止する。deliveryによる自動作成はなく、予算は全て継承する。helper統合には最短でも9 HTTP・11 local stageが必要なため、残量不足なら副作用前に停止する。CI待機が増えればさらに消費し、最短下限は完遂保証ではない。GitHub REST/GraphQL実HTTPの共有上限30とlocal stage上限40は別単位で、金額hardcapは未提供である。
 
-その後の別の明示packetは`artifacts/self-improvement/validation-attempt-3.json`を使う。上のpacketから`kind`を`issue28-runtime-validation-v1`に変更し、`runtime_profile: "native-local-v1"`を追加する。PR30 receiptを使う場合の`corrective_head`は`a0219310324cc0230906be00d90ab1d79e61f229`、`corrective_merge`は`bad3e6ba7679e0c8203ce43b115f4816ed5d1345`で固定。他のfieldとscopeは同一、`seconds`は900固定。旧CLI2起動を引き継ぎ、残りの実childは最大1起動だけ。新開始・期限と旧開始・期限を別々に保存し、期限・HTTP・CLI・delivery履歴はresetしない。次の2 commandは別の明示起動許可後に限る。
+その後の別の明示packetは`artifacts/self-improvement/validation-attempt-3.json`を使う。上のpacketから`kind`を`issue28-runtime-validation-v1`に変更し、`runtime_profile: "native-local-v1"`を追加する。`corrective_head`と`corrective_merge`は指定した最新main receiptの検証結果と一致させる。他のfieldとscopeは同一、`seconds`は900固定。旧CLI2起動を引き継ぎ、残りの実childは最大1起動だけ。新開始・期限と旧開始・期限を別々に保存し、期限・HTTP・CLI・delivery履歴はresetしない。次の2 commandは別の明示起動許可後に限る。
 
 ```powershell
 python -m scripts.automation.delivery billing-helper new-helper-attempt --packet artifacts/self-improvement/validation-attempt-3.json --development-receipt artifacts/self-improvement/runtime-development/result.json

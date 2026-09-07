@@ -100,7 +100,11 @@ def saved(tmp_path, monkeypatch):
 
     def git(workspace, *args):
         if args[0] == "rev-parse":
-            return value["helper"]["base"]
+            return (
+                value["development"]["merge_sha"]
+                if args[1] == "origin/main"
+                else value["helper"]["base"]
+            )
         if args[0] == "ls-files":
             return "\n".join(SCOPES["billing-helper"])
         return ""
@@ -128,6 +132,77 @@ def test_real_pr30_state_fixture_passes_preflight_without_mutation(saved):
     assert result["attempt_creation_authorized"] is False
     assert before == (contents(proof), contents(development))
     assert not (root / "artifacts/self-improvement/billing-helper/attempt-3").exists()
+
+
+def test_later_normal_merge_receipt_becomes_helper_base(saved, monkeypatch):
+    """旧開発番号やSHAへ固定して、是正後のlatest mainからhelperを起動できない回帰を防ぐ。"""
+    root, proof, development, value = saved
+    proof_before = contents(proof)
+    state = copy.deepcopy(value["development"])
+    state.update(
+        name="receipt-development",
+        base=value["development"]["merge_sha"],
+        head="c" * 40,
+        merge_sha="d" * 40,
+        pr=31,
+    )
+    state["review"].update(head=state["head"], base=state["base"], reviewer="/root/reviewer")
+    state["current_check"].update(head=state["head"], end_head=state["head"])
+    state["ci"].update(head_sha=state["head"], pr_number=state["pr"])
+    request = {
+        "id": "later-merge",
+        "campaign": state["name"],
+        "operation": "normal_merge",
+        "arguments": {
+            "repository_full_name": delivery.REPOSITORY,
+            "pr_number": state["pr"],
+            "expected_head_sha": state["head"],
+            "merge_method": "squash",
+        },
+        "write": True,
+    }
+    response = {
+        "id": "later-merge",
+        "status": "ok",
+        "result": {"merged": True, "sha": state["merge_sha"]},
+    }
+    with sqlite3.connect(development) as db:
+        db.execute(
+            "UPDATE delivery_campaigns SET name=?,data=?", (state["name"], json.dumps(state))
+        )
+        db.execute(
+            "UPDATE delivery_operations SET id=?,campaign=?,request=?,response=?",
+            ("later-merge", state["name"], json.dumps(request), json.dumps(response)),
+        )
+        db.execute(
+            "UPDATE delivery_http_requests SET path=?",
+            (f"/repos/yomote/agent-world/pulls/{state['pr']}/merge",),
+        )
+    (root / RECEIPT).write_text(
+        json.dumps(
+            {
+                "development": state,
+                "proof_after": state["proof_before"],
+                "proof_unchanged": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fixture_git = helper_job.git
+    monkeypatch.setattr(
+        helper_job,
+        "git",
+        lambda workspace, *args: (
+            state["merge_sha"]
+            if args[:2] == ("rev-parse", "origin/main")
+            else fixture_git(workspace, *args)
+        ),
+    )
+
+    result = helper_job.preflight_development_receipt(root, Path(RECEIPT))
+    assert result["development_head"] == state["head"]
+    assert result["development_merge"] == state["merge_sha"]
+    assert contents(proof) == proof_before
 
 
 @pytest.mark.parametrize(
@@ -239,8 +314,8 @@ def creation(saved, monkeypatch):
     authorization = {
         **value["helper"]["validation_packet"],
         "kind": "issue28-runtime-validation-v1",
-        "corrective_head": helper_job.PR30_HEAD,
-        "corrective_merge": helper_job.PR30_MERGE,
+        "corrective_head": value["development"]["head"],
+        "corrective_merge": value["development"]["merge_sha"],
         "runtime_profile": helper_job.RUNTIME_PROFILE,
     }
     (root / packet).write_text(json.dumps(authorization), encoding="utf-8")
@@ -279,7 +354,7 @@ def test_creation_entry_dry_run_cannot_write_or_allocate_deadline(creation, monk
     assert delivery.main() == 0
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "attempt3_dry_run_pass"
-    assert result["base"] == helper_job.PR30_MERGE
+    assert result["base"] == creation[3]["development"]["merge_sha"]
     assert result["http_requests"] == 20 and result["cli_starts"] == 2
     assert all(
         result[key] is False
@@ -306,8 +381,8 @@ def test_explicit_creation_entry_reuses_verified_receipt_without_rewriting_paren
     assert delivery.main() == 0
     data = json.loads(capsys.readouterr().out)
     assert data["attempt_id"] == 3 and data["state"] == "ready"
-    assert data["base"] == helper_job.PR30_MERGE
-    assert data["development_parent"]["head"] == helper_job.PR30_HEAD
+    assert data["base"] == value["development"]["merge_sha"]
+    assert data["development_parent"]["head"] == value["development"]["head"]
     assert data["head"] is None and data["job_owner"] is None
     assert data["deadline"] == data["started_at"] + 900
     assert data["prior_started_at"] == value["helper"]["started_at"]
@@ -417,12 +492,12 @@ def test_created_attempt_reaches_mocked_child_only_with_unchanged_dependency(
         lambda workspace, *args: (
             f"https://github.com/{delivery.REPOSITORY}.git"
             if args[0] == "remote"
-            else helper_job.PR30_MERGE
+            else creation[3]["development"]["merge_sha"]
         ),
     )
 
     def child(task, workspace, prompt, **kwargs):
-        assert task.data()["base"] == helper_job.PR30_MERGE
+        assert task.data()["base"] == creation[3]["development"]["merge_sha"]
         assert task.data()["issue"] == 28
         assert task.data()["duplicate_key"] == helper_job.DUPLICATE
         assert task.data()["cli_starts"] == 2

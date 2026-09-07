@@ -44,30 +44,29 @@ ATTEMPT2_HASHES = dict(
         strict=True,
     )
 )
-PR30_HEAD = "a0219310324cc0230906be00d90ab1d79e61f229"
-PR30_MERGE = "bad3e6ba7679e0c8203ce43b115f4816ed5d1345"
-PR30_RECEIPT = "artifacts/self-improvement/runtime-development/result.json"
-PR30_LEDGER = "artifacts/self-improvement/runtime-development/ledger.sqlite3"
+DEVELOPMENT_ROOT = "artifacts/self-improvement"
 
 
 def verify_development_receipt(task, old, parent, receipt):
-    """PR30の実送信ledgerだけを参照する。proof parentや旧attemptへのimportはしない。"""
-    from .delivery import REVIEWER, RUNTIME_PARENT_HEAD
-
-    if (task.root / receipt).resolve() != (task.root / PR30_RECEIPT).resolve():
-        raise Stop("stopped", "fixed_pr30_receipt_required")
-    receipt_bytes = read_input(task.root, PR30_RECEIPT)
+    """指定した通常開発mergeの実ledgerを読む。proof parentや旧attemptへimportしない。"""
+    receipt_path = (task.root / receipt).resolve()
+    root = (task.root / DEVELOPMENT_ROOT).resolve()
+    if receipt_path.name != "result.json" or root not in receipt_path.parents:
+        raise Stop("stopped", "development_receipt_path_required")
+    relative_receipt = receipt_path.relative_to(task.root).as_posix()
+    relative_ledger = (receipt_path.parent / "ledger.sqlite3").relative_to(task.root).as_posix()
+    receipt_bytes = read_input(task.root, relative_receipt)
     supplied = json.loads(receipt_bytes)
-    path = safe_path(task.root, PR30_LEDGER)
+    path = safe_path(task.root, relative_ledger)
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
         db.execute("BEGIN")
-        row = db.execute(
-            "SELECT data FROM delivery_campaigns WHERE name='runtime-development'"
-        ).fetchone()
-        data = json.loads(row[0]) if row else {}
+        row = db.execute("SELECT name,data FROM delivery_campaigns").fetchone()
+        campaign, raw = row if row else (None, None)
+        data = json.loads(raw) if raw else {}
         operation = db.execute(
             "SELECT id,state,request,response FROM delivery_operations "
-            "WHERE campaign='runtime-development' AND operation='normal_merge'"
+            "WHERE campaign=? AND operation='normal_merge'",
+            (campaign,),
         ).fetchall()
         http = db.execute(
             "SELECT method,path,state,status FROM delivery_http_requests "
@@ -78,14 +77,17 @@ def verify_development_receipt(task, old, parent, receipt):
         supplied.get("development") != data
         or supplied.get("proof_unchanged") is not True
         or supplied.get("proof_after") != data.get("proof_before")
-        or data.get("name") != "runtime-development"
+        or data.get("name") != campaign
+        or not isinstance(campaign, str)
+        or not campaign.endswith("development")
         or data.get("purpose") != "ordinary_development_not_proof"
         or data.get("state") != "merged"
         or data.get("reason") != "normal_protected_merge_confirmed"
-        or data.get("head") != PR30_HEAD
-        or data.get("merge_sha") != PR30_MERGE
-        or data.get("base") != RUNTIME_PARENT_MERGE
-        or data.get("pr") != 30
+        or not re.fullmatch(r"[0-9a-f]{40}", data.get("head", ""))
+        or not re.fullmatch(r"[0-9a-f]{40}", data.get("merge_sha", ""))
+        or not re.fullmatch(r"[0-9a-f]{40}", data.get("base", ""))
+        or type(data.get("pr")) is not int
+        or data["pr"] < 1
         or data.get("owner") != old.get("owner")
         or data.get("github_backend") != "native_gcm_rest_graphql"
         or data.get("proof_before")
@@ -98,10 +100,9 @@ def verify_development_receipt(task, old, parent, receipt):
             "helper_state": "failed",
             "helper_attempt": 2,
         }
-        or data.get("http_requests") != 9
-        or used != (9,)
-        or parent.get("head") != RUNTIME_PARENT_HEAD
-        or parent.get("merge_sha") != RUNTIME_PARENT_MERGE
+        or type(data.get("http_requests")) is not int
+        or data["http_requests"] < 1
+        or used != (data.get("http_requests"),)
         or parent.get("state") != "merged"
         or parent.get("purpose") != "commit_boundary"
         or parent.get("attempt_id") != 2
@@ -114,47 +115,52 @@ def verify_development_receipt(task, old, parent, receipt):
         or old.get("issue") != 28
         or old.get("prior_started_at") != 1788800585.6396668
         or old.get("prior_deadline") != 1788802385.6396668
+        or git(task.root, "rev-parse", "origin/main") != data.get("merge_sha")
     ):
         raise Stop("stopped", "development_receipt_or_proof_mismatch")
     review, check, ci = data.get("review", {}), data.get("current_check", {}), data.get("ci", {})
     if (
-        review.get("head") != PR30_HEAD
-        or review.get("reviewer") != REVIEWER
+        review.get("head") != data["head"]
+        or review.get("base") != data["base"]
+        or not isinstance(review.get("reviewer"), str)
+        or not review["reviewer"].strip()
+        or review["reviewer"] != review["reviewer"].strip()
+        or review["reviewer"] in {data.get("owner"), data.get("job_owner")}
         or review.get("verdict") != "pass"
         or review.get("findings") != []
-        or check.get("head") != PR30_HEAD
-        or check.get("end_head") != PR30_HEAD
+        or check.get("head") != data["head"]
+        or check.get("end_head") != data["head"]
         or check.get("exit_code") != 0
         or check.get("clean") is not True
-        or ci.get("head_sha") != PR30_HEAD
-        or ci.get("pr_number") != 30
+        or ci.get("head_sha") != data["head"]
+        or ci.get("pr_number") != data["pr"]
         or ci.get("conclusion") != "success"
         or not ci.get("check_job_id")
         or data.get("protection", {}).get("protected") is not True
         or data.get("protection", {}).get("mode") != "standard_rest_squash_expected_sha"
         or len(operation) != 1
         or operation[0][1] != "ok"
-        or http != [("PUT", "/repos/yomote/agent-world/pulls/30/merge", "received", 200)]
+        or http != [("PUT", f"/repos/yomote/agent-world/pulls/{data['pr']}/merge", "received", 200)]
     ):
-        raise Stop("stopped", "pr30_current_evidence_not_bound")
+        raise Stop("stopped", "development_current_evidence_not_bound")
     identifier, _, request, response = operation[0]
     request, response = json.loads(request), json.loads(response)
     arguments, result = request.get("arguments", {}), response.get("result", {})
     if (
         request.get("id") != identifier
         or response.get("id") != identifier
-        or request.get("campaign") != "runtime-development"
         or request.get("operation") != "normal_merge"
         or request.get("write") is not True
         or arguments.get("repository_full_name") != REPOSITORY
-        or arguments.get("pr_number") != 30
-        or arguments.get("expected_head_sha") != PR30_HEAD
+        or request.get("campaign") != campaign
+        or arguments.get("pr_number") != data["pr"]
+        or arguments.get("expected_head_sha") != data["head"]
         or arguments.get("merge_method") != "squash"
         or response.get("status") != "ok"
         or result.get("merged") is not True
-        or result.get("sha") != PR30_MERGE
+        or result.get("sha") != data["merge_sha"]
     ):
-        raise Stop("stopped", "pr30_merge_operation_not_bound")
+        raise Stop("stopped", "development_merge_operation_not_bound")
     attempts = task.db.execute(
         "SELECT attempt,data,frozen FROM delivery_attempts WHERE campaign='billing-helper' "
         "ORDER BY attempt"
@@ -169,8 +175,10 @@ def verify_development_receipt(task, old, parent, receipt):
     ):
         raise Stop("stopped", "prior_attempt_history_mismatch")
     return {
-        "head": PR30_HEAD,
-        "merge_sha": PR30_MERGE,
+        "head": data["head"],
+        "merge_sha": data["merge_sha"],
+        "receipt": relative_receipt,
+        "ledger": relative_ledger,
         "receipt_sha256": digest(receipt_bytes),
         "ledger_sha256": digest(path.read_bytes()),
         "proof_parent_sha256": digest(json.dumps(parent, sort_keys=True).encode()),
@@ -208,11 +216,13 @@ def preflight_development_receipt(root, receipt, *, packet=None):
             )
             if packet is not None:
                 return new_attempt(task, packet, development_receipt=receipt, dry_run=True)
-            final_attempt_boundary(task, old, parent, development_receipt=receipt)
+            development_parent = final_attempt_boundary(
+                task, old, parent, development_receipt=receipt
+            )
         return dict(
             status="preflight_pass",
-            development_head=PR30_HEAD,
-            development_merge=PR30_MERGE,
+            development_head=development_parent["head"],
+            development_merge=development_parent["merge_sha"],
             issue=28,
             duplicate_key=DUPLICATE,
             http_requests=20,
@@ -587,21 +597,27 @@ def implement(task, source: Path):
     data = task.data()
     development_parent = data.get("development_parent")
     if development_parent is not None:
-        # 作成入口で検証したPR30だけを別証拠として使い、proof parentは置換しない。
+        # 作成入口で検証した最新main receiptを別証拠として使い、proof parentは置換しない。
+        receipt = development_parent.get("receipt", "")
+        ledger = development_parent.get("ledger", "")
         if (
             data.get("attempt_id") != 3
             or data.get("purpose") != "explicit_billing_validation"
-            or data.get("base") != PR30_MERGE
+            or data.get("base") != development_parent.get("merge_sha")
             or development_parent
             != {
-                "head": PR30_HEAD,
-                "merge_sha": PR30_MERGE,
-                "receipt_sha256": digest(read_input(task.root, PR30_RECEIPT)),
-                "ledger_sha256": digest(safe_path(task.root, PR30_LEDGER).read_bytes()),
+                "head": development_parent.get("head"),
+                "merge_sha": development_parent.get("merge_sha"),
+                "receipt": receipt,
+                "ledger": ledger,
+                "receipt_sha256": digest(read_input(task.root, receipt)),
+                "ledger_sha256": digest(safe_path(task.root, ledger).read_bytes()),
                 "proof_parent_sha256": digest(json.dumps(parent, sort_keys=True).encode()),
             }
-            or data.get("validation_packet", {}).get("corrective_head") != PR30_HEAD
-            or data.get("validation_packet", {}).get("corrective_merge") != PR30_MERGE
+            or data.get("validation_packet", {}).get("corrective_head")
+            != development_parent.get("head")
+            or data.get("validation_packet", {}).get("corrective_merge")
+            != development_parent.get("merge_sha")
         ):
             raise Stop("stopped", "development_parent_changed")
     elif parent.get("state") != "merged" or parent.get("merge_sha") != data["base"]:
