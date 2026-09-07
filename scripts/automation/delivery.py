@@ -38,6 +38,8 @@ CORRECTIVE_PATHS = (
     "scripts/tests/test_self_improvement_commit_boundary.py",
     "docs/runbooks/self-improvement.md",
 )
+RUNTIME_PARENT_HEAD = "9c32bd5b3bdbf5354aea3749a74e1b5d427dde1d"
+RUNTIME_PARENT_MERGE = "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf"
 
 
 def git(workspace: Path, *arguments: str) -> str:
@@ -148,12 +150,27 @@ class Campaign:
         raw = self.db.execute(
             "SELECT data FROM delivery_campaigns WHERE name=?", (self.name,)
         ).fetchone()[0]
-        if (
-            json.loads(raw).get("attempt_id")
-            or self.db.execute(
-                "SELECT 1 FROM delivery_attempts WHERE campaign=?", (self.name,)
-            ).fetchone()
-        ):
+        prior = json.loads(raw).get("attempt_id", 1)
+        records = list(
+            self.db.execute(
+                "SELECT attempt,frozen,data FROM delivery_attempts "
+                "WHERE campaign=? ORDER BY attempt",
+                (self.name,),
+            )
+        )
+        final = (
+            prior == 2
+            and [(row[0], row[1]) for row in records] == [(1, 1), (2, 0)]
+            and records[1][2] == raw
+            and (
+                (self.name == "runner" and data.get("purpose") == "runtime_preflight")
+                or (
+                    self.name == "billing-helper"
+                    and evidence.get("kind") == "confirmed_attempt2_environment_failure"
+                )
+            )
+        )
+        if not final and (prior != 1 or records):
             raise Stop("stopped", "explicit_attempt_already_recorded")
         evidence = {
             **evidence,
@@ -163,16 +180,23 @@ class Campaign:
             ).fetchone()[0],
             "http_used_at_boundary": self.data()["http_requests"],
         }
-        data.update(attempt_id=2, previous_attempt=1)
+        data.update(attempt_id=prior + 1, previous_attempt=prior)
         # 旧attemptの凍結とcurrent projectionの切替は一つのtransaction。
         with self.db:
+            if final:
+                self.db.execute(
+                    "UPDATE delivery_attempts SET frozen=1,evidence=? "
+                    "WHERE campaign=? AND attempt=2 AND frozen=0",
+                    (json.dumps(evidence), self.name),
+                )
+            else:
+                self.db.execute(
+                    "INSERT INTO delivery_attempts VALUES (?,1,?,1,?)",
+                    (self.name, raw, json.dumps(evidence)),
+                )
             self.db.execute(
-                "INSERT INTO delivery_attempts VALUES (?,1,?,1,?)",
-                (self.name, raw, json.dumps(evidence)),
-            )
-            self.db.execute(
-                "INSERT INTO delivery_attempts VALUES (?,2,?,0,'{}')",
-                (self.name, json.dumps(data)),
+                "INSERT INTO delivery_attempts VALUES (?,?,?,0,'{}')",
+                (self.name, prior + 1, json.dumps(data)),
             )
             self.save(data)
         self.save_event(data, "explicit_attempt_created")
@@ -180,18 +204,36 @@ class Campaign:
     def corrective(self):
         """通常merge済みrunnerから、この5fileの明示修正を別unitとして納品する。"""
         old = self.data()
-        if self.name != "runner" or old["state"] != "merged" or old.get("attempt_id"):
+        runtime = (
+            old.get("attempt_id") == 2
+            and old.get("head") == RUNTIME_PARENT_HEAD
+            and old.get("merge_sha") == RUNTIME_PARENT_MERGE
+            and old.get("purpose") == "commit_boundary"
+        )
+        if (
+            self.name != "runner"
+            or old["state"] != "merged"
+            or (old.get("attempt_id") and not runtime)
+        ):
             raise Stop("stopped", "merged_runner_required_for_corrective_unit")
         base, head = old["merge_sha"], git(self.root, "rev-parse", "HEAD")
         self.check_scope(self.root, head, base=base)
         if (
             git(self.root, "merge-base", base, head) != base
             or git(self.root, "branch", "--show-current")
-            != "codex/self-improvement-commit-boundary"
+            != (
+                "codex/self-improvement-runtime"
+                if runtime
+                else "codex/self-improvement-commit-boundary"
+            )
             or set(git(self.root, "diff", "--name-only", base, head).splitlines())
             != set(CORRECTIVE_PATHS)
         ):
             raise Stop("stopped", "corrective_scope_or_base_mismatch")
+        if runtime and (
+            old["http_requests"] > 22 or old["max_connector_calls"] - old["connector_calls"] < 10
+        ):
+            raise Stop("stopped", "remaining_delivery_budget_insufficient")
         data = {
             key: old[key]
             for key in (
@@ -219,7 +261,7 @@ class Campaign:
             implementation_source="authorized_primary_owner",
             state="job_verified",
             reason="corrective_fixed_head",
-            purpose="commit_boundary",
+            purpose="runtime_preflight" if runtime else "commit_boundary",
             deadline=time.time() + 7200,
             last_seen=time.time(),
         )
@@ -280,9 +322,9 @@ class Campaign:
         }:
             raise Stop(data["state"], data["reason"])
         if self.name == "billing-helper" and (
-            (data.get("attempt_id") != 2 and data.get("campaign_seconds") != 1800)
+            (data.get("attempt_id") not in (2, 3) and data.get("campaign_seconds") != 1800)
             or (
-                data.get("attempt_id") == 2
+                data.get("attempt_id") in (2, 3)
                 and (
                     data.get("purpose") != "explicit_billing_validation"
                     or data.get("campaign_seconds") != 900
@@ -290,6 +332,16 @@ class Campaign:
                     or data.get("validation_packet", {}).get("seconds") != 900
                     or data.get("validation_packet_sha256")
                     != digest(json.dumps(data.get("validation_packet"), sort_keys=True).encode())
+                    or (
+                        data.get("attempt_id") == 3
+                        and (
+                            data.get("runtime_profile_required") != "native-local-v1"
+                            or data.get("validation_packet", {}).get("kind")
+                            != "issue28-runtime-validation-v1"
+                            or data.get("validation_packet", {}).get("runtime_profile")
+                            != "native-local-v1"
+                        )
+                    )
                 )
             )
             or data.get("max_delivery_attempts") != 3
@@ -404,7 +456,10 @@ class Campaign:
             raise Stop("stopped", "head_dirty_or_moved")
         base = base or self.data().get("integration_base", self.data()["base"])
         paths = git(workspace, "diff", "--name-only", base, head).splitlines()
-        if self.name == "runner" and self.data().get("purpose") == "commit_boundary":
+        if self.name == "runner" and self.data().get("purpose") in {
+            "commit_boundary",
+            "runtime_preflight",
+        }:
             if not paths or not set(paths).issubset(CORRECTIVE_PATHS):
                 raise Stop("stopped", "corrective_scope_mismatch")
         if not paths or any(

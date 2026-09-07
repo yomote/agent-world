@@ -15,6 +15,71 @@ from .evidence import thread_id
 from .transport import Stop
 
 MAX_LOG_BYTES = 8 * 1024 * 1024
+RUNTIME_PROFILE = "native-local-v1"
+
+
+def native_node():
+    return (
+        Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+    )
+
+
+def prepare_runtime(task, workspace):
+    """既存依存だけを用意し、child予約前に固定commandを短時間で検査する。"""
+    task.boundary()
+    prettier = workspace / "node_modules/prettier"
+    if prettier.exists():
+        raise Stop("stopped", "runtime_destination_exists")
+    source = task.root / "node_modules/prettier"
+    # 別ownerのpathへリンク経由で書かず、downloadやpackage managerを起動しない。
+    for directory in (source, workspace / ".venv"):
+        for path in [directory, *directory.rglob("*")]:
+            task.heartbeat()
+            if path.is_symlink() or getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
+                raise Stop("stopped", "runtime_link_not_allowed")
+
+    def copy_file(source_path, target_path):
+        task.heartbeat()
+        result = shutil.copy2(source_path, target_path)
+        task.boundary()
+        return result
+
+    shutil.copytree(source, prettier, copy_function=copy_file)
+    commands = {
+        "node": [str(native_node()), "--version"],
+        "python": [str(workspace / ".venv/Scripts/python.exe"), "--version"],
+        "pytest": [str(workspace / ".venv/Scripts/python.exe"), "-m", "pytest", "--version"],
+        "ruff": [str(workspace / ".venv/Scripts/python.exe"), "-m", "ruff", "--version"],
+        "prettier": [str(native_node()), str(prettier / "bin/prettier.cjs"), "--version"],
+    }
+    versions = {}
+    for name, command in commands.items():
+        task.heartbeat()
+        try:
+            result = subprocess.run(
+                command,
+                cwd=workspace,
+                capture_output=True,
+                timeout=min(10, max(0.01, task.monotonic_deadline - time.monotonic())),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise Stop("stopped", "runtime_preflight_failed") from None
+        if result.returncode or not result.stdout.strip() or len(result.stdout) > 256:
+            raise Stop("stopped", "runtime_preflight_failed")
+        versions[name] = result.stdout.decode("utf-8").strip()
+    task.boundary()
+    profile = {
+        "kind": RUNTIME_PROFILE,
+        "node": str(native_node()),
+        "python": str(workspace / ".venv/Scripts/python.exe"),
+        "prettier": str(prettier / "bin/prettier.cjs"),
+        "versions": versions,
+        "boundary": "driver_host_only_not_child_sandbox",
+    }
+    data = task.data()
+    data["runtime_profile"] = profile
+    task.save_event(data, "runtime_preflight_verified")
+    return profile
 
 
 def stop_process(child):

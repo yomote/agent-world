@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[2]))
-from scripts.automation import delivery, helper_job  # noqa: E402
+from scripts.automation import delivery, helper_job, jobs  # noqa: E402
 from scripts.automation.runner import Runner, digest, dispatcher  # noqa: E402
 from scripts.automation.transport import Stop  # noqa: E402
 
@@ -413,3 +413,309 @@ def test_retry_implementation_reuses_issue_and_edits_only_contract(task, monkeyp
         helper_job.implement(task, source)
     assert task.data()["retry_job_reserved"] is True
     assert task.data()["http_requests"] == 11
+
+
+def prepare_second_attempt(task, monkeypatch):
+    original = task.workspace()
+    base = delivery.git(original, "rev-parse", "HEAD")
+    prepare_old_attempt(task, monkeypatch)
+    helper_job.new_attempt(task, PACKET)
+    delivery.git(task.root, "clone", "--no-hardlinks", str(original), str(task.workspace()))
+    for path in delivery.SCOPES["billing-helper"]:
+        target = task.workspace() / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((path + "\n").encode())
+    monkeypatch.setattr(helper_job, "ATTEMPT2_HASHES", helper_job.hashes(task.workspace()))
+    monkeypatch.setattr(helper_job, "RUNTIME_PARENT_MERGE", base)
+    log = task.artifact_directory / "cli-2.jsonl"
+    log.write_bytes(b"fixture known environment completion\n")
+    monkeypatch.setattr(helper_job, "ATTEMPT2_LOG", digest(log.read_bytes()))
+    data = task.data()
+    data.update(
+        base=base,
+        state="failed",
+        reason="child_permission_failed",
+        cli_starts=2,
+        cli_exit_code=0,
+        cli_pid=None,
+        job_owner=helper_job.ATTEMPT2_OWNER,
+        started_at=1788803735.89545,
+        deadline=1788804635.89545,
+        cli_completion=dict(
+            owner=helper_job.ATTEMPT2_OWNER,
+            exit_code=0,
+            turn_completed=True,
+            command_failed=True,
+            log_sha256=helper_job.ATTEMPT2_LOG,
+            message_sha256=helper_job.ATTEMPT2_MESSAGE,
+        ),
+    )
+    task.save_event(data, "child_permission_failed")
+    with task.db:
+        task.db.execute("UPDATE delivery_http_budget SET used=20 WHERE id=1")
+        task.db.execute(
+            "UPDATE delivery_campaigns SET data=? WHERE name='runner'",
+            (
+                json.dumps(
+                    dict(
+                        state="merged",
+                        purpose="runtime_preflight",
+                        attempt_id=3,
+                        head="e" * 40,
+                        merge_sha="f" * 40,
+                    )
+                ),
+            ),
+        )
+    packet = task.root / "artifacts/self-improvement/validation-attempt-3.json"
+    packet.write_text(
+        json.dumps(
+            dict(
+                kind="issue28-runtime-validation-v1",
+                seconds=900,
+                issue=28,
+                duplicate_key=helper_job.DUPLICATE,
+                owner=OWNER,
+                corrective_head="e" * 40,
+                corrective_merge="f" * 40,
+                scope=list(delivery.SCOPES["billing-helper"]),
+                runtime_profile=jobs.RUNTIME_PROFILE,
+            )
+        ),
+        encoding="utf-8",
+    )
+    return packet
+
+
+def test_final_attempt_archives_both_failures_and_inherits_all_counters(task, monkeypatch):
+    """最後の別attemptが旧失敗・期限を書き換え、回数を払い戻す回帰を防ぐ。"""
+    packet = prepare_second_attempt(task, monkeypatch)
+    before = list(task.db.execute("SELECT * FROM delivery_attempts ORDER BY attempt"))
+    events = list(task.db.execute("SELECT * FROM delivery_events"))
+    helper_job.new_attempt(task, packet)
+    rows = list(task.db.execute("SELECT * FROM delivery_attempts ORDER BY attempt"))
+    assert rows[0] == before[0]
+    assert rows[1][2] == before[1][2] and rows[1][3] == 1
+    assert json.loads(rows[1][2])["state"] == "failed"
+    assert list(task.db.execute("SELECT * FROM delivery_events"))[: len(events)] == events
+    data = task.data()
+    assert data["attempt_id"] == 3 and data["state"] == "ready"
+    assert data["head"] is None and data["job_owner"] is None
+    assert data["prior_started_at"] == 1788803735.89545
+    assert data["prior_deadline"] == 1788804635.89545
+    assert data["deadline"] == data["started_at"] + 900
+    assert data["cli_starts"] == 2 and data["max_cli_starts"] == 3
+    assert data["delivery_attempts"] == 0 and data["max_delivery_attempts"] == 3
+    assert data["http_requests"] == 20 and data["max_http_requests"] == 30
+    assert data["cost_hardcap"] == "not_provided"
+    assert not task.workspace().exists()
+    for number in (1, 2):
+        with pytest.raises(sqlite3.IntegrityError, match="frozen_attempt"):
+            task.db.execute("UPDATE delivery_attempts SET data='{}' WHERE attempt=?", (number,))
+    with pytest.raises(Stop):
+        helper_job.new_attempt(task, packet)
+    assert task.data()["deadline"] == data["deadline"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "human",
+        "policy",
+        "generic_permission",
+        "log",
+        "files",
+        "deadline",
+        "cli_budget",
+        "http_budget",
+        "stage_budget",
+        "unmerged",
+        "packet_extra",
+    ],
+)
+def test_final_attempt_requires_exact_environment_evidence_and_budget(task, monkeypatch, change):
+    """既知Volta失敗以外の拒否解除、証拠不一致、完遂不能な残予算を許さない。"""
+    packet = prepare_second_attempt(task, monkeypatch)
+    data = task.data()
+    if change in {"human", "policy", "generic_permission"}:
+        data.update(
+            {
+                "human": dict(state="approval_wait", reason="cli_approval_required"),
+                "policy": dict(state="failed", reason="cli_policy_denied"),
+                "generic_permission": dict(job_owner=OWNER),
+            }[change]
+        )
+    elif change == "log":
+        (task.artifact_directory / "cli-2.jsonl").write_bytes(b"changed")
+    elif change == "files":
+        (task.workspace() / delivery.SCOPES["billing-helper"][0]).write_bytes(b"changed")
+    elif change == "deadline":
+        data["deadline"] += 1
+    elif change == "cli_budget":
+        data["cli_starts"] = 3
+    elif change == "http_budget":
+        task.db.execute("UPDATE delivery_http_budget SET used=22 WHERE id=1")
+    elif change == "stage_budget":
+        data["connector_calls"] = 30
+    elif change == "unmerged":
+        task.db.execute("UPDATE delivery_campaigns SET data='{}' WHERE name='runner'")
+    else:
+        value = json.loads(packet.read_text())
+        value["auto_approve"] = True
+        packet.write_text(json.dumps(value))
+    with task.db:
+        task.save(data)
+    before = list(task.db.execute("SELECT * FROM delivery_attempts"))
+    with pytest.raises(Stop):
+        helper_job.new_attempt(task, packet)
+    assert list(task.db.execute("SELECT * FROM delivery_attempts")) == before
+    assert task.data()["attempt_id"] == 2
+
+
+def test_final_attempt_expires_and_cannot_reset(task, monkeypatch):
+    """別attemptの15分をresume・再packetで延長しない。"""
+    packet = prepare_second_attempt(task, monkeypatch)
+    helper_job.new_attempt(task, packet)
+    deadline = task.data()["deadline"]
+    monkeypatch.setattr(delivery.time, "time", lambda: deadline + 1)
+    with pytest.raises(Stop, match="campaign_time_budget") as caught:
+        task.enter()
+    task.finish_step(caught.value.state, caught.value.reason)
+    with pytest.raises(Stop):
+        helper_job.new_attempt(task, packet)
+    with pytest.raises(Stop):
+        task.enter()
+    assert task.data()["state"] == "stopped" and task.data()["deadline"] == deadline
+    assert task.data()["cli_starts"] == 2 and task.data()["http_requests"] == 20
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_runtime_preflight_uses_native_paths_without_starting_a_child(task, monkeypatch, failure):
+    """Volta再利用・checkout依存欠落・失敗後のCLI起動を防ぐhost preflight。"""
+    source = task.root / "node_modules/prettier/bin/prettier.cjs"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"fixture prettier")
+    (task.workspace() / ".venv/Scripts").mkdir(parents=True)
+    task.enter()
+    calls = []
+
+    def probe(command, **kwargs):
+        calls.append((command, kwargs))
+        return type("Result", (), dict(returncode=int(failure), stdout=b"1.2.3\n"))()
+
+    monkeypatch.setattr(jobs.subprocess, "run", probe)
+    if failure:
+        with pytest.raises(Stop, match="runtime_preflight_failed") as caught:
+            jobs.prepare_runtime(task, task.workspace())
+        task.finish_step(caught.value.state, caught.value.reason)
+        assert "runtime_profile" not in task.data()
+    else:
+        profile = jobs.prepare_runtime(task, task.workspace())
+        assert profile == task.data()["runtime_profile"]
+        assert profile["python"] == str(task.workspace() / ".venv/Scripts/python.exe")
+        assert profile["prettier"] == str(
+            task.workspace() / "node_modules/prettier/bin/prettier.cjs"
+        )
+        assert calls[-1][0][0] == str(jobs.native_node())
+        assert len(calls) == 5
+    assert all(item[1]["timeout"] <= 10 for item in calls)
+    assert task.data()["cli_starts"] == 0 and task.data()["http_requests"] == 0
+
+
+def test_unknown_thirtieth_http_is_reserved_before_send_and_not_refunded(task, monkeypatch):
+    """unknown writeの30件目を消費済みとし、adapter再生成後も31件目を送らない。"""
+    from scripts.automation.github_adapter import GitHub
+
+    task.enter()
+    task.db.execute("UPDATE delivery_http_budget SET used=29 WHERE id=1")
+    task.db.commit()
+    task.transport.github.authorization = "fixture-only-secret"
+    calls = []
+
+    def send(*args, **kwargs):
+        # 別connectionからも送信前に予約を観測でき、未commitのmemory値ではない。
+        with sqlite3.connect(task.root / "artifacts/self-improvement/state.sqlite3") as observer:
+            assert observer.execute("SELECT used FROM delivery_http_budget").fetchone()[0] == 30
+            assert (
+                observer.execute("SELECT state FROM delivery_http_requests").fetchone()[0]
+                == "reserved"
+            )
+        calls.append(1)
+        raise TimeoutError()
+
+    monkeypatch.setattr(task.transport.github.opener, "open", send)
+    with pytest.raises(Stop, match="transport_no_retry"):
+        task.transport.github.call("create_helper_issue", dict(title="fixture", body="data"))
+    successor = GitHub(task)
+    monkeypatch.setattr(successor.opener, "open", send)
+    with pytest.raises(Stop, match="http_request_budget_30"):
+        successor.call("main_protection", {})
+    assert calls == [1] and task.data()["http_requests"] == 30
+
+
+@pytest.mark.parametrize("preflight_failure", [False, True])
+def test_final_job_receives_profile_only_after_successful_preflight(
+    task, monkeypatch, preflight_failure
+):
+    """実装入口がruntime検査を飛ばし、root PythonやVoltaへ戻る回帰を防ぐ。"""
+    packet = prepare_second_attempt(task, monkeypatch)
+    helper_job.new_attempt(task, packet)
+    source = task.root / "source.json"
+    source.write_text(
+        json.dumps(
+            dict(
+                debrief_id="github:yomote/agent-world/pull/24:billing-debrief",
+                finding="billing_evidence_normalization",
+                source_sha256="1" * 64,
+                source_ref="https://github.com/yomote/agent-world/pull/24",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def local_git(workspace, *args):
+        if args[:2] == ("remote", "get-url"):
+            return "https://github.com/yomote/agent-world.git"
+        if args[0] == "merge-base":
+            return task.data()["base"]
+        if args[0] == "clone":
+            Path(args[-1]).mkdir()
+        return ""
+
+    profile = dict(
+        kind=jobs.RUNTIME_PROFILE,
+        node=str(jobs.native_node()),
+        python=str(task.workspace() / ".venv/Scripts/python.exe"),
+        prettier=str(task.workspace() / "node_modules/prettier/bin/prettier.cjs"),
+    )
+    steps = []
+
+    def preflight(current, workspace):
+        steps.append("preflight")
+        if preflight_failure:
+            raise Stop("stopped", "fixture_preflight_failure")
+        data = current.data()
+        data["runtime_profile"] = profile
+        current.save_event(data, "runtime_preflight_verified")
+        return profile
+
+    def job(current, workspace, prompt, **kwargs):
+        steps.append("job")
+        assert current.data()["runtime_profile"] == profile
+        assert json.dumps(profile, ensure_ascii=True) in prompt
+        assert str(task.root / ".venv/Scripts/python.exe") not in prompt
+        assert "PATHのnode/npm/npx/Voltaを使わない" in prompt
+        assert current.data()["issue"] == 28
+        raise Stop("stopped", "fixture_job_boundary")
+
+    monkeypatch.setattr(helper_job, "git", local_git)
+    monkeypatch.setattr(helper_job.shutil, "copytree", lambda *args: None)
+    monkeypatch.setattr(helper_job, "prepare_runtime", preflight)
+    monkeypatch.setattr(helper_job, "run_job", job)
+    monkeypatch.setattr(task.transport.github, "git_transfer", lambda *args: None)
+    monkeypatch.setattr(task.transport, "call", lambda *args, **kwargs: pytest.fail("no new Issue"))
+    with pytest.raises(Stop) as caught:
+        helper_job.implement(task, source)
+    task.finish_step(caught.value.state, caught.value.reason)
+    assert steps == (["preflight"] if preflight_failure else ["preflight", "job"])
+    assert task.data()["cli_starts"] == 2 and task.data()["http_requests"] == 20

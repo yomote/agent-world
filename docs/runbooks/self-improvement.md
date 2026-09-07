@@ -20,9 +20,11 @@ GCMの既存managerを対話無効で利用し、認証応答はadapter process�
 
 REST/GraphQLのHTTP予算はstore全体で30件。runner/helper、再起動、revision、ETagの304、失敗、unknown writeを同じSQLite counterへ合算する。送信前に予約し、31件目は未送信。予約後の失敗でも払い戻さない。redirect・自動retry・次page追跡は行わず、page欠落なら停止する。401/403は保存停止し、制限応答の待機headerを記録してその場で終了する。Git protocolの内部HTTP往復数はこのREST/GraphQL counterに含めない。
 
+30件は単一adapterが実送信するREST/GraphQL要求の上限で、CLI起動回数・local delivery-stageの40操作とは別単位である。将来page・retry・read-only照合を送る場合も同じ送信前予約を通す必要がある。childのGitHub I/O禁止はjob指示による制約であり、account全体のAPI上限やchildの強制network隔離を提供しない。Git/GCM内部の通信・CLI内部のモデル要求・金額hardcapはこの30件に含めない。
+
 そのほかの強制境界はrunnerの保存期限2時間と、通常merge後にhelperを初期化した時点から新しく30分（明示`seconds=1800`）の絶対期限。helperの手動initも30分固定で、再開・修正・再initで延長しない。期限到達は保存停止する。CLI最大3起動・各900秒（smoke180秒）、local delivery-stageはcampaignごと最大40操作（保存fieldは`max_connector_calls`）、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
 
-helperはstore内でcampaignが1つ、固定findingと重複キーで候補1件、dispatcherのOS lockで同時jobは1つ。実装jobは通常1回のみ。この課題で許可された別attemptだけを下記の専用入口で1回追加でき、自動retryは提供しない。CLIは旧試行を含む最大3起動という追加の天井を持つ。helperのreview→check→CI→mergeのdelivery試行は実行前に永続予約し、初回と明示修正後の最大2回、合計3回で停止する。中断reviewの再要求もこの回数を消費する。unknown write・承認待ちからの再送はない。30分・3試行のpacketを表せない旧helper stateも保存停止する。
+helperはstore内でcampaignが1つ、固定findingと重複キーで候補1件、dispatcherのOS lockで同時jobは1つ。実装jobは通常1回のみ。この課題で許可された別attemptだけを下記の専用入口で追加でき、自動retryは提供しない。CLIは旧試行を含む最大3起動という追加の天井を持つ。helperのreview→check→CI→mergeのdelivery試行は実行前に永続予約し、初回と明示修正後の最大2回、合計3回で停止する。中断reviewの再要求もこの回数を消費する。unknown write・承認待ちからの再送はない。30分・3試行のpacketを表せない旧helper stateも保存停止する。
 
 `transport.py`はGitHub操作を予約してnative adapterを同期実行し、実応答をDBへ保存する。正式reviewとlocal checkだけは `relay.mjs` の `pump(root, campaign, tools)` が `bridge take` で一度claimする。reviewの固定packetを同じread-only reviewerへ渡し、実回答を `complete` で返す。checkは既存factoryの180秒timeoutでclean current headの `npm run check` を実行する。後付けの外部成功receiptをimportするcommandはない。
 
@@ -83,6 +85,21 @@ python -m scripts.automation.delivery billing-helper helper --source artifacts/s
 ```
 
 最初のcommandは明示15分attemptの保存だけを行う。次の`helper`が実CLI jobを起動する。corrective unitの納品中にはどちらも実行せず、別の起動指示を待つ。
+
+### attempt2の環境失敗後の最終別attempt
+
+attempt2のVolta環境失敗は`failed/child_permission_failed`のまま保持する。この確認済みchild UUID・開始/期限・CLI完了log hash・新規3fileのraw hash・base・Issue28・重複キーに一致する場合だけ、旧attempt1と2を凍結して別attempt3を作成できる。一般permission失敗、人間承認、policy拒否、異なるlog/内容は受け付けない。旧attemptの成功への書換えや同attempt再開はない。
+
+環境補正も同じ5path内の別corrective unitとし、branchは`codex/self-improvement-runtime`、baseはPR29の通常merge SHAとする。`runner corrective`は確認済みPR29の保存境界からだけ進む。正式review/current check/通常merge後のrunner attempt3が必要で、deliveryによるhelperの自動作成はない。予算は全て継承する。最短でもrunner統合に8 HTTP・10 local stage、helper統合に9 HTTP・11 local stageが必要なため、残量不足なら副作用前に停止する。CI待機が増えればさらに消費し、最短下限は完遂保証ではない。
+
+その後の別の明示packetは`artifacts/self-improvement/validation-attempt-3.json`を使う。上のpacketから`kind`を`issue28-runtime-validation-v1`に変更し、`runtime_profile: "native-local-v1"`を追加し、新corrective head/mergeを指定する。他のfieldとscopeは同一、`seconds`は900固定。旧CLI2起動を引き継ぎ、残りの実childは最大1起動だけ。新開始・期限と旧開始・期限を別々に保存し、期限・HTTP・CLI・delivery履歴はresetしない。
+
+```powershell
+python -m scripts.automation.delivery billing-helper new-helper-attempt --packet artifacts/self-improvement/validation-attempt-3.json
+python -m scripts.automation.delivery billing-helper helper --source artifacts/self-improvement/billing-source.json
+```
+
+attempt3のhelper準備は既存`.venv`と既存Prettierだけを新checkoutへ複製し、downloadを行わない。既存native Nodeの絶対path、checkout内Python、checkout内Prettierを各10秒以下・campaign残時間以内でversion検査し、固定runtime profileを保存してchildへ渡す。これはdriver hostのpreflightであり、child sandboxでの成功やE2E成功とは呼ばない。preflight失敗はCLI予約前に保存停止する。childはPATHのNode/Volta/npmを使わず、専用pytest/Ruff/formatだけを検証する。`npm run check`は親が固定headで実行する。
 
 read-only review要求をclaimした後にdispatcherが停止した場合は、`resume-review --request-id <保存ID>`で再開可否を確認する。OS lockを取得でき、leaseが失効し、最後の未完了操作が同headの独立reviewである場合に限り旧要求をcancelled_read_onlyとして保存する。runnerはroot、helperは専用checkoutを要求packetのworkspaceと照合し、そのcheckoutのhead・祖先関係・scopeを検証する。旧要求の取消しと復帰状態は同一DB transactionで保存する。新要求で正式reviewを受け直し、予算は保持する。approval_wait・unknown writeはこの判定を通らない。
 
