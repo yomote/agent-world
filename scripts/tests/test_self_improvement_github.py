@@ -181,6 +181,7 @@ def test_merge_requires_joined_current_evidence_and_sends_expected_sha_once(task
     "review_update",
     [
         {"reviewer": OWNER},
+        {"reviewer": OWNER + " "},
         {"base": "d" * 40},
         {"findings": [{"priority": "P1"}]},
     ],

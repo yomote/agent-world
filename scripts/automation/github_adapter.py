@@ -330,7 +330,8 @@ class GitHub:
                 or review.get("findings") != []
                 or not isinstance(reviewer, str)
                 or not reviewer.strip()
-                or reviewer in {data.get("owner"), data.get("job_owner")}
+                or reviewer != reviewer.strip()
+                or reviewer.strip() in {data.get("owner"), data.get("job_owner")}
                 or ci.get("head_sha") != head
                 or ci.get("pr_number") != number
                 or ci.get("conclusion") != "success"
