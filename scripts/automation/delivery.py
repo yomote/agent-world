@@ -934,6 +934,10 @@ def main():
     sub.add_parser("corrective")
     new_helper = sub.add_parser("new-helper-attempt")
     new_helper.add_argument("--packet", type=Path, required=True)
+    new_helper.add_argument("--development-receipt", type=Path)
+    new_helper.add_argument("--dry-run", action="store_true")
+    preflight = sub.add_parser("preflight")
+    preflight.add_argument("--development-receipt", type=Path, required=True)
     sub.add_parser("record-commit")
     sub.add_parser("reconcile-commit")
     handoff = sub.add_parser("handoff")
@@ -948,6 +952,27 @@ def main():
     deliver.add_argument("--workspace", type=Path, default=ROOT)
     deliver.add_argument("--helper-source", type=Path)
     args = parser.parse_args()
+    if args.command == "preflight" or (args.command == "new-helper-attempt" and args.dry_run):
+        from .helper_job import preflight_development_receipt
+
+        try:
+            if args.campaign != "billing-helper":
+                raise Stop("stopped", "billing_preflight_required")
+            if args.development_receipt is None:
+                raise Stop("stopped", "fixed_pr30_receipt_required")
+            print(
+                json.dumps(
+                    preflight_development_receipt(
+                        ROOT,
+                        args.development_receipt,
+                        packet=args.packet if args.command == "new-helper-attempt" else None,
+                    )
+                )
+            )
+            return 0
+        except Stop as error:
+            print(json.dumps({"state": error.state, "reason": error.reason}))
+            return 2
     with dispatcher(ROOT):
         runner = Runner(ROOT)
         try:
@@ -979,7 +1004,7 @@ def main():
                     from .helper_job import new_attempt, reconcile_commit, record_commit
 
                     if args.command == "new-helper-attempt":
-                        new_attempt(task, args.packet)
+                        new_attempt(task, args.packet, development_receipt=args.development_receipt)
                     else:
                         {"record-commit": record_commit, "reconcile-commit": reconcile_commit}[
                             args.command

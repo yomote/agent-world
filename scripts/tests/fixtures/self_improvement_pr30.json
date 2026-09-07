@@ -1,0 +1,243 @@
+{
+  "source": "sanitized real PR30 and failed billing attempt2 local state; no credentials or log bodies",
+  "parent": {
+    "name": "runner",
+    "owner": "01a07c68-367d-75e3-b267-3ae46db963ac",
+    "state": "merged",
+    "purpose": "commit_boundary",
+    "attempt_id": 2,
+    "head": "9c32bd5b3bdbf5354aea3749a74e1b5d427dde1d",
+    "merge_sha": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+    "connector_calls": 32,
+    "max_connector_calls": 40
+  },
+  "helper": {
+    "owner": "01a07c68-367d-75e3-b267-3ae46db963ac",
+    "name": "billing-helper",
+    "cli_starts": 2,
+    "max_cli_starts": 3,
+    "connector_calls": 1,
+    "max_connector_calls": 40,
+    "ci_queries": {},
+    "cost_hardcap": "not_provided",
+    "model_request_hardcap": "not_provided",
+    "upstream_http_hardcap": "rest_graphql_shared_30",
+    "github_backend": "native_gcm_rest_graphql",
+    "delivery_attempts": 0,
+    "max_delivery_attempts": 3,
+    "issue": 28,
+    "duplicate_key": "0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31",
+    "base": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+    "state": "failed",
+    "reason": "child_permission_failed",
+    "head": null,
+    "pr": null,
+    "token": null,
+    "lease_until": null,
+    "job_owner": "01a07d03-ac7e-7261-bfc9-a93d625df9bb",
+    "purpose": "explicit_billing_validation",
+    "campaign_seconds": 900,
+    "started_at": 1788803735.89545,
+    "deadline": 1788804635.89545,
+    "last_seen": 1788804061.3033051,
+    "prior_started_at": 1788800585.6396668,
+    "prior_deadline": 1788802385.6396668,
+    "validation_packet": {
+      "kind": "issue28-validation-v1",
+      "seconds": 900,
+      "issue": 28,
+      "duplicate_key": "0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31",
+      "owner": "01a07c68-367d-75e3-b267-3ae46db963ac",
+      "corrective_head": "9c32bd5b3bdbf5354aea3749a74e1b5d427dde1d",
+      "corrective_merge": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+      "scope": [
+        "scripts/automation/billing_debrief.py",
+        "scripts/tests/test_billing_debrief.py",
+        "docs/runbooks/billing-debrief-helper.md"
+      ]
+    },
+    "validation_packet_sha256": "aa6d2580538ff8339614631ea0b9fb59c33fd16f07233ffcbfd0db2ed34f8da9",
+    "attempt_id": 2,
+    "previous_attempt": 1,
+    "updated_at": 1788804062.3614035,
+    "last_event": "child_permission_failed",
+    "http_requests": 20,
+    "max_http_requests": 30,
+    "debrief": {
+      "outcome": "failed",
+      "reason": "child_permission_failed",
+      "head": null,
+      "job_owner": "01a07d03-ac7e-7261-bfc9-a93d625df9bb",
+      "pr": null,
+      "lesson": "\u672a\u5b8c\u4e86\u30fbskip\u30fb\u7d50\u679c\u4e0d\u660e\u3092\u6210\u529f\u306b\u305b\u305a\u3001current\u8a3c\u62e0\u3067\u5224\u5b9a\u3059\u308b\u3002"
+    },
+    "retry_job_reserved": true,
+    "cli_pid": null,
+    "cli_exit_code": 0,
+    "cli_completion": {
+      "owner": "01a07d03-ac7e-7261-bfc9-a93d625df9bb",
+      "exit_code": 0,
+      "turn_completed": true,
+      "command_failed": true,
+      "log": "artifacts\\self-improvement\\billing-helper\\attempt-2\\cli-2.jsonl",
+      "log_sha256": "75dee5ff660ee22b53ef32551560e42734f4352ad5f38dea9e09f2df50b8a9c1",
+      "message_sha256": "9634920e30f603d052dea798327af242bb875c8470269e51056a3481e831eb4d"
+    }
+  },
+  "frozen_attempts": [
+    [
+      1,
+      "{\"owner\": \"01a07c68-367d-75e3-b267-3ae46db963ac\", \"name\": \"billing-helper\", \"base\": \"4dff18e048b6403d0944215e6544c25973a77c92\", \"state\": \"approval_wait\", \"reason\": \"helper_approval_wait\", \"deadline\": 1788802385.6396668, \"last_seen\": 1788801000.6909213, \"token\": null, \"lease_until\": null, \"cli_starts\": 1, \"max_cli_starts\": 3, \"connector_calls\": 1, \"max_connector_calls\": 40, \"ci_queries\": {}, \"head\": null, \"pr\": null, \"job_owner\": \"01a07cd3-6bd6-7a13-a2da-76e97f83273a\", \"cost_hardcap\": \"not_provided\", \"model_request_hardcap\": \"not_provided\", \"upstream_http_hardcap\": \"rest_graphql_shared_30\", \"github_backend\": \"native_gcm_rest_graphql\", \"campaign_seconds\": 1800, \"delivery_attempts\": 0, \"max_delivery_attempts\": 3, \"updated_at\": 1788801010.067863, \"last_event\": \"helper_approval_wait\", \"http_requests\": 11, \"max_http_requests\": 30, \"debrief\": {\"outcome\": \"approval_wait\", \"reason\": \"helper_approval_wait\", \"head\": null, \"job_owner\": \"01a07cd3-6bd6-7a13-a2da-76e97f83273a\", \"pr\": null, \"lesson\": \"\\u672a\\u5b8c\\u4e86\\u30fbskip\\u30fb\\u7d50\\u679c\\u4e0d\\u660e\\u3092\\u6210\\u529f\\u306b\\u305b\\u305a\\u3001current\\u8a3c\\u62e0\\u3067\\u5224\\u5b9a\\u3059\\u308b\\u3002\"}, \"duplicate_key\": \"0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31\", \"issue\": 28, \"cli_pid\": null, \"cli_exit_code\": 0}",
+      1,
+      "{\"prior_head\": \"79b3fdf577a6740e75e1a0cce5eadee8b042231f\", \"prior_hashes\": {\"scripts/automation/billing_debrief.py\": \"9806b35088bb4f5818674525e32439ad5112c3fb7f324087ecb47515987088bb\", \"scripts/tests/test_billing_debrief.py\": \"122193e59a813655ee85475af93d4f5711550c7b6f96ca3d15e7078614dd42ad\", \"docs/runbooks/billing-debrief-helper.md\": \"1841546b9d78d2fc5155ae26c601f544ba79edcef24bfd44f14a82dc2caa9f27\"}, \"prior_raw_sha256\": \"3f7cd041cf988f114c4ca01d41da1c9d162025dfdaa18bb22c7a42cb9831a82c\", \"prior_event_end\": 77, \"http_used_at_boundary\": 20}"
+    ],
+    [
+      2,
+      "{\"owner\": \"01a07c68-367d-75e3-b267-3ae46db963ac\", \"name\": \"billing-helper\", \"cli_starts\": 2, \"max_cli_starts\": 3, \"connector_calls\": 1, \"max_connector_calls\": 40, \"ci_queries\": {}, \"cost_hardcap\": \"not_provided\", \"model_request_hardcap\": \"not_provided\", \"upstream_http_hardcap\": \"rest_graphql_shared_30\", \"github_backend\": \"native_gcm_rest_graphql\", \"delivery_attempts\": 0, \"max_delivery_attempts\": 3, \"issue\": 28, \"duplicate_key\": \"0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31\", \"base\": \"b73d3d3f1529215b57a8ac2500e32d26e3b8eacf\", \"state\": \"failed\", \"reason\": \"child_permission_failed\", \"head\": null, \"pr\": null, \"token\": null, \"lease_until\": null, \"job_owner\": \"01a07d03-ac7e-7261-bfc9-a93d625df9bb\", \"purpose\": \"explicit_billing_validation\", \"campaign_seconds\": 900, \"started_at\": 1788803735.89545, \"deadline\": 1788804635.89545, \"last_seen\": 1788804061.3033051, \"prior_started_at\": 1788800585.6396668, \"prior_deadline\": 1788802385.6396668, \"validation_packet\": {\"kind\": \"issue28-validation-v1\", \"seconds\": 900, \"issue\": 28, \"duplicate_key\": \"0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31\", \"owner\": \"01a07c68-367d-75e3-b267-3ae46db963ac\", \"corrective_head\": \"9c32bd5b3bdbf5354aea3749a74e1b5d427dde1d\", \"corrective_merge\": \"b73d3d3f1529215b57a8ac2500e32d26e3b8eacf\", \"scope\": [\"scripts/automation/billing_debrief.py\", \"scripts/tests/test_billing_debrief.py\", \"docs/runbooks/billing-debrief-helper.md\"]}, \"validation_packet_sha256\": \"aa6d2580538ff8339614631ea0b9fb59c33fd16f07233ffcbfd0db2ed34f8da9\", \"attempt_id\": 2, \"previous_attempt\": 1, \"updated_at\": 1788804062.3614035, \"last_event\": \"child_permission_failed\", \"http_requests\": 20, \"max_http_requests\": 30, \"debrief\": {\"outcome\": \"failed\", \"reason\": \"child_permission_failed\", \"head\": null, \"job_owner\": \"01a07d03-ac7e-7261-bfc9-a93d625df9bb\", \"pr\": null, \"lesson\": \"\\u672a\\u5b8c\\u4e86\\u30fbskip\\u30fb\\u7d50\\u679c\\u4e0d\\u660e\\u3092\\u6210\\u529f\\u306b\\u305b\\u305a\\u3001current\\u8a3c\\u62e0\\u3067\\u5224\\u5b9a\\u3059\\u308b\\u3002\"}, \"retry_job_reserved\": true, \"cli_pid\": null, \"cli_exit_code\": 0, \"cli_completion\": {\"owner\": \"01a07d03-ac7e-7261-bfc9-a93d625df9bb\", \"exit_code\": 0, \"turn_completed\": true, \"command_failed\": true, \"log\": \"artifacts\\\\self-improvement\\\\billing-helper\\\\attempt-2\\\\cli-2.jsonl\", \"log_sha256\": \"75dee5ff660ee22b53ef32551560e42734f4352ad5f38dea9e09f2df50b8a9c1\", \"message_sha256\": \"9634920e30f603d052dea798327af242bb875c8470269e51056a3481e831eb4d\"}}",
+      0,
+      "{}"
+    ]
+  ],
+  "development": {
+    "name": "runtime-development",
+    "purpose": "ordinary_development_not_proof",
+    "owner": "01a07c68-367d-75e3-b267-3ae46db963ac",
+    "state": "merged",
+    "reason": "normal_protected_merge_confirmed",
+    "started_at": 1788806030.7858462,
+    "deadline": 1788806930.7858462,
+    "last_seen": 1788806030.7858462,
+    "token": null,
+    "lease_until": null,
+    "base": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+    "head": "a0219310324cc0230906be00d90ab1d79e61f229",
+    "pr": 30,
+    "connector_calls": 9,
+    "max_connector_calls": 40,
+    "ci_queries": {
+      "a0219310324cc0230906be00d90ab1d79e61f229": {
+        "count": 2,
+        "last_at": 1788806161.8025682
+      }
+    },
+    "review": {
+      "head": "a0219310324cc0230906be00d90ab1d79e61f229",
+      "base": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+      "reviewer": "01a07c70-6ca8-7fb0-af44-05aefe156087",
+      "task_started": "2026-09-07T18:20:12.450Z",
+      "reviewer_turn_id": "01a07d19-68fb-7241-b31d-a5b02f71cc90",
+      "verdict": "pass",
+      "findings": [],
+      "verified": [
+        "clean fixed head and exact five paths",
+        "known attempt2 owner/base/start/deadline/log/message/content hashes only; distinct final attempt3",
+        "immutable attempts1/2; cumulative HTTP/local-stage/CLI/delivery history; fresh900s without resume reset",
+        "human and policy refusals, unrelated permission failure and unknown write remain closed",
+        "native Node and checkout Python/Prettier host preflight before CLI reservation; child receives absolute runtime profile",
+        "corrective parent normal merge/base/head/branch/scope and minimum remaining delivery budget",
+        "original five P1 resolutions; Draft skipped check; read-only review recovery; exact prior push reconciliation",
+        "native process-local GCM; persistent shared pre-send REST/GraphQL30; unknown charged and request31 unsent",
+        "adapter-issued requests only, not CLI starts, local stage calls, monetary or account-wide cap",
+        "allowlist; no connector fallback; no workflow dispatch",
+        "current PR/head/review/threads/CI job/local check/protection/expectedSHA squash once"
+      ],
+      "not_verified_by_reviewer": [
+        "current full check",
+        "new GitHub delivery",
+        "corrective merge",
+        "helper attempt3/real child/E2E"
+      ],
+      "delivery_state": "not imported into existing campaign; new corrective attempt cannot start with current remaining local stage budget"
+    },
+    "current_check": {
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 116.09,
+      "head": "a0219310324cc0230906be00d90ab1d79e61f229",
+      "end_head": "a0219310324cc0230906be00d90ab1d79e61f229",
+      "clean": true
+    },
+    "proof_before": {
+      "sha256": "7558e8d3b5acf22ccf357b1975fa8f93a919a5bd8a8d565db2e512eef3bab46d",
+      "http": 20,
+      "runner_stages": 32,
+      "billing_stages": 1,
+      "cli": 2,
+      "helper_state": "failed",
+      "helper_attempt": 2
+    },
+    "http_scope": "adapter_rest_graphql_only",
+    "git_scope": "fetch_once_push_once_no_unknown_resend",
+    "github_backend": "native_gcm_rest_graphql",
+    "cost_hardcap": "not_provided",
+    "updated_at": 1788806167.9253638,
+    "last_event": "normal_protected_merge_confirmed",
+    "http_requests": 9,
+    "max_http_requests": 10,
+    "observed_main": "b73d3d3f1529215b57a8ac2500e32d26e3b8eacf",
+    "pr_node_id": "PR_kwDOUP6POc8AAAABCj_iPA",
+    "pr_url": "https://github.com/yomote/agent-world/pull/30",
+    "pr_ready": true,
+    "ci": {
+      "id": 34152146265,
+      "head_sha": "a0219310324cc0230906be00d90ab1d79e61f229",
+      "run_attempt": 1,
+      "html_url": "https://github.com/yomote/agent-world/actions/runs/34152146265",
+      "conclusion": "success",
+      "check_job_id": 101836458637,
+      "pr_number": 30
+    },
+    "merge_validated_head": "a0219310324cc0230906be00d90ab1d79e61f229",
+    "merge_validated_at": 1788806165.1079373,
+    "merge_snapshot": {
+      "pr": {
+        "number": 30,
+        "state": "open",
+        "draft": false,
+        "head": {
+          "sha": "a0219310324cc0230906be00d90ab1d79e61f229",
+          "repo": {
+            "full_name": "yomote/agent-world"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "repo": {
+            "full_name": "yomote/agent-world"
+          }
+        },
+        "mergeable": true,
+        "labels": []
+      },
+      "comments": [
+        {
+          "body": "<!-- agent-world-independent-review -->\nhead: a0219310324cc0230906be00d90ab1d79e61f229\nverdict: pass\nreviewer: 01a07c70-6ca8-7fb0-af44-05aefe156087\n\nbilling helper\u306e\u78ba\u8a8d\u6e08\u307fVolta\u74b0\u5883\u5931\u6557\u306b\u5bfe\u3057\u3001native Node\u3068checkout\u5185\u4f9d\u5b58\u3092CLI\u4e88\u7d04\u524d\u306b\u691c\u8a3c\u3057\u3066\u6e21\u3059\u3002\u65e7\u5931\u6557\u306f\u5909\u66f4\u305b\u305a\u3001\u660e\u793a\u3055\u308c\u305f\u6700\u5f8c\u306e\u5225attempt\u306e\u307f\u3092\u63a5\u7d9a\u3059\u308b\u3002\n\nscope: delivery/helper_job/jobs\u3001\u5c02\u7528test\u3001self-improvement runbook\u306e5path\u3002\nhead: a0219310324cc0230906be00d90ab1d79e61f229\n\u72ec\u7acbreview: 01a07c70-6ca8-7fb0-af44-05aefe156087 / PASS\ncurrent npm run check: PASS / exit0 / 116.09\u79d2 / clean fixed head\u3002\n\u3053\u306ePR\u306f\u901a\u5e38\u958b\u767aunit\u3002proof\u306eHTTP20/30\u3001stage32/40\u30fb1/40\u3001CLI2/3\u3092\u4fdd\u6301\u3002\u958b\u767a\u5c02\u7528HTTP\u6700\u592710\u3002helper attempt3/child\u306f\u8d77\u52d5\u3057\u306a\u3044\u3002",
+          "author_association": "OWNER"
+        }
+      ],
+      "threads": []
+    },
+    "protection": {
+      "protected": true,
+      "mode": "standard_rest_squash_expected_sha",
+      "hidden_bypass_configuration": "not_verified"
+    },
+    "merge_sha": "bad3e6ba7679e0c8203ce43b115f4816ed5d1345",
+    "debrief": {
+      "outcome": "merged",
+      "reason": "normal_protected_merge_confirmed",
+      "head": "a0219310324cc0230906be00d90ab1d79e61f229",
+      "job_owner": null,
+      "pr": 30,
+      "lesson": "\u672a\u5b8c\u4e86\u30fbskip\u30fb\u7d50\u679c\u4e0d\u660e\u3092\u6210\u529f\u306b\u305b\u305a\u3001current\u8a3c\u62e0\u3067\u5224\u5b9a\u3059\u308b\u3002"
+    }
+  },
+  "merge_operation": [
+    "8441f6ba-52c3-480d-bf3c-91f6d3e1232e",
+    "normal_merge",
+    "ok",
+    "{\"id\": \"8441f6ba-52c3-480d-bf3c-91f6d3e1232e\", \"campaign\": \"runtime-development\", \"operation\": \"normal_merge\", \"arguments\": {\"repository_full_name\": \"yomote/agent-world\", \"pr_number\": 30, \"expected_head_sha\": \"a0219310324cc0230906be00d90ab1d79e61f229\", \"merge_method\": \"squash\"}, \"write\": true}",
+    "{\"id\": \"8441f6ba-52c3-480d-bf3c-91f6d3e1232e\", \"status\": \"ok\", \"result\": {\"sha\": \"bad3e6ba7679e0c8203ce43b115f4816ed5d1345\", \"merged\": true, \"message\": \"Pull Request successfully merged\"}}"
+  ],
+  "merge_http": ["normal_merge", "PUT", "/repos/yomote/agent-world/pulls/30/merge", "received", 200]
+}
