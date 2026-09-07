@@ -59,13 +59,29 @@ def committed_files(workspace, base, head, expected):
             raise Stop("stopped", "commit_blob_mismatch")
 
 
-def new_attempt(task):
+def new_attempt(task, packet: Path):
     """明示許可されたIssue28の別試行だけ。旧approval_waitには成功遷移を書かない。"""
     old = task.data()
     parent_row = task.db.execute(
         "SELECT data FROM delivery_campaigns WHERE name='runner'"
     ).fetchone()
     parent = json.loads(parent_row[0]) if parent_row else {}
+    relative = "artifacts/self-improvement/validation-attempt.json"
+    if (task.root / packet).resolve() != (task.root / relative).resolve():
+        raise Stop("stopped", "explicit_validation_packet_required")
+    authorization = json.loads(read_input(task.root, relative))
+    expected_packet = {
+        "kind": "issue28-validation-v1",
+        "seconds": 900,
+        "issue": 28,
+        "duplicate_key": DUPLICATE,
+        "owner": old["owner"],
+        "corrective_head": parent.get("head"),
+        "corrective_merge": parent.get("merge_sha"),
+        "scope": list(SCOPES["billing-helper"]),
+    }
+    if authorization != expected_packet or type(authorization.get("seconds")) is not int:
+        raise Stop("stopped", "explicit_validation_packet_mismatch")
     if (
         task.name != "billing-helper"
         or old.get("attempt_id")
@@ -89,13 +105,18 @@ def new_attempt(task):
         raise Stop("stopped", "explicit_retry_boundary_not_confirmed")
     # 外部照会・旧push再送なし。79は旧試行の証拠であり新試行のheadではない。
     committed_files(task.directory / "checkout", PRIOR_BASE, PRIOR_HEAD, PRIOR_HASHES)
+    initial = task.db.execute(
+        "SELECT at FROM delivery_events WHERE campaign='billing-helper' AND kind='initialized' "
+        "ORDER BY seq LIMIT 1"
+    ).fetchone()
+    if not initial or time.time() < old["last_seen"]:
+        raise Stop("stopped", "prior_start_or_clock_not_verified")
+    started = time.time()
     data = {
         key: old[key]
         for key in (
             "owner",
             "name",
-            "deadline",
-            "last_seen",
             "cli_starts",
             "max_cli_starts",
             "connector_calls",
@@ -105,7 +126,6 @@ def new_attempt(task):
             "model_request_hardcap",
             "upstream_http_hardcap",
             "github_backend",
-            "campaign_seconds",
             "delivery_attempts",
             "max_delivery_attempts",
             "issue",
@@ -115,18 +135,23 @@ def new_attempt(task):
     data.update(
         base=parent["merge_sha"],
         state="ready",
-        reason="explicit_retry_ready",
+        reason="explicit_validation_ready",
         head=None,
         pr=None,
         token=None,
         lease_until=None,
         job_owner=None,
-        purpose="explicit_billing_retry",
+        purpose="explicit_billing_validation",
+        campaign_seconds=900,
+        started_at=started,
+        deadline=started + 900,
+        last_seen=started,
+        prior_started_at=initial[0],
+        prior_deadline=old["deadline"],
+        validation_packet=authorization,
+        validation_packet_sha256=digest(json.dumps(authorization, sort_keys=True).encode()),
     )
     task.new_attempt(data, {"prior_head": PRIOR_HEAD, "prior_hashes": PRIOR_HASHES})
-    if time.time() >= data["deadline"]:
-        task.finish_step("stopped", "campaign_time_budget")
-        raise Stop("stopped", "campaign_time_budget")
 
 
 def editable_files(task, expected):
@@ -292,7 +317,7 @@ def implement(task, source: Path):
         raise Stop("stopped", "invalid_source_digest")
     data = task.data()
     duplicate = digest((evidence["debrief_id"] + ":billing-evidence-normalization-v1").encode())
-    retry = data.get("purpose") == "explicit_billing_retry" and data.get("attempt_id") == 2
+    retry = data.get("purpose") == "explicit_billing_validation" and data.get("attempt_id") == 2
     if data.get("duplicate_key") and not (
         retry
         and data["duplicate_key"] == duplicate

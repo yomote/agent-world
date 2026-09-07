@@ -14,6 +14,7 @@ from scripts.automation.runner import Runner, digest, dispatcher  # noqa: E402
 from scripts.automation.transport import Stop  # noqa: E402
 
 OWNER = "01a07c68-367d-75e3-b267-3ae46db963ac"
+PACKET = Path("artifacts/self-improvement/validation-attempt.json")
 
 
 @pytest.fixture
@@ -212,21 +213,37 @@ def prepare_old_attempt(task, monkeypatch, *, expired=False):
                         "purpose": "commit_boundary",
                         "attempt_id": 2,
                         "merge_sha": "c" * 40,
+                        "head": "d" * 40,
                     }
                 ),
             ),
         )
     monkeypatch.setattr(helper_job, "committed_files", lambda *args: None)
+    (task.root / PACKET).write_text(
+        json.dumps(
+            {
+                "kind": "issue28-validation-v1",
+                "seconds": 900,
+                "issue": 28,
+                "duplicate_key": helper_job.DUPLICATE,
+                "owner": OWNER,
+                "corrective_head": "d" * 40,
+                "corrective_merge": "c" * 40,
+                "scope": list(delivery.SCOPES["billing-helper"]),
+            }
+        ),
+        encoding="utf-8",
+    )
     return task.db.execute(
         "SELECT data FROM delivery_campaigns WHERE name='billing-helper'"
     ).fetchone()[0]
 
 
 def test_explicit_attempt_freezes_old_failure_and_shares_budget(task, monkeypatch):
-    """旧approval_waitを成功へ書換えず、新IDでもIssue・回数・絶対期限をresetしない。"""
+    """旧期限・失敗を凍結し、明示15分attemptでもIssue・累積回数をresetしない。"""
     raw = prepare_old_attempt(task, monkeypatch)
     old_events = list(task.db.execute("SELECT * FROM delivery_events"))
-    helper_job.new_attempt(task)
+    helper_job.new_attempt(task, PACKET)
     current = task.data()
     archived = task.db.execute(
         "SELECT data,evidence FROM delivery_attempts WHERE campaign='billing-helper' AND attempt=1"
@@ -237,29 +254,48 @@ def test_explicit_attempt_freezes_old_failure_and_shares_budget(task, monkeypatc
     assert current["attempt_id"] == 2 and current["state"] == "ready"
     assert current["issue"] == 28 and current["duplicate_key"] == helper_job.DUPLICATE
     assert current["head"] is None and current["cli_starts"] == 1
-    assert current["deadline"] == json.loads(raw)["deadline"]
+    assert current["prior_deadline"] == json.loads(raw)["deadline"]
+    assert current["deadline"] == current["started_at"] + 900
+    assert current["prior_started_at"] <= current["started_at"]
     assert current["http_requests"] == 11 and current["max_http_requests"] == 30
     assert current["max_connector_calls"] == 40
     assert current["max_delivery_attempts"] == current["max_cli_starts"] == 3
-    assert current["campaign_seconds"] == 1800
+    assert current["campaign_seconds"] == 900
     assert task.workspace() == task.directory / "attempt-2/checkout"
     assert list(task.db.execute("SELECT * FROM delivery_events"))[: len(old_events)] == old_events
     with pytest.raises(sqlite3.IntegrityError, match="frozen_attempt"):
         task.db.execute("UPDATE delivery_attempts SET data='{}' WHERE attempt=1")
     with pytest.raises(Stop):
-        helper_job.new_attempt(task)
+        helper_job.new_attempt(task, PACKET)
     assert task.db.execute("SELECT COUNT(*) FROM delivery_operations").fetchone()[0] == 0
 
 
-def test_expired_explicit_attempt_is_saved_without_extending_or_launching(task, monkeypatch):
-    """旧失敗を保持していても30分超過を別attemptによる延長に変換しない。"""
+def test_explicit_fifteen_minutes_stops_without_reset_or_old_attempt_extension(task, monkeypatch):
+    """新旧期限を別保存し、新しい15分の超過を再起動や再packetで延長しない。"""
     raw = prepare_old_attempt(task, monkeypatch, expired=True)
+    helper_job.new_attempt(task, PACKET)
+    started = task.data()["started_at"]
+    deadline = task.data()["deadline"]
+    monkeypatch.setattr(delivery.time, "time", lambda: deadline + 1)
     with pytest.raises(Stop, match="campaign_time_budget"):
-        helper_job.new_attempt(task)
+        task.enter()
+    task.finish_step("stopped", "campaign_time_budget")
     assert task.data()["state"] == "stopped"
-    assert task.data()["deadline"] == json.loads(raw)["deadline"]
+    assert task.data()["deadline"] == started + 900
+    assert task.data()["prior_deadline"] == json.loads(raw)["deadline"]
+    assert (
+        task.db.execute(
+            "SELECT data FROM delivery_attempts WHERE campaign='billing-helper' AND attempt=1"
+        ).fetchone()[0]
+        == raw
+    )
     assert task.data()["cli_starts"] == 1 and task.data()["http_requests"] == 11
     assert not task.workspace().exists()
+    with pytest.raises(Stop):
+        helper_job.new_attempt(task, PACKET)
+    with pytest.raises(Stop):
+        delivery.Campaign(task, "billing-helper").enter()
+    assert task.data()["deadline"] == deadline
 
 
 def test_new_attempt_requires_corrective_normal_merge(task, monkeypatch):
@@ -270,8 +306,37 @@ def test_new_attempt_requires_corrective_normal_merge(task, monkeypatch):
             "UPDATE delivery_campaigns SET data=? WHERE name='runner'",
             (json.dumps({"state": "job_verified"}),),
         )
-    with pytest.raises(Stop, match="explicit_retry_boundary"):
-        helper_job.new_attempt(task)
+    with pytest.raises(Stop):
+        helper_job.new_attempt(task, PACKET)
+    assert task.db.execute("SELECT COUNT(*) FROM delivery_attempts").fetchone()[0] == 0
+    assert (
+        task.db.execute(
+            "SELECT data FROM delivery_campaigns WHERE name='billing-helper'"
+        ).fetchone()[0]
+        == raw
+    )
+
+
+@pytest.mark.parametrize("change", ["missing", "seconds", "scope", "head", "issue", "extra"])
+def test_separate_explicit_packet_is_required_before_new_attempt(task, monkeypatch, change):
+    """暗黙の30分付与・別scope・別head・別Issueのpacketで新attemptを作らない。"""
+    raw = prepare_old_attempt(task, monkeypatch, expired=True)
+    path = task.root / PACKET
+    packet = json.loads(path.read_text())
+    if change == "missing":
+        path.unlink()
+    else:
+        key, value = {
+            "seconds": ("seconds", 1800),
+            "scope": ("scope", ["arbitrary.py"]),
+            "head": ("corrective_head", "e" * 40),
+            "issue": ("issue", 29),
+            "extra": ("auto_approve", True),
+        }[change]
+        packet[key] = value
+        path.write_text(json.dumps(packet))
+    with pytest.raises((Stop, ValueError)):
+        helper_job.new_attempt(task, PACKET)
     assert task.db.execute("SELECT COUNT(*) FROM delivery_attempts").fetchone()[0] == 0
     assert (
         task.db.execute(
@@ -304,7 +369,7 @@ def test_commit_record_reserves_once_before_failure(task, monkeypatch):
 def test_retry_implementation_reuses_issue_and_edits_only_contract(task, monkeypatch):
     """別attemptの実装分岐が二つ目のIssueやchild Git記録を要求する回帰を防ぐ。"""
     prepare_old_attempt(task, monkeypatch)
-    helper_job.new_attempt(task)
+    helper_job.new_attempt(task, PACKET)
     source = task.root / "source.json"
     source.write_text(
         json.dumps(

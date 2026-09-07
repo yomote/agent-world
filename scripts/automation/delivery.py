@@ -280,7 +280,18 @@ class Campaign:
         }:
             raise Stop(data["state"], data["reason"])
         if self.name == "billing-helper" and (
-            data.get("campaign_seconds") != 1800
+            (data.get("attempt_id") != 2 and data.get("campaign_seconds") != 1800)
+            or (
+                data.get("attempt_id") == 2
+                and (
+                    data.get("purpose") != "explicit_billing_validation"
+                    or data.get("campaign_seconds") != 900
+                    or data.get("deadline") != data.get("started_at", 0) + 900
+                    or data.get("validation_packet", {}).get("seconds") != 900
+                    or data.get("validation_packet_sha256")
+                    != digest(json.dumps(data.get("validation_packet"), sort_keys=True).encode())
+                )
+            )
             or data.get("max_delivery_attempts") != 3
             or type(data.get("delivery_attempts")) is not int
             or not 0 <= data["delivery_attempts"] <= 3
@@ -866,7 +877,8 @@ def main():
     sub.add_parser("smoke")
     sub.add_parser("reconcile-push")
     sub.add_parser("corrective")
-    sub.add_parser("new-helper-attempt")
+    new_helper = sub.add_parser("new-helper-attempt")
+    new_helper.add_argument("--packet", type=Path, required=True)
     sub.add_parser("record-commit")
     sub.add_parser("reconcile-commit")
     handoff = sub.add_parser("handoff")
@@ -911,11 +923,12 @@ def main():
                 elif args.command in {"new-helper-attempt", "record-commit", "reconcile-commit"}:
                     from .helper_job import new_attempt, reconcile_commit, record_commit
 
-                    {
-                        "new-helper-attempt": new_attempt,
-                        "record-commit": record_commit,
-                        "reconcile-commit": reconcile_commit,
-                    }[args.command](task)
+                    if args.command == "new-helper-attempt":
+                        new_attempt(task, args.packet)
+                    else:
+                        {"record-commit": record_commit, "reconcile-commit": reconcile_commit}[
+                            args.command
+                        ](task)
                 elif args.command == "revise":
                     task.revise(args.workspace)
                 elif args.command == "handoff":
