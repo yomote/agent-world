@@ -34,6 +34,8 @@ python -m scripts.automation.delivery billing-helper deliver --workspace <saved-
 
 ## Mind Inboxからの採否
 
+current CIはworkflowのsuccessだけでは受け入れず、対象runの`check` jobもcompleted/successであることを取得・保存する。Draftのjob skipは未検証のまま扱う。
+
 配送の実行入口は`scripts/automation/relay.mjs`の`pump(root, campaign, tools)`。既存Codex tool hostで呼び、1要求のclaim、allowlistしたconnector呼出または実`local_check`、一致IDへの応答保存を実行する。認証情報を別processへ渡さない。`pending_review`だけは同じ正式read-only reviewerへ固定packetを渡し、その実回答を`complete(root, request, {id, status, result}, tools)`で返す。新たなreviewerや承認回答を自動生成しない。無要求ならnullで終了し、常駐pollerは持たない。
 
 review/check/current CIの既知失敗を修正した場合は、cleanな子孫commitを作って`delivery <campaign> revise --workspace <path>`、続いて`deliver`を明示実行する。同じcampaignの期限・回数・既存PRを維持し、新headを同じreviewerから再検証する。approval_wait/unknownをこの入口で解除しない。CIはPR番号とheadとworkflow pathを照合し、ページ欠落・identity欠落では成功にしない。helperは保存したrunner merge SHAがmainに存在することと、新規3fileの空きを外部Issue作成前に確認する。

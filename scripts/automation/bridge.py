@@ -15,6 +15,7 @@ OPERATIONS = {
     "post_review_evidence",
     "ready_pr",
     "current_ci",
+    "current_ci_jobs",
     "pr_info",
     "review_threads",
     "normal_merge",

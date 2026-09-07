@@ -353,11 +353,28 @@ class Campaign:
                     run.get("id", 0),
                 ),
             )
+            jobs = self.transport.call("current_ci_jobs", {"run_id": latest["id"]})
+            nodes = jobs.get("jobs")
+            if (
+                not isinstance(nodes, list)
+                or jobs.get("total_count") != len(nodes)
+                or len(nodes) >= 100
+            ):
+                raise Stop("stopped", "ci_jobs_incomplete")
+            checks = [job for job in nodes if job.get("name") == "check"]
+            if len(checks) != 1 or checks[0].get("head_sha") != head:
+                raise Stop("stopped", "ci_check_identity_missing")
+            if checks[0].get("conclusion") == "skipped":
+                # Draftのworkflow自体はsuccessになり得る。Readyの実jobを次の照会で待つ。
+                continue
+            if checks[0].get("status") != "completed" or checks[0].get("conclusion") != "success":
+                raise Stop("failed", "current_ci_not_success")
             data = self.data()
             data["ci"] = {
                 key: latest.get(key)
                 for key in ("id", "head_sha", "run_attempt", "html_url", "conclusion")
             }
+            data["ci"]["check_job_id"] = checks[0]["id"]
             self.save_event(data, "current_ci_pass")
             return
 

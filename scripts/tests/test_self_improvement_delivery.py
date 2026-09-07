@@ -1,5 +1,6 @@
 """外部操作の予約、再送防止、ownerとcurrent evidenceの境界を検証する。"""
 
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -12,6 +13,13 @@ from scripts.automation.runner import Runner, dispatcher  # noqa: E402
 
 OWNER = "01a07c68-367d-75e3-b267-3ae46db963ac"
 HEAD = "a" * 40
+
+
+def test_live_relay_fail_closed_contract():
+    """relayの実行順序・unknown停止・正式review保留をCIでも検査する。"""
+    subprocess.run(
+        ["node", str(Path(__file__).with_name("test_self_improvement_relay.mjs"))], check=True
+    )
 
 
 @pytest.fixture
@@ -230,6 +238,49 @@ def test_unprotected_main_never_reaches_merge(task, monkeypatch):
     with pytest.raises(transport.Stop, match="main_protection_unverified"):
         task.normal_merge(HEAD, 25)
     assert calls == ["main_protection"]
+
+
+def test_draft_skipped_job_is_not_workflow_success(task, monkeypatch):
+    """Draftでworkflow=success/job=skippedを実check成功に変換する回帰を防ぐ。"""
+
+    def answer(operation, arguments, **kwargs):
+        if operation == "current_ci":
+            return {
+                "total_count": 1,
+                "workflow_runs": [
+                    {
+                        "id": 5,
+                        "head_sha": HEAD,
+                        "event": "pull_request",
+                        "pull_requests": [{"number": 25}],
+                        "path": ".github/workflows/ci.yml",
+                        "run_number": 1,
+                        "run_attempt": 1,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ],
+            }
+        return {
+            "total_count": 1,
+            "jobs": [
+                {
+                    "id": 6,
+                    "name": "check",
+                    "head_sha": HEAD,
+                    "status": "completed",
+                    "conclusion": "skipped",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(task.transport, "call", answer)
+    data = task.data()
+    data["ci_queries"][HEAD] = {"count": 9, "last_at": 0}
+    task.save_event(data, "test_last_query")
+    with pytest.raises(transport.Stop, match="ci_query_budget"):
+        task.wait_ci(HEAD, 25)
+    assert "ci" not in task.data()
 
 
 def test_stale_review_cannot_reach_merge(task, monkeypatch):

@@ -22,6 +22,8 @@ export async function relay(request, tools) {
     let url;
     if (request.operation === "current_ci" && /^[0-9a-f]{40}$/.test(args.commit_sha)) {
       url = `${base}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=${args.commit_sha}&per_page=100`;
+    } else if (request.operation === "current_ci_jobs" && Number.isInteger(args.run_id)) {
+      url = `${base}/actions/runs/${args.run_id}/jobs?per_page=100`;
     } else if (request.operation === "main_protection") {
       url = `${base}/branches/main`;
     } else if (request.operation === "review_comments" && Number.isInteger(args.number)) {
