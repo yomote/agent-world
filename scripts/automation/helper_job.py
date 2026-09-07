@@ -7,8 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from .delivery import REPOSITORY, SCOPES, git
-from .jobs import run_job
+from .delivery import REPOSITORY, RUNTIME_PARENT_MERGE, SCOPES, git
+from .jobs import RUNTIME_PROFILE, prepare_runtime, run_job
 from .runner import digest, read_input
 from .transport import Stop
 
@@ -28,6 +28,59 @@ PRIOR_HASHES = dict(
     )
 )
 VALIDATIONS = {"dedicated_tests", "ruff", "format"}
+ATTEMPT2_OWNER = "01a07d03-ac7e-7261-bfc9-a93d625df9bb"
+ATTEMPT2_LOG = "75dee5ff660ee22b53ef32551560e42734f4352ad5f38dea9e09f2df50b8a9c1"
+ATTEMPT2_MESSAGE = "9634920e30f603d052dea798327af242bb875c8470269e51056a3481e831eb4d"
+ATTEMPT2_HASHES = dict(
+    zip(
+        SCOPES["billing-helper"],
+        (
+            "30c5327a799dc1126d01ac6a1cd9a102826e5443cfd83b8203aa2f1127e0a7a8",
+            "6db33c7c111689c6db24de14819e21a9cee0f8b9f6e8e2d9576cc3221b7df181",
+            "86565bb7f9739439a5dc8faeb32398f9bdd5b512b45eb4413fa0bc3b8cc6690b",
+        ),
+        strict=True,
+    )
+)
+
+
+def final_attempt_boundary(task, old, parent):
+    """確認済みVolta失敗だけを別試行の根拠にする。拒否や一般permissionは解除しない。"""
+    completion = old.get("cli_completion", {})
+    if (
+        task.name != "billing-helper"
+        or old.get("attempt_id") != 2
+        or old.get("state") != "failed"
+        or old.get("reason") != "child_permission_failed"
+        or old.get("last_event") != "child_permission_failed"
+        or old.get("issue") != 28
+        or old.get("duplicate_key") != DUPLICATE
+        or old.get("base") != RUNTIME_PARENT_MERGE
+        or old.get("started_at") != 1788803735.89545
+        or old.get("deadline") != 1788804635.89545
+        or old.get("job_owner") != ATTEMPT2_OWNER
+        or old.get("cli_exit_code") != 0
+        or old.get("cli_starts") != 2
+        or old.get("max_cli_starts") != 3
+        or old.get("delivery_attempts") != 0
+        or any(old.get(key) is not None for key in ("cli_pid", "head", "pr", "token"))
+        or completion.get("owner") != ATTEMPT2_OWNER
+        or completion.get("exit_code") != 0
+        or completion.get("turn_completed") is not True
+        or completion.get("command_failed") is not True
+        or completion.get("log_sha256") != ATTEMPT2_LOG
+        or completion.get("message_sha256") != ATTEMPT2_MESSAGE
+        or parent.get("state") != "merged"
+        or parent.get("purpose") != "runtime_preflight"
+        or parent.get("attempt_id") != 3
+    ):
+        raise Stop("stopped", "confirmed_attempt2_environment_failure_required")
+    if digest((task.artifact_directory / "cli-2.jsonl").read_bytes()) != ATTEMPT2_LOG:
+        raise Stop("stopped", "prior_child_log_mismatch")
+    editable_files(task, ATTEMPT2_HASHES)
+    # 最短でもDraft/review証跡/Ready/CI run/job/保護/snapshot/merge/Issue closeの9 HTTP。
+    if old["http_requests"] > 21 or old["max_connector_calls"] - old["connector_calls"] < 11:
+        raise Stop("stopped", "remaining_delivery_budget_insufficient")
 
 
 def hashes(workspace):
@@ -66,12 +119,15 @@ def new_attempt(task, packet: Path):
         "SELECT data FROM delivery_campaigns WHERE name='runner'"
     ).fetchone()
     parent = json.loads(parent_row[0]) if parent_row else {}
-    relative = "artifacts/self-improvement/validation-attempt.json"
+    final = old.get("attempt_id") == 2
+    relative = "artifacts/self-improvement/" + (
+        "validation-attempt-3.json" if final else "validation-attempt.json"
+    )
     if (task.root / packet).resolve() != (task.root / relative).resolve():
         raise Stop("stopped", "explicit_validation_packet_required")
     authorization = json.loads(read_input(task.root, relative))
     expected_packet = {
-        "kind": "issue28-validation-v1",
+        "kind": "issue28-runtime-validation-v1" if final else "issue28-validation-v1",
         "seconds": 900,
         "issue": 28,
         "duplicate_key": DUPLICATE,
@@ -80,9 +136,13 @@ def new_attempt(task, packet: Path):
         "corrective_merge": parent.get("merge_sha"),
         "scope": list(SCOPES["billing-helper"]),
     }
+    if final:
+        expected_packet["runtime_profile"] = RUNTIME_PROFILE
     if authorization != expected_packet or type(authorization.get("seconds")) is not int:
         raise Stop("stopped", "explicit_validation_packet_mismatch")
-    if (
+    if final:
+        final_attempt_boundary(task, old, parent)
+    elif (
         task.name != "billing-helper"
         or old.get("attempt_id")
         or old["state"] != "approval_wait"
@@ -146,12 +206,20 @@ def new_attempt(task, packet: Path):
         started_at=started,
         deadline=started + 900,
         last_seen=started,
-        prior_started_at=initial[0],
+        prior_started_at=old["started_at"] if final else initial[0],
         prior_deadline=old["deadline"],
         validation_packet=authorization,
         validation_packet_sha256=digest(json.dumps(authorization, sort_keys=True).encode()),
     )
-    task.new_attempt(data, {"prior_head": PRIOR_HEAD, "prior_hashes": PRIOR_HASHES})
+    evidence = {"prior_head": PRIOR_HEAD, "prior_hashes": PRIOR_HASHES}
+    if final:
+        data["runtime_profile_required"] = RUNTIME_PROFILE
+        evidence.update(
+            kind="confirmed_attempt2_environment_failure",
+            prior_cli_completion=old["cli_completion"],
+            prior_hashes=ATTEMPT2_HASHES,
+        )
+    task.new_attempt(data, evidence)
 
 
 def editable_files(task, expected):
@@ -317,7 +385,10 @@ def implement(task, source: Path):
         raise Stop("stopped", "invalid_source_digest")
     data = task.data()
     duplicate = digest((evidence["debrief_id"] + ":billing-evidence-normalization-v1").encode())
-    retry = data.get("purpose") == "explicit_billing_validation" and data.get("attempt_id") == 2
+    retry = data.get("purpose") == "explicit_billing_validation" and data.get("attempt_id") in (
+        2,
+        3,
+    )
     if data.get("duplicate_key") and not (
         retry
         and data["duplicate_key"] == duplicate
@@ -336,7 +407,7 @@ def implement(task, source: Path):
     if workspace.exists():
         raise Stop("stopped", "helper_checkout_exists")
     git(task.root, "clone", "--no-hardlinks", str(task.root), str(workspace))
-    branch = "codex/billing-debrief-helper" + ("-attempt-2" if retry else "")
+    branch = "codex/billing-debrief-helper" + (f"-attempt-{data['attempt_id']}" if retry else "")
     git(workspace, "checkout", "-b", branch, data["base"])
     git(workspace, "remote", "set-url", "origin", f"https://github.com/{REPOSITORY}.git")
     git(workspace, "update-ref", "refs/remotes/origin/main", data["base"])
@@ -344,7 +415,13 @@ def implement(task, source: Path):
         raise Stop("stopped", "helper_targets_must_be_new")
     # 既存dependencyだけを複製し、新たな認証やdownloadなしでchildのcurrent checkを可能にする。
     shutil.copytree(task.root / ".venv", workspace / ".venv")
+    profile = None
+    if data.get("attempt_id") == 3:
+        if data.get("runtime_profile_required") != RUNTIME_PROFILE:
+            raise Stop("stopped", "runtime_profile_required")
+        profile = prepare_runtime(task, workspace)
     task.heartbeat()
+    data = task.data()
     data.update(debrief=evidence, duplicate_key=duplicate, retry_job_reserved=retry)
     task.save_event(data, "debrief_candidate_created")
     issue = (
@@ -391,13 +468,23 @@ def implement(task, source: Path):
         "ネットワーク・公開・PR・子spawnは行わない。reviewと統合は親runnerが担当。"
         "承認が必要なら回答を代行せず停止。"
         f"実根拠ID: {evidence['debrief_id']}、根拠hash: {evidence['source_sha256']}。"
-        f"test用Pythonは {task.root / '.venv/Scripts/python.exe'} を利用可。"
+        f"test用Pythonは {(workspace if profile else task.root) / '.venv/Scripts/python.exe'} "
+        "を利用する。"
         f"baseは {data['base']}。検証は専用pytest、ruff check、ruff format --checkを"
         "それぞれ実行し実exit codeを検査。連結で失敗を隠さない。"
         "最終JSONにはexact3pathとraw file SHA256、3検証のexit codeを返す。"
         "正常完了はimplementation_ready/refusal=none。人間承認はhuman_approval_required、"
         "自動policy拒否はpolicy_denied、一般permission errorはpermission_failedとして停止。"
     )
+    if profile:
+        prompt += (
+            "\nこのjobの実行環境は次の固定profileを使う（host preflight済み、child検証とは別）: "
+            + json.dumps(profile, ensure_ascii=True)
+            + "。Pythonはprofile.python、Markdown整形はprofile.nodeとprofile.prettierを"
+            "絶対pathのargument配列で実行する。PATHのnode/npm/npx/Voltaを使わない。"
+            "npm run checkは親の固定head検証で行い、childでは実行しない。"
+            "専用pytest/Ruff/formatだけを個別検証し、依存追加・downloadはしない。"
+        )
     schema = {
         "type": "object",
         "properties": {
