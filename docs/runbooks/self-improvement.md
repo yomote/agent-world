@@ -6,7 +6,7 @@
 
 ## 実jobと通常GitHub統合
 
-追加の明示依頼により、旧pilotとは別のcampaignを同じSQLite・dispatcher lockへ追加した。`delivery.py`が状態遷移のowner、`jobs.py`が公開Codex CLI、`transport.py`と`bridge.py`が既存GitHub connectorへの配送を担う。runnerが操作を予約して要求を出し、生存中に一致する応答を受けて次へ進む。後付けの成功receiptをimportするcommandはない。
+公開Codex CLIを起動する `jobs.py`、状態を所有する `delivery.py`、GitHub I/Oを直列で実行する `github_adapter.py` を使う。GitHubの実運用backendはこのnative REST/GraphQL adapterだけ。既知403のconnectorへ戻るfallbackはない。hostは `api.github.com`、repoは `yomote/agent-world`、method/path/operationはcodeの固定allowlistとする。workflow dispatchはallowlistにも実行経路にも含めない。
 
 ```powershell
 python -m scripts.automation.delivery runner init --owner <thread-uuid> --base <base-sha>
@@ -14,17 +14,23 @@ python -m scripts.automation.delivery runner smoke
 python -m scripts.automation.delivery runner deliver
 ```
 
-`smoke`は実`codex -a on-request exec --json --sandbox read-only`を起動し、`thread.started`、`turn.completed`、exit code、固定markerを検証する。jobのログと構造化ownerを保存する。helper実装には`workspace-write`を使うが、auto approval、ignore-rules、full access、bypassは指定しない。保存済みCLI認証の通常利用に限り、credentialの取得・複製・新設はしない。[公式non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)と、そのPCの公開`--help`を契約として使う。
+`smoke`は実 `codex -a on-request exec --json --sandbox read-only` を起動し、thread・turn完了・exit code・markerを検証する。helperはworkspace-writeで固定3fileだけを実装する。CLIの承認要求に回答せず、merge・dispatch・公開・GitHub I/Oをcode jobへ渡さない。[公式non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)とPCの公開helpを契約にする。
 
-配送側は`python -m scripts.automation.bridge runner take`で一度だけ要求をclaimし、そのoperationを既存connectorまたは同じ正式reviewerへ渡す。`.sent.json`の排他的作成により配送側再起動でも同じwriteを再送しない。返却fileは`transport/<request-id>.response.json`、envelopeは`id/status/result`だけ。既存toolの実応答を渡し、`isError`、承認要求、結果不明を`ok`に書き換えない。runnerは要求ID、期限、owner fenceを照合する。配送側は信頼済みoperatorの実行環境であり、任意第三者へのHTTP endpointではない。
+GCMの既存managerを対話無効で利用し、認証応答はadapter process内のメモリでAuthorization headerにだけ使う。モデルへの返却、引数・環境変数・fileへのtoken出力、ログ出力、別credentialへのfallback、新規loginは行わない。Git objectのfetch/pushも同じadapterが既存Git/GCMで直列実行し、結果不明なら再送しない。
 
-`deliver`は固定headへの独立review要求、`local_check.py`によるclean current headの`npm run check`、push、Draft PR、review証跡、Ready、current CI、merge直前の保護・head・review・threads再検査、通常squash mergeを順に駆動する。checkは既存`factory.run_command`のプロセス停止と180秒timeoutを再利用する。mergeは既存connectorの通常操作にexpected headを指定し、保護設定やread権限を変更しない。hidden bypass情報が欠けるworkflowを成功させるための保護緩和は行わず、そのworkflow自体は呼び出さない。`protected=true`と通常merge実応答を保存するが、hidden bypass設定を検証済みとは記録しない。Azure dispatchや追加公開は起動しない。
+REST/GraphQLのHTTP予算はstore全体で30件。runner/helper、再起動、revision、ETagの304、失敗、unknown writeを同じSQLite counterへ合算する。送信前に予約し、31件目は未送信。予約後の失敗でも払い戻さない。redirect・自動retry・次page追跡は行わず、page欠落なら停止する。401/403は保存停止し、制限応答の待機headerを記録してその場で終了する。Git protocolの内部HTTP往復数はこのREST/GraphQL counterに含めない。
 
-campaignの強制境界は、保存した2時間の全体期限、CLI最大3起動・各900秒（smokeは180秒）、connector配送最大40回、current CIはheadあたり60秒以上・最大10照会。再起動でbudgetをresetしない。Git操作は各30秒、入力とログにもサイズ上限がある。CLI内部のモデル要求数と費用hardcap、connector内部のHTTP回数hardcapは公開interfaceから提供されない。`cost_hardcap=not_provided`等で区別し、呼出回数上限を金額上限と呼ばない。
+そのほかの強制境界は保存した全体2時間、CLI最大3起動・各900秒（smoke180秒）、host配送最大40回、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
 
-承認待ち・unknown write・期限切れownerは保存停止し、自動回答や再送をしない。CLIが未完了のまま停止した場合も成功を作らない。生存中dispatcherのlockを期限だけで奪わず、死んだownerの期限切れは`unknown`へ回収する。
+`transport.py`はGitHub操作を予約してnative adapterを同期実行し、実応答をDBへ保存する。正式reviewとlocal checkだけは `relay.mjs` の `pump(root, campaign, tools)` が `bridge take` で一度claimする。reviewの固定packetを同じread-only reviewerへ渡し、実回答を `complete` で返す。checkは既存factoryの180秒timeoutでclean current headの `npm run check` を実行する。後付けの外部成功receiptをimportするcommandはない。
 
-runner本体の通常merge後、実billing debriefから確定した`debrief_id/finding/source_sha256/source_ref`だけをhelper入力にする。`finding`は固定の`billing_evidence_normalization`。本文や任意commandをpromptへ連結しない。重複keyは`sha256(debrief_id + ':billing-evidence-normalization-v1')`、scopeは`billing_debrief.py`、専用test、新しい短いhelper文書だけ。`helper`がIssue作成と独立checkout・実CLI jobを起動し、実装SHAを検証する。その後同じ`deliver`でreview・CI・通常merge・Issue完了を進める。実debriefの所在や事実を確認する前に、この入力をfixtureで代用しない。Azure runbook編集・追加Azure read・公開・credential変更は禁止する。
+`deliver`は新固定headのreview→current check→push→Draft PR→review証跡→Ready→current CI→通常mergeを駆動する。CIは同じPR/head/workflowの最新runと実check jobのcompleted/successを必要にする。Draft skipを成功にしない。merge直前は保護、current PR/head、独立review、全threads、同headのCIとlocal checkを結合し、標準REST squashへexpected SHAを渡す。merge要求はcampaign/headにつき1回だけ予約する。hidden bypass設定は未検証として残し、保護/read権限を変更せず、merge-gate workflowやAzure dispatchを呼ばない。
+
+review/check/CIの既知failは、cleanな子孫commitへ修正して `delivery <campaign> revise --workspace <path>`、続いてdeliverで再検証する。同じ予算とPRを維持する。approval_wait・unknown write・期限切れownerは停止を保持し、通常reviseでは解除しない。
+
+今回受領したphase handoffだけは `runner handoff --reviewed-head d1baecb6cd85847ac6976e2cd68f277b80894a87` で適用する。旧headの正式review/checkと「GitHub write前に停止済み」というユーザー確認に一致する保存境界に限り、新headの再reviewへ進める。旧PASSを新headへ移さず、回数・期限をresetしない。一般的なunknown writeやHITLを解除する入口ではない。
+
+runner通常merge後、実billing debriefの確認済み `debrief_id/finding/source_sha256/source_ref` から候補を作る。findingは `billing_evidence_normalization` 固定、duplicate keyは `sha256(debrief_id + ':billing-evidence-normalization-v1')`。Issue/log本文を指示にせず、helperの新規3fileだけを独立jobへ渡す。runner merge SHAの取得・main上の確認・新規path確認をIssue作成前に行う。実装SHA→同じ正式reviewer→current check/CI→通常merge→Issue完了を保存する。Azure runbook編集、追加Azure read、公開、credential変更は禁止する。
 
 ```powershell
 python -m scripts.automation.delivery billing-helper init --owner <thread-uuid> --base <runner-merge-sha>
@@ -34,11 +40,9 @@ python -m scripts.automation.delivery billing-helper deliver --workspace <saved-
 
 ## Mind Inboxからの採否
 
-current CIはworkflowのsuccessだけでは受け入れず、対象runの`check` jobもcompleted/successであることを取得・保存する。Draftのjob skipは未検証のまま扱う。
-
-配送の実行入口は`scripts/automation/relay.mjs`の`pump(root, campaign, tools)`。既存Codex tool hostで呼び、1要求のclaim、allowlistしたconnector呼出または実`local_check`、一致IDへの応答保存を実行する。認証情報を別processへ渡さない。`pending_review`だけは同じ正式read-only reviewerへ固定packetを渡し、その実回答を`complete(root, request, {id, status, result}, tools)`で返す。新たなreviewerや承認回答を自動生成しない。無要求ならnullで終了し、常駐pollerは持たない。
-
-review/check/current CIの既知失敗を修正した場合は、cleanな子孫commitを作って`delivery <campaign> revise --workspace <path>`、続いて`deliver`を明示実行する。同じcampaignの期限・回数・既存PRを維持し、新headを同じreviewerから再検証する。approval_wait/unknownをこの入口で解除しない。CIはPR番号とheadとworkflow pathを照合し、ページ欠落・identity欠落では成功にしない。helperは保存したrunner merge SHAがmainに存在することと、新規3fileの空きを外部Issue作成前に確認する。
+本体からhelperまで一周する実行は
+`python -m scripts.automation.delivery runner deliver --helper-source artifacts/self-improvement/billing-source.json`。
+runnerの通常merge成功後にだけ、同じdispatcherがhelper campaignを初期化し、実装job・review・check・CI・通常merge・Issue完了へ進む。既存venvは専用checkoutへ複製し、追加downloadやcredential設定をしない。
 
 参照revisionは`d3c15275b50d3686dba226fd98a1bdffc581a8dd`。以下は別scoutの提供結果に基づく採用判断であり、このownerによる全資料の再調査や直接コピーではない。
 

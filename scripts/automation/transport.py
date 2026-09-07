@@ -1,4 +1,4 @@
-"""runnerが予約した要求だけを既存connectorへ渡す、資格情報を持たないtransport。"""
+"""予約したGitHub操作は単一native adapterへ、review/checkだけをtool hostへ渡す。"""
 
 import json
 import time
@@ -23,6 +23,7 @@ class Transport:
 
     def __init__(self, campaign):
         self.campaign = campaign
+        self.github = None
 
     def call(self, operation: str, arguments: dict, *, write=False, seconds=90):
         task = self.campaign
@@ -47,6 +48,28 @@ class Transport:
                 (identifier, task.name, operation, json.dumps(request)),
             )
         atomic_json(task.directory / "status.json", data)
+        from .github_adapter import OPERATIONS, GitHub
+
+        if operation in OPERATIONS:
+            if self.github is None:
+                self.github = GitHub(task)
+            try:
+                result = self.github.call(operation, arguments)
+            except Stop as error:
+                with task.db:
+                    task.db.execute(
+                        "UPDATE delivery_operations SET state=? WHERE id=?",
+                        (error.state, identifier),
+                    )
+                raise
+            with task.db:
+                task.db.execute(
+                    "UPDATE delivery_operations SET state='ok',response=? WHERE id=?",
+                    (json.dumps({"id": identifier, "status": "ok", "result": result}), identifier),
+                )
+            return result
+        if operation not in {"independent_review", "current_check"}:
+            raise Stop("stopped", "transport_operation_not_allowed")
         directory = task.directory / "transport"
         directory.mkdir(exist_ok=True)
         atomic_json(directory / "request.json", request)

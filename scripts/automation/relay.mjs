@@ -1,52 +1,3 @@
-// 信頼済みCodex transportが既存connectorを一度だけ呼ぶ。credentialや承認回答を扱わない。
-export async function relay(request, tools) {
-  const args = request.arguments;
-  const repo = "yomote/agent-world";
-  const base = `https://api.github.com/repos/${repo}`;
-  const direct = {
-    create_draft_pr: "create_pull_request",
-    post_review_evidence: "add_comment_to_issue",
-    ready_pr: "mark_pull_request_ready_for_review",
-    review_threads: "list_pull_request_review_threads",
-    normal_merge: "merge_pull_request",
-    create_helper_issue: "create_issue",
-    close_issue: "update_issue",
-  };
-  let result;
-  if (Object.hasOwn(direct, request.operation)) {
-    if ((args.repository_full_name ?? args.repo_full_name) !== repo) {
-      throw new Error("repository_not_allowed");
-    }
-    result = await tools[`mcp__codex_apps__github_${direct[request.operation]}`](args);
-  } else {
-    let url;
-    if (request.operation === "current_ci" && /^[0-9a-f]{40}$/.test(args.commit_sha)) {
-      url = `${base}/actions/workflows/ci.yml/runs?event=pull_request&head_sha=${args.commit_sha}&per_page=100`;
-    } else if (request.operation === "current_ci_jobs" && Number.isInteger(args.run_id)) {
-      url = `${base}/actions/runs/${args.run_id}/jobs?per_page=100`;
-    } else if (request.operation === "main_protection") {
-      url = `${base}/branches/main`;
-    } else if (request.operation === "review_comments" && Number.isInteger(args.number)) {
-      url = `${base}/issues/${args.number}/comments?per_page=100`;
-    } else if (request.operation === "pr_info" && Number.isInteger(args.pr_number)) {
-      url = `${base}/pulls/${args.pr_number}`;
-    } else {
-      throw new Error("owner_operation_or_unknown_operation");
-    }
-    result = await tools.mcp__codex_apps__github_fetch({ url });
-  }
-  if (result.isError) {
-    return { id: request.id, status: "unknown", result: { tool_error: true } };
-  }
-  let data = result.structuredContent;
-  if (data?.result) data = data.result;
-  if (typeof data?.content === "string") data = JSON.parse(data.content);
-  if (data === undefined) {
-    return { id: request.id, status: "unknown", result: { response_missing: true } };
-  }
-  return { id: request.id, status: "ok", result: data };
-}
-
 const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 
 // Codex tool hostで明示的に1要求を配送する。OS常駐・再試行loopは作らない。
@@ -91,7 +42,7 @@ export async function pump(root, campaign, tools) {
         result: run.exit_code === 0 ? JSON.parse(output) : { local_check_transport_failed: true },
       };
     } else {
-      response = await relay(request, tools);
+      throw new Error("github_operations_are_native_only");
     }
   } catch {
     response = { id: request.id, status: "unknown", result: { transport_exception: true } };

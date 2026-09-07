@@ -25,6 +25,8 @@ Mind Inbox由来の改善ループを、文書の手順から実行可能なロ�
 
 ## 公開CLI・通常GitHub adapterへの拡張
 
-追加依頼により、公開Codex CLI jobと既存GitHub connectorを使うcampaignを追加する。旧pilotの保存状態をresetせず、同一dispatcherが操作予約→要求発行→実応答検査→次状態を所有する。transportは操作の配送だけを担い、過去の外部結果から任意stateを後付けしない。費用とCLI内部モデル要求のhardcapは未提供と記録し、時間・起動回数・配送回数の強制境界と分離する。
+受領したphase handoffにより、GitHub backendは既存GCMをprocess内で使う単一REST/GraphQL adapterへ固定した。connector fallbackとworkflow dispatchは実行経路から除外する。HTTP予約counterはstore全体30件で、再起動・helper開始でもresetせず、31件目を送信しない。独立review・current check・CI・PR/head・保護・threadsを結合し、通常REST squashのexpected SHAを1回だけ送る。結果不明は再送しない。code jobはGitHub I/Oを所有しない。
+
+追加依頼により、公開Codex CLI jobとnative GitHub adapterを使うcampaignを追加する。旧pilotの保存状態をresetせず、同一dispatcherが操作予約→要求発行→実応答検査→次状態を所有する。transportは操作の配送だけを担い、過去の外部結果から任意stateを後付けしない。費用とCLI内部モデル要求のhardcapは未提供と記録し、時間・起動回数・配送回数の強制境界と分離する。
 
 scoutの採用元はrunbookへ集約する。移植元のlease/CASは設計段階のため、この実装の出典として実証済みを主張しない。現headのreview/CI/threadsを再検査して通常mergeし、hidden bypass不明のworkflow成功、Azure公開、保護/read権限変更へ範囲を広げない。

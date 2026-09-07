@@ -63,6 +63,9 @@ class Campaign:
         self.token = None
         self.monotonic_deadline = time.monotonic()
         self.transport = Transport(self)
+        from .github_adapter import GitHub
+
+        self.transport.github = GitHub(self)
 
     def data(self):
         row = self.db.execute(
@@ -70,7 +73,12 @@ class Campaign:
         ).fetchone()
         if row is None:
             raise ValueError("campaign_init_required")
-        return json.loads(row[0])
+        data = json.loads(row[0])
+        data["http_requests"] = self.db.execute(
+            "SELECT used FROM delivery_http_budget WHERE id=1"
+        ).fetchone()[0]
+        data["max_http_requests"] = 30
+        return data
 
     def save(self, data):
         self.db.execute(
@@ -120,7 +128,8 @@ class Campaign:
             job_owner=None,
             cost_hardcap="not_provided",
             model_request_hardcap="not_provided",
-            upstream_http_hardcap="connector_internal_not_provided",
+            upstream_http_hardcap="rest_graphql_shared_30",
+            github_backend="native_gcm_rest_graphql",
         )
         self.save_event(data, "initialized")
 
@@ -246,18 +255,14 @@ class Campaign:
             or check.get("clean") is not True
         ):
             raise Stop("failed", "current_check_not_pass")
-        self.save_event(self.data(), "current_check_pass")
+        data = self.data()
+        data["current_check"] = check
+        self.save_event(data, "current_check_pass")
         self.check_scope(workspace, head)
         branch = git(workspace, "branch", "--show-current")
         if not branch.startswith("codex/"):
             raise Stop("stopped", "branch_not_allowed")
-        # pushは結果不明時に再送しない。既存Git認証を使い、credentialを取得・保存しない。
-        self.save_event(self.data(), "push_reserved")
-        try:
-            git(workspace, "push", "origin", f"{head}:refs/heads/{branch}")
-        except subprocess.SubprocessError as error:
-            raise Stop("unknown", "push_result_unknown") from error
-        self.save_event(self.data(), "push_completed")
+        self.transport.github.git_transfer(workspace, "push", head=head, branch=branch)
         body = (
             "明示起動するbounded改善の実装と証跡。\n\n"
             f"対象head: {head}\n独立review: {REVIEWER} / pass\n"
@@ -297,14 +302,13 @@ class Campaign:
             },
             write=True,
         )
-        info = self.transport.call(
-            "pr_info", {"repository_full_name": REPOSITORY, "pr_number": number}
-        )
-        if info.get("draft") is True:
+        if not self.data().get("pr_ready"):
             self.transport.call(
                 "ready_pr", {"repository_full_name": REPOSITORY, "pr_number": number}, write=True
             )
-        self.save_event(self.data(), "ready_pr")
+        data = self.data()
+        data["pr_ready"] = True
+        self.save_event(data, "ready_pr")
         self.wait_ci(head, number)
         self.normal_merge(head, number)
 
@@ -375,6 +379,7 @@ class Campaign:
                 for key in ("id", "head_sha", "run_attempt", "html_url", "conclusion")
             }
             data["ci"]["check_job_id"] = checks[0]["id"]
+            data["ci"]["pr_number"] = number
             self.save_event(data, "current_ci_pass")
             return
 
@@ -382,36 +387,37 @@ class Campaign:
         protection = self.transport.call("main_protection", {})
         if protection.get("protected") is not True:
             raise Stop("stopped", "main_protection_unverified")
-        pr = self.transport.call(
-            "pr_info", {"repository_full_name": REPOSITORY, "pr_number": number}
-        )
-        # transportは既存connectorの正規化fieldを返す。未知fieldを推測で補完しない。
-        observed = pr.get("head", {}).get("sha") or pr.get("head_sha")
-        if observed != head or pr.get("draft") is not False or pr.get("state") != "open":
-            raise Stop("stopped", "pr_head_or_ready_unverified")
-        if pr.get("mergeable") is not True or pr.get("base", {}).get("ref") != "main":
-            raise Stop("stopped", "pr_mergeability_unverified")
-        comments = self.transport.call("review_comments", {"number": number})
-        from scripts.merge_gate import validate_review
+        snapshot = self.transport.call("merge_snapshot", {"pr_number": number})
+        pr, comments, nodes = snapshot["pr"], snapshot["comments"], snapshot["threads"]
+        from scripts.merge_gate import GateTarget, validate_pr, validate_review
 
         if not isinstance(comments, list) or len(comments) >= 100:
             raise Stop("stopped", "review_comments_unverified")
         try:
+            validate_pr(pr, GateTarget(number, head))
             observed_reviewer = validate_review(comments, head)
         except RuntimeError as error:
             raise Stop("stopped", "current_review_unverified") from error
         if observed_reviewer != REVIEWER:
             raise Stop("stopped", "reviewer_mismatch")
-        threads = self.transport.call(
-            "review_threads", {"repo_full_name": REPOSITORY, "pr_number": number}
-        )
-        nodes = threads.get("review_threads")
         if (
             not isinstance(nodes, list)
             or len(nodes) >= 100
             or any(node.get("isResolved") is not True for node in nodes)
         ):
             raise Stop("stopped", "review_threads_unverified")
+        data = self.data()
+        data.update(
+            merge_validated_head=head,
+            merge_validated_at=time.time(),
+            merge_snapshot=snapshot,
+            protection={
+                "protected": True,
+                "mode": "standard_rest_squash_expected_sha",
+                "hidden_bypass_configuration": "not_verified",
+            },
+        )
+        self.save_event(data, "merge_packet_validated")
         merged = self.transport.call(
             "normal_merge",
             {
@@ -428,12 +434,12 @@ class Campaign:
         data["merge_sha"] = merged["sha"]
         data["protection"] = {
             "protected": True,
-            "mode": "normal_connector_no_override",
+            "mode": "standard_rest_squash_expected_sha",
             "hidden_bypass_configuration": "not_verified",
         }
         self.save_event(data, "normal_merge_confirmed")
         if data.get("issue"):
-            self.transport.call(
+            closed = self.transport.call(
                 "close_issue",
                 {
                     "repository_full_name": REPOSITORY,
@@ -443,6 +449,8 @@ class Campaign:
                 },
                 write=True,
             )
+            if closed.get("number") != data["issue"] or closed.get("state") != "closed":
+                raise Stop("unknown", "issue_close_unverified")
             self.finish_step("completed", "issue_completed_after_normal_merge")
             return
         self.finish_step("merged", "normal_protected_merge_confirmed")
@@ -463,6 +471,53 @@ class Campaign:
         data.update(state="job_verified", reason="revised_head", head=head, integration_base=base)
         self.save_event(data, "revised_head_same_budget")
 
+    def handoff(self, reviewed_head):
+        """受領済みのbackend置換境界だけを適用。未知writeの一般的resumeではない。"""
+        data = self.data()
+        expected = "d1baecb6cd85847ac6976e2cd68f277b80894a87"
+        if (
+            self.name != "runner"
+            or reviewed_head != expected
+            or data["head"] != expected
+            or data["state"] != "job_verified"
+            or data.get("pr") is not None
+            or data.get("last_event") != "push_reserved"
+            or data.get("handoff_applied")
+            or time.time() >= data["deadline"]
+        ):
+            raise Stop("stopped", "handoff_boundary_mismatch")
+        operations = [
+            json.loads(row[0])
+            for row in self.db.execute(
+                "SELECT response FROM delivery_operations WHERE campaign=? ORDER BY rowid",
+                (self.name,),
+            )
+            if row[0]
+        ]
+        if (
+            len(operations) != 4
+            or operations[-1]["result"].get("head") != expected
+            or operations[-1]["result"].get("exit_code") != 0
+            or operations[-2]["result"].get("verdict") != "pass"
+        ):
+            raise Stop("stopped", "handoff_evidence_mismatch")
+        head = git(self.root, "rev-parse", "HEAD")
+        base = git(self.root, "merge-base", "origin/main", head)
+        self.check_scope(self.root, head, base=base)
+        data.update(
+            head=head,
+            integration_base=base,
+            token=None,
+            lease_until=None,
+            handoff_applied="user-confirmed-before-github-write",
+            reason="backend_handoff",
+            github_backend="native_gcm_rest_graphql",
+            upstream_http_hardcap="rest_graphql_shared_30",
+        )
+        data.pop("review", None)
+        data.pop("current_check", None)
+        self.save_event(data, "received_handoff_new_head_requires_review")
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -473,12 +528,15 @@ def main():
     init.add_argument("--base", required=True)
     sub.add_parser("status")
     sub.add_parser("smoke")
+    handoff = sub.add_parser("handoff")
+    handoff.add_argument("--reviewed-head", required=True)
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
     revise = sub.add_parser("revise")
     revise.add_argument("--workspace", type=Path, default=ROOT)
     deliver = sub.add_parser("deliver")
     deliver.add_argument("--workspace", type=Path, default=ROOT)
+    deliver.add_argument("--helper-source", type=Path)
     args = parser.parse_args()
     with dispatcher(ROOT):
         runner = Runner(ROOT)
@@ -491,12 +549,24 @@ def main():
                     task.smoke()
                 elif args.command == "deliver":
                     task.deliver(args.workspace.resolve())
+                    if args.helper_source:
+                        if args.campaign != "runner" or task.data()["state"] != "merged":
+                            raise Stop("stopped", "runner_merge_required")
+                        parent = task.data()
+                        task = Campaign(runner, "billing-helper")
+                        task.init(parent["owner"], parent["merge_sha"])
+                        from .helper_job import implement
+
+                        implement(task, args.helper_source)
+                        task.deliver(task.directory / "checkout")
                 elif args.command == "helper":
                     from .helper_job import implement
 
                     implement(task, args.source)
                 elif args.command == "revise":
                     task.revise(args.workspace)
+                elif args.command == "handoff":
+                    task.handoff(args.reviewed_head)
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)
                 return 0
             except Stop as error:

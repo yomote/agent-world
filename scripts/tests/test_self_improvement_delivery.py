@@ -58,7 +58,7 @@ def test_transport_reserves_before_delivery_and_claim_is_once(task, monkeypatch)
         )
 
     monkeypatch.setattr(transport, "atomic_json", relay)
-    assert task.transport.call("create_draft_pr", {}, write=True) == {"number": 25}
+    assert task.transport.call("current_check", {}, write=True) == {"number": 25}
     assert task.data()["connector_calls"] == 1
     assert bridge.take(task.root, task.name) is None
 
@@ -82,7 +82,7 @@ def test_unknown_write_and_approval_response_stop_without_retry(task, monkeypatc
 
     monkeypatch.setattr(transport, "atomic_json", denied)
     with pytest.raises(transport.Stop) as caught:
-        task.transport.call("normal_merge", {}, write=True)
+        task.transport.call("current_check", {}, write=True)
     task.finish_step(caught.value.state, caught.value.reason)
     assert task.data()["state"] == "approval_wait"
     with pytest.raises(transport.Stop):
@@ -93,7 +93,7 @@ def test_unknown_write_and_approval_response_stop_without_retry(task, monkeypatc
 def test_request_timeout_does_not_accept_later_receipt(task):
     """外部writeの時間切れを未実行とし、遅れたreceiptで別実行を始める回帰を防ぐ。"""
     with pytest.raises(transport.Stop, match="no_replay") as caught:
-        task.transport.call("normal_merge", {}, write=True, seconds=0)
+        task.transport.call("current_check", {}, write=True, seconds=0)
     task.finish_step(caught.value.state, caught.value.reason)
     assert task.data()["state"] == "unknown"
     assert bridge.take(task.root, task.name) is None
@@ -149,7 +149,7 @@ def test_result_identity_cannot_be_substituted(task, monkeypatch):
 
     monkeypatch.setattr(transport, "atomic_json", wrong)
     with pytest.raises(transport.Stop, match="identity_mismatch"):
-        task.transport.call("normal_merge", {}, write=True)
+        task.transport.call("current_check", {}, write=True)
 
 
 def test_latest_failed_ci_does_not_reuse_old_success(task, monkeypatch):
@@ -288,14 +288,18 @@ def test_stale_review_cannot_reach_merge(task, monkeypatch):
     calls = []
     answers = {
         "main_protection": {"protected": True},
-        "pr_info": {
-            "head": {"sha": HEAD},
-            "draft": False,
-            "state": "open",
-            "mergeable": True,
-            "base": {"ref": "main"},
+        "merge_snapshot": {
+            "pr": {
+                "number": 25,
+                "head": {"sha": HEAD, "repo": {"full_name": "yomote/agent-world"}},
+                "draft": False,
+                "state": "open",
+                "mergeable": True,
+                "base": {"ref": "main", "repo": {"full_name": "yomote/agent-world"}},
+            },
+            "comments": [],
+            "threads": [],
         },
-        "review_comments": [],
     }
 
     def answer(operation, arguments, **kwargs):

@@ -1,4 +1,4 @@
-"""既存connectorへの配送を一度だけclaimする。成功stateの後付け注入は行わない。"""
+"""正式reviewとcurrent checkのhost配送だけを一度claimする。"""
 
 import argparse
 import json
@@ -11,18 +11,6 @@ from .runner import ROOT, STATE, safe_path
 OPERATIONS = {
     "independent_review",
     "current_check",
-    "create_draft_pr",
-    "post_review_evidence",
-    "ready_pr",
-    "current_ci",
-    "current_ci_jobs",
-    "pr_info",
-    "review_threads",
-    "normal_merge",
-    "main_protection",
-    "review_comments",
-    "create_helper_issue",
-    "close_issue",
 }
 
 

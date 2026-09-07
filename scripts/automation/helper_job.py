@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 from .delivery import REPOSITORY, SCOPES, git
@@ -33,7 +34,7 @@ def implement(task, source: Path):
     # squash merge objectを取得・検証してからIssueを作る。準備失敗で外部writeを残さない。
     if git(task.root, "remote", "get-url", "origin") != f"https://github.com/{REPOSITORY}.git":
         raise Stop("stopped", "origin_not_allowed")
-    git(task.root, "fetch", "origin", "main")
+    task.transport.github.git_transfer(task.root, "fetch")
     if git(task.root, "merge-base", data["base"], "origin/main") != data["base"]:
         raise Stop("stopped", "runner_merge_not_on_main")
     workspace = task.directory / "checkout"
@@ -45,6 +46,9 @@ def implement(task, source: Path):
     git(workspace, "update-ref", "refs/remotes/origin/main", data["base"])
     if any((workspace / path).exists() for path in SCOPES["billing-helper"]):
         raise Stop("stopped", "helper_targets_must_be_new")
+    # 既存dependencyだけを複製し、新たな認証やdownloadなしでchildのcurrent checkを可能にする。
+    shutil.copytree(task.root / ".venv", workspace / ".venv")
+    task.heartbeat()
     data.update(debrief=evidence, duplicate_key=duplicate)
     task.save_event(data, "debrief_candidate_created")
     issue = task.transport.call(

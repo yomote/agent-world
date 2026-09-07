@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { pump } from "../automation/relay.mjs";
 
-// 実tool呼出を省いて成功を後付けする回帰と、writeの自動再送を防ぐ。
+// GitHub操作をconnectorへfallbackし、自動再送する回帰を防ぐ。
 const request = {
   id: "11111111-1111-4111-8111-111111111111",
   campaign: "runner",
@@ -17,19 +17,15 @@ const request = {
 const calls = [];
 const tools = {
   exec_command: async () => ({ exit_code: 0, output: JSON.stringify(request) }),
-  mcp__codex_apps__github_merge_pull_request: async (args) => {
-    calls.push(args);
-    return { isError: true };
-  },
   apply_patch: async (patch) => {
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 0);
     assert.match(patch, /"status":"unknown"/);
     calls.push("saved");
   },
 };
 const result = await pump("C:/workspace", "runner", tools);
 assert.equal(result.response.status, "unknown");
-assert.equal(calls.length, 2);
+assert.equal(calls.length, 1);
 
 // reviewを自作せず、固定packetをownerへ返して実回答まで保存を保留する。
 request.operation = "independent_review";
