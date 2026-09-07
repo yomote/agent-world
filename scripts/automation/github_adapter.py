@@ -316,14 +316,22 @@ class GitHub:
             check = data.get("current_check", {})
             review = data.get("review", {})
             ci = data.get("ci", {})
+            reviewer = review.get("reviewer")
+            review_base = review.get("base")
+            expected_base = data.get("integration_base", data.get("base"))
             if (
                 not SHA.fullmatch(head)
                 or data.get("merge_validated_head") != head
                 or data.get("pr") != number
                 or time.time() - data.get("merge_validated_at", 0) > 60
                 or review.get("head") != head
+                or review_base != expected_base
                 or review.get("verdict") != "pass"
-                or review.get("reviewer") != "01a07c70-6ca8-7fb0-af44-05aefe156087"
+                or review.get("findings") != []
+                or not isinstance(reviewer, str)
+                or not reviewer.strip()
+                or reviewer != reviewer.strip()
+                or reviewer.strip() in {data.get("owner"), data.get("job_owner")}
                 or ci.get("head_sha") != head
                 or ci.get("pr_number") != number
                 or ci.get("conclusion") != "success"
@@ -341,7 +349,7 @@ class GitHub:
             snapshot = data.get("merge_snapshot", {})
             try:
                 validate_pr(snapshot["pr"], GateTarget(number, head))
-                if validate_review(snapshot["comments"], head) != review["reviewer"]:
+                if validate_review(snapshot["comments"], head) != reviewer:
                     raise ValueError()
                 if any(node.get("isResolved") is not True for node in snapshot["threads"]):
                     raise ValueError()

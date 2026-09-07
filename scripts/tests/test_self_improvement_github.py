@@ -131,9 +131,16 @@ def test_merge_requires_joined_current_evidence_and_sends_expected_sha_once(task
     data = task.data()
     data.update(
         pr=25,
+        integration_base="b" * 40,
         merge_validated_head=HEAD,
         merge_validated_at=time.time(),
-        review={"head": HEAD, "verdict": "pass", "reviewer": delivery.REVIEWER},
+        review={
+            "head": HEAD,
+            "base": "b" * 40,
+            "verdict": "pass",
+            "reviewer": delivery.REVIEWER,
+            "findings": [],
+        },
         ci={"head_sha": HEAD, "pr_number": 25, "conclusion": "success", "check_job_id": 7},
         current_check={"head": HEAD, "end_head": HEAD, "exit_code": 0, "clean": True},
         protection={"protected": True},
@@ -168,6 +175,50 @@ def test_merge_requires_joined_current_evidence_and_sends_expected_sha_once(task
     with pytest.raises(Stop, match="already_attempted"):
         task.transport.github.call("normal_merge", arguments)
     assert sent == [{"sha": HEAD, "merge_method": "squash"}]
+
+
+@pytest.mark.parametrize(
+    "review_update",
+    [
+        {"reviewer": OWNER},
+        {"reviewer": OWNER + " "},
+        {"base": "d" * 40},
+        {"findings": [{"priority": "P1"}]},
+    ],
+)
+def test_merge_rejects_review_not_bound_to_independent_current_campaign(
+    task, monkeypatch, review_update
+):
+    """実装owner・別base・finding有りのreviewをcurrent merge証拠に流用する回帰を防ぐ。"""
+    data = task.data()
+    review = {
+        "head": HEAD,
+        "base": "b" * 40,
+        "verdict": "pass",
+        "reviewer": "/root/independent-reviewer",
+        "findings": [],
+    }
+    review.update(review_update)
+    data.update(
+        pr=25,
+        integration_base="b" * 40,
+        merge_validated_head=HEAD,
+        merge_validated_at=time.time(),
+        review=review,
+        ci={"head_sha": HEAD, "pr_number": 25, "conclusion": "success", "check_job_id": 7},
+        current_check={"head": HEAD, "end_head": HEAD, "exit_code": 0, "clean": True},
+        protection={"protected": True},
+        merge_snapshot={},
+    )
+    task.save_event(data, "test_invalid_review")
+    sent = []
+    monkeypatch.setattr(
+        task.transport.github.opener, "open", lambda *args, **kwargs: sent.append(1)
+    )
+
+    with pytest.raises(Stop, match="merge_packet_not_bound"):
+        task.transport.github.call("normal_merge", {"pr_number": 25, "expected_head_sha": HEAD})
+    assert sent == []
 
 
 def test_304_and_redirect_each_consume_budget_without_following(task, monkeypatch):
