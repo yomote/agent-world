@@ -5,12 +5,13 @@ import json
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from .evidence import thread_id
 from .jobs import run_job
-from .runner import ROOT, Runner, dispatcher, safe_path
+from .runner import ROOT, Runner, digest, dispatcher, read_input, safe_path
 from .transport import Stop, Transport, atomic_json
 
 REPOSITORY = "yomote/agent-world"
@@ -156,6 +157,7 @@ class Campaign:
             "failed",
             "merged",
             "completed",
+            "revision_required",
         }:
             raise Stop(data["state"], data["reason"])
         if self.name == "billing-helper" and (
@@ -532,20 +534,127 @@ class Campaign:
             return
         self.finish_step("merged", "normal_protected_merge_confirmed")
 
+    def reconcile_push(self):
+        """今回確認済みのca9 pushだけを照合。ネットワーク照会・再送はしない。"""
+        data = self.data()
+        prior = "ca9b64e8c51d047324c07a918a2d11472512daab"
+        branch = "codex/self-improvement-runner"
+        if (
+            self.name != "runner"
+            or data["state"] != "job_verified"
+            or data["reason"] != "revised_head"
+            or data["head"] != prior
+            or data.get("last_event") != "git_push_reserved"
+            or data.get("pr") is not None
+            or data.get("confirmed_prior_push")
+            or not data.get("token")
+            or time.time() < data["lease_until"]
+            or time.time() >= data["deadline"]
+            or data["http_requests"] != 0
+            or self.db.execute("SELECT 1 FROM delivery_http_requests LIMIT 1").fetchone()
+            or self.db.execute(
+                "SELECT 1 FROM delivery_operations WHERE campaign=? "
+                "AND (operation NOT IN ('independent_review','current_check') "
+                "OR state NOT IN ('ok','cancelled_read_only')) LIMIT 1",
+                (self.name,),
+            ).fetchone()
+        ):
+            raise Stop("stopped", "prior_push_boundary_mismatch")
+        raw = read_input(self.root, "artifacts/self-improvement/confirmed-prior-push.json")
+        evidence = json.loads(raw.decode("utf-8-sig"))
+        if (
+            set(evidence)
+            != {
+                "operation",
+                "branch",
+                "reserved_head",
+                "remote_head",
+                "verification",
+                "observed_at_utc_window",
+                "retry_performed",
+            }
+            or evidence["operation"] != "git_push"
+            or evidence["branch"] != branch
+            or evidence["reserved_head"] != prior
+            or evidence["remote_head"] != prior
+            or evidence["verification"] != "single_read_only_git_ls_remote"
+            or evidence["retry_performed"] is not False
+        ):
+            raise Stop("stopped", "prior_push_evidence_mismatch")
+        window = evidence["observed_at_utc_window"]
+        if set(window) != {"after", "before"} or any(
+            not isinstance(value, str) or not value.endswith("Z") for value in window.values()
+        ):
+            raise Stop("stopped", "prior_push_observation_window")
+        after, before = (
+            datetime.fromisoformat(window[key].replace("Z", "+00:00")).timestamp()
+            for key in ("after", "before")
+        )
+        reserved = self.db.execute(
+            "SELECT kind,at,data FROM delivery_events WHERE campaign=? ORDER BY seq DESC LIMIT 1",
+            (self.name,),
+        ).fetchone()
+        if (
+            not reserved
+            or reserved[0] != "git_push_reserved"
+            or json.loads(reserved[2])["head"] != prior
+            or not reserved[1] <= after <= before <= time.time()
+        ):
+            raise Stop("stopped", "prior_push_observation_window")
+        remote = f"https://github.com/{REPOSITORY}.git"
+        if (
+            git(self.root, "remote", "get-url", "origin") != remote
+            or git(self.root, "branch", "--show-current") != branch
+        ):
+            raise Stop("stopped", "prior_push_target_mismatch")
+        data.update(
+            state="revision_required",
+            reason="confirmed_prior_push_requires_new_head",
+            token=None,
+            lease_until=None,
+            confirmed_prior_push={
+                "head": prior,
+                "branch": branch,
+                "ref": f"refs/heads/{branch}",
+                "remote": remote,
+                "evidence_sha256": digest(raw),
+                "observation": evidence,
+            },
+        )
+        self.save_event(data, "prior_push_confirmed_no_replay")
+
     def revise(self, workspace):
         data = self.data()
-        if data["state"] != "failed" or data["reason"] not in {
-            "independent_review_not_pass",
-            "current_check_not_pass",
-            "current_ci_not_success",
-        }:
+        reconciled = (
+            data["state"] == "revision_required"
+            and data["reason"] == "confirmed_prior_push_requires_new_head"
+            and data.get("confirmed_prior_push", {}).get("head") == data["head"]
+        )
+        if not reconciled and (
+            data["state"] != "failed"
+            or data["reason"]
+            not in {
+                "independent_review_not_pass",
+                "current_check_not_pass",
+                "current_ci_not_success",
+            }
+        ):
             raise Stop(data["state"], "revision_not_allowed")
         head = git(workspace, "rev-parse", "HEAD")
         if head == data["head"] or git(workspace, "merge-base", data["head"], head) != data["head"]:
             raise Stop("failed", "revision_requires_descendant_head")
+        if reconciled and (
+            workspace.resolve() != self.root.resolve()
+            or not git(workspace, "diff", "--name-only", data["head"], head)
+        ):
+            raise Stop("stopped", "prior_push_requires_meaningful_revision")
         base = git(workspace, "merge-base", "origin/main", head)
         self.check_scope(workspace, head, base=base)
         data.update(state="job_verified", reason="revised_head", head=head, integration_base=base)
+        if reconciled:
+            data["prior_push_revision_head"] = head
+            data.pop("review", None)
+            data.pop("current_check", None)
         self.save_event(data, "revised_head_same_budget")
 
     def handoff(self, reviewed_head):
@@ -605,6 +714,7 @@ def main():
     init.add_argument("--base", required=True)
     sub.add_parser("status")
     sub.add_parser("smoke")
+    sub.add_parser("reconcile-push")
     handoff = sub.add_parser("handoff")
     handoff.add_argument("--reviewed-head", required=True)
     resume_review = sub.add_parser("resume-review")
@@ -648,6 +758,8 @@ def main():
                     task.handoff(args.reviewed_head)
                 elif args.command == "resume-review":
                     task.resume_review(args.request_id)
+                elif args.command == "reconcile-push":
+                    task.reconcile_push()
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)
                 return 0
             except Stop as error:

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -462,6 +463,133 @@ def test_known_failure_revision_preserves_budget_but_unknown_cannot_resume(task,
     assert task.data()["state"] == "job_verified"
     assert task.data()["connector_calls"] == 7
     task.finish_step("unknown", "merge_result_unknown")
+    with pytest.raises(transport.Stop, match="revision_not_allowed"):
+        task.revise(task.root)
+
+
+@pytest.fixture
+def prior_push(task, monkeypatch):
+    """既知ca9 pushの照合境界だけを作る。リモートアクセスは行わない。"""
+    prior = "ca9b64e8c51d047324c07a918a2d11472512daab"
+    stamp = time.time()
+    data = task.data()
+    data.update(
+        state="job_verified",
+        reason="revised_head",
+        head=prior,
+        lease_until=stamp - 1,
+        review={"head": prior, "verdict": "pass"},
+        current_check={"head": prior, "exit_code": 0},
+    )
+    task.save_event(data, "git_push_reserved")
+    evidence = {
+        "operation": "git_push",
+        "branch": "codex/self-improvement-runner",
+        "reserved_head": prior,
+        "remote_head": prior,
+        "verification": "single_read_only_git_ls_remote",
+        "retry_performed": False,
+        "observed_at_utc_window": {
+            key: datetime.fromtimestamp(stamp + offset, UTC).isoformat().replace("+00:00", "Z")
+            for key, offset in (("after", 1), ("before", 2))
+        },
+    }
+    path = task.directory.parent / "confirmed-prior-push.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    monkeypatch.setattr(delivery.time, "time", lambda: stamp + 3)
+
+    def local_git(workspace, *args):
+        assert args in (("remote", "get-url", "origin"), ("branch", "--show-current"))
+        return (
+            "https://github.com/yomote/agent-world.git"
+            if args[0] == "remote"
+            else "codex/self-improvement-runner"
+        )
+
+    monkeypatch.setattr(delivery, "git", local_git)
+    return task, path, evidence
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("branch", "codex/other"), ("remote_head", HEAD), ("reserved_head", HEAD)],
+)
+def test_prior_push_rejects_wrong_branch_or_sha(prior_push, field, value):
+    """別ref/SHAの観測を既知push成功として採用する回帰を防ぐ。"""
+    task, path, evidence = prior_push
+    before = task.data()
+    evidence[field] = value
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(transport.Stop, match="prior_push_evidence_mismatch"):
+        task.reconcile_push()
+    assert task.data() == before
+
+
+@pytest.mark.parametrize("mutation", ["event", "unknown", "pr", "rest_write", "window"])
+def test_prior_push_rejects_stale_or_other_write_state(prior_push, mutation):
+    """stale境界、一般unknown write、REST write後を限定照合で解除する回帰を防ぐ。"""
+    task, path, evidence = prior_push
+    data = task.data()
+    if mutation == "rest_write":
+        with task.db:
+            task.db.execute(
+                "INSERT INTO delivery_operations "
+                "VALUES ('test',?,'create_draft_pr','unknown','{}',NULL)",
+                (task.name,),
+            )
+    elif mutation == "window":
+        evidence["observed_at_utc_window"]["after"] = "2020-01-01T00:00:00Z"
+        path.write_text(json.dumps(evidence), encoding="utf-8")
+    else:
+        if mutation == "unknown":
+            data["state"] = "unknown"
+        if mutation == "pr":
+            data["pr"] = 25
+        task.save_event(data, "other_event" if mutation == "event" else "git_push_reserved")
+    before = task.data()
+    with pytest.raises(transport.Stop, match="prior_push_"):
+        task.reconcile_push()
+    assert task.data() == before
+
+
+def test_prior_push_reconciliation_requires_one_meaningful_descendant(prior_push, monkeypatch):
+    """ca9を再送せず、予算を保持して新しい実差分のreviewから1回だけ進める。"""
+    task, _, evidence = prior_push
+    before = task.data()
+    task.reconcile_push()
+    data = task.data()
+    assert data["state"] == "revision_required" and data["token"] is None
+    assert data["confirmed_prior_push"]["head"] == evidence["remote_head"]
+    assert data["confirmed_prior_push"]["ref"] == "refs/heads/codex/self-improvement-runner"
+    with pytest.raises(transport.Stop, match="prior_push_boundary_mismatch"):
+        task.reconcile_push()
+    with pytest.raises(transport.Stop, match="real_job_required"):
+        task.deliver(task.root)
+    current, changed = [evidence["reserved_head"]], [""]
+
+    def revision_git(workspace, *args):
+        if args[0] == "rev-parse":
+            return current[0]
+        if args[0] == "diff":
+            return changed[0]
+        assert args[0] == "merge-base"
+        return evidence["reserved_head"]
+
+    monkeypatch.setattr(delivery, "git", revision_git)
+    monkeypatch.setattr(task, "check_scope", lambda *args, **kwargs: None)
+    with pytest.raises(transport.Stop, match="revision_requires_descendant_head"):
+        task.revise(task.root)
+    current[0] = "b1a6942f134d4ab4456614108497ec569d61ec9f"
+    with pytest.raises(transport.Stop, match="prior_push_requires_meaningful_revision"):
+        task.revise(task.root)
+    changed[0] = "scripts/automation/delivery.py"
+    task.revise(task.root)
+    after = task.data()
+    assert after["head"] == current[0] and after["prior_push_revision_head"] == current[0]
+    assert after["state"] == "job_verified"
+    assert "review" not in after and "current_check" not in after
+    for key in ("deadline", "connector_calls", "http_requests", "cli_starts"):
+        assert after[key] == before[key]
     with pytest.raises(transport.Stop, match="revision_not_allowed"):
         task.revise(task.root)
 

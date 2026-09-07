@@ -44,6 +44,8 @@ python -m scripts.automation.delivery billing-helper deliver --workspace <saved-
 
 read-only review要求をclaimした後にdispatcherが停止した場合は、`resume-review --request-id <保存ID>`で再開可否を確認する。OS lockを取得でき、leaseが失効し、最後の未完了操作が同headの独立reviewである場合に限り旧要求をcancelled_read_onlyとして保存する。runnerはroot、helperは専用checkoutを要求packetのworkspaceと照合し、そのcheckoutのhead・祖先関係・scopeを検証する。旧要求の取消しと復帰状態は同一DB transactionで保存する。新要求で正式reviewを受け直し、予算は保持する。approval_wait・unknown writeはこの判定を通らない。
 
+今回確認済みの旧pushだけは `runner reconcile-push` で照合する。固定の未追跡入力 `artifacts/self-improvement/confirmed-prior-push.json`、runnerの最終event `git_push_reserved`、保存head `ca9b64e8c51d047324c07a918a2d11472512daab`、branch `codex/self-improvement-runner`、そのbranchから得る完全ref、観測remote SHA、ローカルorigin設定を一致させる。観測時刻は予約後のUTC区間として保存し、再照会しない。PRなし・REST操作なし・lease失効・期限内だけを受け付け、確認済み旧SHAを保存して `revision_required` に移す。続く `revise` はcleanな子孫headの実差分を必要とし、旧review/checkを除いて新headのreviewから開始する。ca9の再push、同じ照合の再利用、一般的なunknown writeの解除はできない。期限・全予算は保持する。
+
 CLIのthread開始event欠落とturn完了event欠落は別の停止理由で保存する。各完了・停止にはoutcome、reason、head、job owner、PR、1文の学びだけの短いdebriefを残す。分散lease/CASや自動scope拡大は行わない。
 
 ## Mind Inboxからの採否
