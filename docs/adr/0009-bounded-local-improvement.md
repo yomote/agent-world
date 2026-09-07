@@ -1,4 +1,4 @@
-# 0008. 明示起動するbounded local改善runner
+# 0009. 明示起動するbounded local改善runner
 
 - Status: Accepted
 - Date: 2026-09-08
@@ -22,3 +22,9 @@ Mind Inbox由来の改善ループを、文書の手順から実行可能なロ�
 - 固定recipeは改善範囲が小さい一方、任意promptやshellを実行するよりも権限、変更量、検証条件を明確にできる。一般的なコード改善や連続campaignは別課題で拡張する。
 - 既存runbookのclaim未導入方針に対する例外は、このローカルrunnerの候補・dispatcher内部だけ。PM、Issue、他work itemのownerを自動claimしない。
 - ローカル検査の成功と、課題全体の独立review、current-head check、CI、mergeを分離する。実行手順と停止状態は[runbook](../runbooks/self-improvement.md)を正典とする。
+
+## 公開CLI・通常GitHub adapterへの拡張
+
+追加依頼により、公開Codex CLI jobと既存GitHub connectorを使うcampaignを追加する。旧pilotの保存状態をresetせず、同一dispatcherが操作予約→要求発行→実応答検査→次状態を所有する。transportは操作の配送だけを担い、過去の外部結果から任意stateを後付けしない。費用とCLI内部モデル要求のhardcapは未提供と記録し、時間・起動回数・配送回数の強制境界と分離する。
+
+scoutの採用元はrunbookへ集約する。移植元のlease/CASは設計段階のため、この実装の出典として実証済みを主張しない。現headのreview/CI/threadsを再検査して通常mergeし、hidden bypass不明のworkflow成功、Azure公開、保護/read権限変更へ範囲を広げない。
