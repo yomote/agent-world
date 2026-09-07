@@ -34,8 +34,9 @@ def observe(path: Path, owner: str) -> dict:
                 continue
             payload = record["payload"]
             if index < 2 and record.get("type") == "session_meta":
-                ids = [payload[key] for key in ("id", "session_id") if key in payload]
-                if not ids or any(value != owner for value in ids) or matched:
+                # idはthread UUID。childのsession_idは親と共有するruntimeもある。
+                identity = payload.get("id") if "id" in payload else payload.get("session_id")
+                if identity != owner or matched:
                     raise ValueError("session_identity_mismatch")
                 matched = True
             if not matched or record.get("type") != "event_msg":

@@ -260,3 +260,17 @@ def test_partial_event_and_large_input_are_not_trusted(tmp_path, monkeypatch):
     monkeypatch.setattr(evidence, "MAX_EVENT_BYTES", 10)
     with pytest.raises(ValueError, match="input_limit"):
         evidence.observe(path, OWNER)
+
+
+def test_child_thread_identity_is_not_confused_with_parent_session_group(tmp_path):
+    """childのidとsession_idが異なる実runtimeで拒否・親への誤帰属を防ぐ。"""
+    child = "01a07c70-6ca8-7fb0-af44-05aefe156087"
+    path = tmp_path / "child.jsonl"
+    meta = {
+        "type": "session_meta",
+        "payload": {"id": child, "session_id": OWNER, "parent_thread_id": OWNER},
+    }
+    path.write_text(json.dumps(meta) + "\n", encoding="utf-8")
+    assert evidence.observe(path, child)["owner"] == child
+    with pytest.raises(ValueError, match="identity_mismatch"):
+        evidence.observe(path, OWNER)

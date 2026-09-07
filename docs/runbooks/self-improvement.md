@@ -70,7 +70,7 @@ python scripts/automation/runner.py observe --owner <structured-thread-uuid> --e
 python scripts/automation/runner.py status
 ```
 
-最初の2行にある`session_meta.id` / `session_id`と、許可した`task_started` / `task_complete`の時刻・種別だけを抽出する。本文、path、secret、token usageは保存しない。読取は16 MiB・10万行、1行1 MiBが上限。未終端の行は次回の明示読取まで確定しない。これは発火条件ではなく補助観測であり、`task_complete`を改善成功、承認、Issue完了には変換しない。
+最初の2行にある`session_meta.id`をthread UUIDとして照合する。`id`がない形式だけ`session_id`を使う。childの`session_id`は親と共有される場合があるため、`id`が存在すれば代用しない。許可した`task_started` / `task_complete`の時刻・種別だけを抽出し、本文、path、secret、token usageは保存しない。読取は16 MiB・10万行、1行1 MiBが上限。未終端の行は次回の明示読取まで確定しない。これは発火条件ではなく補助観測であり、`task_complete`を改善成功、承認、Issue完了には変換しない。
 
 `status`のJSONには候補・lease・検証・stop reason・履歴と最新の補助観測がある。既存UIの`artifacts/status/current.json`は上書きせず、sourceを`pm-confirmed`や`codex-event`と偽装しない。既存の管理画面の契約は[local status](live-status.md)に従う。画面連携とApp Server接続はこの課題では未実装。
 
