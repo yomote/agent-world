@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { createRandomActor } from "./actors/randomActor";
 import { worldApi } from "./api/client";
 import type { Action, WorldEvent } from "./api/types";
+import { handleMoveKeyDown } from "./moveKeyboard";
 import { SandboxSession, type TraceEntry } from "./session";
 import { WorldCanvas } from "./world/WorldCanvas";
 
@@ -75,6 +76,7 @@ export default function App() {
   }, [running, available, world, actor, session]);
 
   function move(dx: number, dy: number) {
+    if (!available || running) return;
     const action: Action = { action_id: crypto.randomUUID(), actor_id: "A", type: "move", dx, dy };
     void session.act(action);
   }
@@ -104,7 +106,13 @@ export default function App() {
       )}
 
       <div className="workspace">
-        <section className="world-panel" aria-labelledby="world-title">
+        <section
+          className="world-panel"
+          aria-labelledby="world-title"
+          aria-describedby="world-keyboard-hint"
+          tabIndex={0}
+          onKeyDown={(event) => handleMoveKeyDown(event, available && !running, move)}
+        >
           <div className="panel-heading">
             <h2 id="world-title">World</h2>
             <span>
@@ -120,6 +128,9 @@ export default function App() {
             <span>● Agent A</span>
             <span>原点: 左上 / x → / y ↓</span>
           </div>
+          <p className="world-footer" id="world-keyboard-hint">
+            このWorld領域をクリック、またはTabで選択して矢印キーでmove。長押しでは連続発行しません。
+          </p>
         </section>
 
         <aside className="actor-panel" aria-labelledby="actor-title">

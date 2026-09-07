@@ -17,7 +17,7 @@ python scripts/dev.py
 
 ## 観察する
 
-1. グリッドのAは初期位置 `(3, 2)`。矢印ボタンでmoveを発行する。
+1. グリッドのAは初期位置 `(3, 2)`。矢印ボタンでmoveを発行する。World領域をクリック、またはTabで選択すると、矢印キーでも同じmoveを発行できる。長押しでは連続発行しない。入力欄・編集領域や修飾キー付きの操作には干渉しない。送信中・Random actor実行中・World未接続時はボタンと同様に発行できない。
 2. Simulatorが許可した移動だけがPhaserと「確定位置」に反映される。
 3. 下部のAction Traceに `A → move(dx=1, dy=0) → success` と移動前後・revisionが出る。
 4. Aを端まで動かし、さらに外向きに移動すると `failure / Worldの境界外`。座標とrevisionは変わらない。
