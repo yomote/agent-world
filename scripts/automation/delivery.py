@@ -185,10 +185,10 @@ class Campaign:
             raise Stop("unknown", "smoke_marker_missing")
         self.finish_step("job_verified", "real_cli_job_verified")
 
-    def check_scope(self, workspace, head):
+    def check_scope(self, workspace, head, *, base=None):
         if git(workspace, "status", "--porcelain") or git(workspace, "rev-parse", "HEAD") != head:
             raise Stop("stopped", "head_dirty_or_moved")
-        base = self.data().get("integration_base", self.data()["base"])
+        base = base or self.data().get("integration_base", self.data()["base"])
         paths = git(workspace, "diff", "--name-only", base, head).splitlines()
         if not paths or any(
             not any(
@@ -441,8 +441,9 @@ class Campaign:
         head = git(workspace, "rev-parse", "HEAD")
         if head == data["head"] or git(workspace, "merge-base", data["head"], head) != data["head"]:
             raise Stop("failed", "revision_requires_descendant_head")
-        self.check_scope(workspace, head)
-        data.update(state="job_verified", reason="revised_head", head=head)
+        base = git(workspace, "merge-base", "origin/main", head)
+        self.check_scope(workspace, head, base=base)
+        data.update(state="job_verified", reason="revised_head", head=head, integration_base=base)
         self.save_event(data, "revised_head_same_budget")
 
 

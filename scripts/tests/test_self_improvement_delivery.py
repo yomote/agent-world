@@ -284,7 +284,7 @@ def test_known_failure_revision_preserves_budget_but_unknown_cannot_resume(task,
     monkeypatch.setattr(
         delivery, "git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else HEAD
     )
-    monkeypatch.setattr(task, "check_scope", lambda *args: None)
+    monkeypatch.setattr(task, "check_scope", lambda *args, **kwargs: None)
     task.revise(task.root)
     assert task.data()["state"] == "job_verified"
     assert task.data()["connector_calls"] == 7
