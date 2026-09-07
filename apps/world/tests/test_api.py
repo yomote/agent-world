@@ -53,3 +53,32 @@ def test_rule_failure_is_an_event_and_direct_write_is_unavailable():
         assert response.json()["event"]["status"] == "failure"
         assert response.json()["world"] == before
         assert client.put("/api/world", json=before).status_code == 405
+
+
+def test_other_clients_receive_bounded_success_and_failure_history():
+    """別クライアントが確定Eventを取得できず、failureや上限がHTTP境界で失われる回帰を防ぐ。"""
+    app = create_app()
+    with TestClient(app) as sender, TestClient(app) as observer:
+        assert observer.get("/api/events").json()["events"] == []
+        success = sender.post("/api/actions", json=action()).json()
+        failure = sender.post("/api/actions", json=action(dx=10)).json()
+        response = observer.get("/api/events")
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        observed = response.json()
+        assert observed == {"world": failure["world"], "events": failure["events"]}
+        assert observed["events"] == [success["event"], failure["event"]]
+        assert observed["world"] == success["world"]
+        assert sender.post("/api/actions", json=action(dx=True)).status_code == 422
+        assert observer.get("/api/events").json() == observed
+        for _ in range(79):
+            latest = sender.post("/api/actions", json=action(dx=10)).json()
+        bounded = observer.get("/api/events").json()
+        assert len(bounded["events"]) == len(latest["events"]) == 80
+        assert bounded["events"][0] == failure["event"]
+        assert bounded["events"][-1] == latest["event"]
+        assert bounded["world"] == observed["world"]
+    with TestClient(create_app()) as restarted:
+        fresh = restarted.get("/api/events").json()
+        assert fresh["events"] == []
+        assert fresh["world"]["world_id"] != bounded["world"]["world_id"]
