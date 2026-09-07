@@ -573,7 +573,7 @@ def test_prior_push_reconciliation_requires_one_meaningful_descendant(prior_push
         if args[0] == "diff":
             return changed[0]
         assert args[0] == "merge-base"
-        return evidence["reserved_head"]
+        return task.data()["head"]
 
     monkeypatch.setattr(delivery, "git", revision_git)
     monkeypatch.setattr(task, "check_scope", lambda *args, **kwargs: None)
@@ -592,6 +592,65 @@ def test_prior_push_reconciliation_requires_one_meaningful_descendant(prior_push
         assert after[key] == before[key]
     with pytest.raises(transport.Stop, match="revision_not_allowed"):
         task.revise(task.root)
+    task.finish_step("failed", "independent_review_not_pass")
+    current[0] = "c" * 40
+    task.revise(task.root)
+    assert task.data()["prior_push_revision_head"] == current[0]
+
+
+@pytest.mark.parametrize("change", ["old_head", "other_branch", "late_branch", "late_head"])
+def test_reconciled_delivery_cannot_replay_old_head_or_change_ref(prior_push, monkeypatch, change):
+    """review開始前とpush直前の巻戻し・ref変更が旧push再送に進む回帰を防ぐ。"""
+    task, _, evidence = prior_push
+    task.reconcile_push()
+    revised = "b1a6942f134d4ab4456614108497ec569d61ec9f"
+    data = task.data()
+    data.update(
+        state="job_verified",
+        reason="revised_head",
+        head=revised,
+        prior_push_revision_head=revised,
+    )
+    task.save_event(data, "test_revised")
+    current = [evidence["reserved_head"] if change == "old_head" else revised]
+    branch = ["codex/other" if change == "other_branch" else evidence["branch"]]
+    operations = []
+
+    def local_git(workspace, *args):
+        assert args[0] not in {"push", "fetch", "ls-remote"}
+        if args[0] == "remote":
+            return "https://github.com/yomote/agent-world.git"
+        if args[0] == "branch":
+            return branch[0]
+        if args[0] == "rev-parse":
+            return current[0]
+        if args[0] == "status":
+            return ""
+        if args[0] == "diff":
+            return "scripts/automation/delivery.py"
+        return evidence["reserved_head"]
+
+    def review_check(operation, *args, **kwargs):
+        operations.append(operation)
+        if operation == "independent_review":
+            return {"head": revised, "reviewer": delivery.REVIEWER, "verdict": "pass"}
+        assert operation == "current_check"
+        if change == "late_branch":
+            branch[0] = "codex/other"
+        if change == "late_head":
+            current[0] = evidence["reserved_head"]
+        return {"head": revised, "end_head": revised, "clean": True, "exit_code": 0}
+
+    monkeypatch.setattr(delivery, "git", local_git)
+    monkeypatch.setattr(task.transport, "call", review_check)
+    monkeypatch.setattr(
+        task.transport.github, "git_transfer", lambda *args, **kwargs: pytest.fail("push reached")
+    )
+    reason = "head_dirty_or_moved" if change == "late_head" else "confirmed_push_revision_moved"
+    with pytest.raises(transport.Stop, match=reason):
+        task.deliver(task.root)
+    assert len(operations) == (2 if change.startswith("late_") else 0)
+    assert task.data()["head"] == revised
 
 
 def test_only_interrupted_read_only_review_can_resume(task, monkeypatch):

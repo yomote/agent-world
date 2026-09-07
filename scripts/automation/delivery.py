@@ -249,6 +249,8 @@ class Campaign:
             lease_until=None,
             reason="read_only_review_resumed",
         )
+        if data.get("confirmed_prior_push"):
+            data["prior_push_revision_head"] = head
         self.save_event(
             data, "interrupted_review_saved_new_request_required", cancelled_review=request_id
         )
@@ -283,6 +285,18 @@ class Campaign:
         ):
             raise Stop("stopped", "scope_violation")
 
+    def check_confirmed_revision(self, head, branch):
+        data = self.data()
+        prior = data.get("confirmed_prior_push")
+        if prior and (
+            self.name != "runner"
+            or head != data["head"]
+            or head != data.get("prior_push_revision_head")
+            or head == prior["head"]
+            or branch != prior["branch"]
+        ):
+            raise Stop("stopped", "confirmed_push_revision_moved")
+
     def deliver(self, workspace: Path):
         if self.data()["state"] != "job_verified":
             raise Stop("stopped", "real_job_required_before_delivery")
@@ -299,6 +313,7 @@ class Campaign:
         if git(workspace, "remote", "get-url", "origin") != f"https://github.com/{REPOSITORY}.git":
             raise Stop("stopped", "origin_not_allowed")
         head = git(workspace, "rev-parse", "HEAD")
+        self.check_confirmed_revision(head, git(workspace, "branch", "--show-current"))
         data = self.data()
         data["integration_base"] = git(workspace, "merge-base", "origin/main", head)
         data["head"] = head
@@ -339,6 +354,7 @@ class Campaign:
         self.save_event(data, "current_check_pass")
         self.check_scope(workspace, head)
         branch = git(workspace, "branch", "--show-current")
+        self.check_confirmed_revision(head, branch)
         if not branch.startswith("codex/"):
             raise Stop("stopped", "branch_not_allowed")
         self.transport.github.git_transfer(workspace, "push", head=head, branch=branch)
@@ -643,7 +659,7 @@ class Campaign:
         head = git(workspace, "rev-parse", "HEAD")
         if head == data["head"] or git(workspace, "merge-base", data["head"], head) != data["head"]:
             raise Stop("failed", "revision_requires_descendant_head")
-        if reconciled and (
+        if data.get("confirmed_prior_push") and (
             workspace.resolve() != self.root.resolve()
             or not git(workspace, "diff", "--name-only", data["head"], head)
         ):
@@ -651,7 +667,7 @@ class Campaign:
         base = git(workspace, "merge-base", "origin/main", head)
         self.check_scope(workspace, head, base=base)
         data.update(state="job_verified", reason="revised_head", head=head, integration_base=base)
-        if reconciled:
+        if data.get("confirmed_prior_push"):
             data["prior_push_revision_head"] = head
             data.pop("review", None)
             data.pop("current_check", None)
