@@ -31,6 +31,8 @@ def test_transport_reserves_before_delivery_and_claim_is_once(task, monkeypatch)
 
     def relay(path, request):
         write(path, request)
+        if path.name != "request.json":
+            return
         row = task.db.execute(
             "SELECT state FROM delivery_operations WHERE id=?", (request["id"],)
         ).fetchone()
@@ -59,6 +61,8 @@ def test_unknown_write_and_approval_response_stop_without_retry(task, monkeypatc
 
     def denied(path, request):
         write(path, request)
+        if path.name != "request.json":
+            return
         write(
             path.parent / (request["id"] + ".response.json"),
             {
@@ -124,6 +128,8 @@ def test_result_identity_cannot_be_substituted(task, monkeypatch):
     write = transport.atomic_json
 
     def wrong(path, request):
+        if path.name != "request.json":
+            return
         write(
             path.parent / (request["id"] + ".response.json"),
             {
@@ -144,6 +150,7 @@ def test_latest_failed_ci_does_not_reuse_old_success(task, monkeypatch):
         dict(
             head_sha=HEAD,
             event="pull_request",
+            pull_requests=[{"number": 25}],
             path=".github/workflows/ci.yml",
             status="completed",
             conclusion=status,
@@ -153,10 +160,62 @@ def test_latest_failed_ci_does_not_reuse_old_success(task, monkeypatch):
         )
         for attempt, status in [(1, "success"), (2, "skipped")]
     ]
-    monkeypatch.setattr(task.transport, "call", lambda *args, **kwargs: {"workflow_runs": runs})
+    monkeypatch.setattr(
+        task.transport,
+        "call",
+        lambda *args, **kwargs: {"workflow_runs": runs, "total_count": len(runs)},
+    )
     with pytest.raises(transport.Stop, match="not_success"):
-        task.wait_ci(HEAD)
+        task.wait_ci(HEAD, 25)
     assert task.data()["ci_queries"][HEAD]["count"] == 1
+
+
+def test_other_pr_ci_never_passes_current_pr(task, monkeypatch):
+    """別PRで同headの成功を今回のPRへ流用する回帰を防ぐ。"""
+    calls = []
+
+    def answer(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:
+            raise transport.Stop("stopped", "test_no_current_pr_run")
+        return {
+            "total_count": 1,
+            "workflow_runs": [
+                {
+                    "head_sha": HEAD,
+                    "event": "pull_request",
+                    "path": ".github/workflows/ci.yml",
+                    "pull_requests": [{"number": 24}],
+                    "status": "completed",
+                    "conclusion": "success",
+                    "id": 1,
+                    "run_number": 1,
+                    "run_attempt": 1,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(task.transport, "call", answer)
+    monkeypatch.setattr(delivery.time, "sleep", lambda _: task.data())
+    data = task.data()
+    data["ci_queries"][HEAD] = {"count": 9, "last_at": 0}
+    task.save_event(data, "test_budget")
+    with pytest.raises(transport.Stop, match="ci_query_budget"):
+        task.wait_ci(HEAD, 25)
+    assert "ci" not in task.data()
+
+
+def test_helper_requires_parent_merge_before_any_issue(task, monkeypatch, tmp_path):
+    """runner未mergeでhelperのIssueやjobが作られる回帰を防ぐ。"""
+    from scripts.automation import helper_job
+
+    child = delivery.Campaign(
+        type("RunnerRef", (), {"db": task.db, "root": task.root})(), "billing-helper"
+    )
+    child.init(OWNER, HEAD)
+    with pytest.raises(transport.Stop, match="runner_merge_required"):
+        helper_job.implement(child, tmp_path / "missing.json")
+    assert child.data()["connector_calls"] == 0
 
 
 def test_unprotected_main_never_reaches_merge(task, monkeypatch):
@@ -208,3 +267,27 @@ def test_no_receipt_import_command_or_bypass_option():
     assert "--approve-for-me" not in source
     assert "--dangerously-bypass" not in source
     assert "--ignore-rules" not in source
+
+
+def test_known_failure_revision_preserves_budget_but_unknown_cannot_resume(task, monkeypatch):
+    """修正後の再reviewでbudgetを戻し、unknown writeまで再開する回帰を防ぐ。"""
+    data = task.data()
+    data.update(
+        state="failed",
+        reason="independent_review_not_pass",
+        head=HEAD,
+        connector_calls=7,
+        token=None,
+        lease_until=None,
+    )
+    task.save_event(data, "test_failed")
+    monkeypatch.setattr(
+        delivery, "git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else HEAD
+    )
+    monkeypatch.setattr(task, "check_scope", lambda *args: None)
+    task.revise(task.root)
+    assert task.data()["state"] == "job_verified"
+    assert task.data()["connector_calls"] == 7
+    task.finish_step("unknown", "merge_result_unknown")
+    with pytest.raises(transport.Stop, match="revision_not_allowed"):
+        task.revise(task.root)

@@ -46,6 +46,7 @@ class Transport:
                 "VALUES (?,?,?,'inflight',?)",
                 (identifier, task.name, operation, json.dumps(request)),
             )
+        atomic_json(task.directory / "status.json", data)
         directory = task.directory / "transport"
         directory.mkdir(exist_ok=True)
         atomic_json(directory / "request.json", request)

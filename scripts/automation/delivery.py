@@ -78,6 +78,8 @@ class Campaign:
         )
 
     def save_event(self, data, kind):
+        data["updated_at"] = time.time()
+        data["last_event"] = kind
         with self.db:
             self.save(data)
             self.db.execute(
@@ -162,6 +164,7 @@ class Campaign:
             data["last_seen"] = time.time()
             with self.db:
                 self.save(data)
+            atomic_json(self.directory / "status.json", data)
 
     def finish_step(self, state, reason):
         data = self.data()
@@ -261,18 +264,21 @@ class Campaign:
             "検証: npm run check / clean current head pass\n"
             "承認待ち・結果不明で停止。Azure操作・credential・保護変更なし。\n"
         )
-        pr = self.transport.call(
-            "create_draft_pr",
-            {
-                "repository_full_name": REPOSITORY,
-                "head_branch": branch,
-                "base_branch": "main",
-                "title": "feat: bounded local improvement " + self.name,
-                "body": body,
-                "draft": True,
-            },
-            write=True,
-        )
+        if data["pr"] is None:
+            pr = self.transport.call(
+                "create_draft_pr",
+                {
+                    "repository_full_name": REPOSITORY,
+                    "head_branch": branch,
+                    "base_branch": "main",
+                    "title": "feat: bounded local improvement " + self.name,
+                    "body": body,
+                    "draft": True,
+                },
+                write=True,
+            )
+        else:
+            pr = {"number": data["pr"]}
         number = pr.get("number") or pr.get("pr_number")
         if not isinstance(number, int):
             raise Stop("unknown", "draft_pr_identity_missing")
@@ -291,14 +297,20 @@ class Campaign:
             },
             write=True,
         )
-        self.transport.call(
-            "ready_pr", {"repository_full_name": REPOSITORY, "pr_number": number}, write=True
+        info = self.transport.call(
+            "pr_info", {"repository_full_name": REPOSITORY, "pr_number": number}
         )
+        if info.get("draft") is True:
+            self.transport.call(
+                "ready_pr", {"repository_full_name": REPOSITORY, "pr_number": number}, write=True
+            )
         self.save_event(self.data(), "ready_pr")
-        self.wait_ci(head)
+        self.wait_ci(head, number)
         self.normal_merge(head, number)
 
-    def wait_ci(self, head):
+    def wait_ci(self, head, number):
+        from scripts.merge_gate import GateError, GateTarget, validate_ci
+
         while True:
             self.boundary()
             data = self.data()
@@ -314,15 +326,25 @@ class Campaign:
                 "current_ci", {"repo_full_name": REPOSITORY, "commit_sha": head}
             )
             runs = result.get("workflow_runs", [])
+            if (
+                not isinstance(runs, list)
+                or result.get("total_count") != len(runs)
+                or len(runs) >= 100
+            ):
+                raise Stop("stopped", "ci_page_incomplete")
             matching = [
                 run
                 for run in runs
                 if run.get("head_sha") == head
                 and run.get("event") == "pull_request"
+                and any(item.get("number") == number for item in run.get("pull_requests", []))
                 and str(run.get("path", "")).split("@", 1)[0] == ".github/workflows/ci.yml"
             ]
-            if not matching:
-                continue
+            try:
+                if not validate_ci(matching, GateTarget(number, head)):
+                    continue
+            except GateError as error:
+                raise Stop("failed", "current_ci_not_success") from error
             latest = max(
                 matching,
                 key=lambda run: (
@@ -331,10 +353,6 @@ class Campaign:
                     run.get("id", 0),
                 ),
             )
-            if latest.get("status") != "completed":
-                continue
-            if latest.get("conclusion") != "success":
-                raise Stop("failed", "current_ci_not_success")
             data = self.data()
             data["ci"] = {
                 key: latest.get(key)
@@ -412,6 +430,21 @@ class Campaign:
             return
         self.finish_step("merged", "normal_protected_merge_confirmed")
 
+    def revise(self, workspace):
+        data = self.data()
+        if data["state"] != "failed" or data["reason"] not in {
+            "independent_review_not_pass",
+            "current_check_not_pass",
+            "current_ci_not_success",
+        }:
+            raise Stop(data["state"], "revision_not_allowed")
+        head = git(workspace, "rev-parse", "HEAD")
+        if head == data["head"] or git(workspace, "merge-base", data["head"], head) != data["head"]:
+            raise Stop("failed", "revision_requires_descendant_head")
+        self.check_scope(workspace, head)
+        data.update(state="job_verified", reason="revised_head", head=head)
+        self.save_event(data, "revised_head_same_budget")
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -424,6 +457,8 @@ def main():
     sub.add_parser("smoke")
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
+    revise = sub.add_parser("revise")
+    revise.add_argument("--workspace", type=Path, default=ROOT)
     deliver = sub.add_parser("deliver")
     deliver.add_argument("--workspace", type=Path, default=ROOT)
     args = parser.parse_args()
@@ -442,6 +477,8 @@ def main():
                     from .helper_job import implement
 
                     implement(task, args.source)
+                elif args.command == "revise":
+                    task.revise(args.workspace)
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)
                 return 0
             except Stop as error:

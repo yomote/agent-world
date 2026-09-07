@@ -14,6 +14,10 @@ def implement(task, source: Path):
     task.enter()
     if task.name != "billing-helper":
         raise Stop("stopped", "helper_campaign_required")
+    previous = task.db.execute("SELECT data FROM delivery_campaigns WHERE name='runner'").fetchone()
+    parent = json.loads(previous[0]) if previous else {}
+    if parent.get("state") != "merged" or parent.get("merge_sha") != task.data()["base"]:
+        raise Stop("stopped", "runner_merge_required")
     evidence = json.loads(source.read_text(encoding="utf-8-sig"))
     keys = {"debrief_id", "finding", "source_sha256", "source_ref"}
     if set(evidence) != keys or evidence["finding"] != "billing_evidence_normalization":
@@ -26,6 +30,21 @@ def implement(task, source: Path):
     duplicate = digest((evidence["debrief_id"] + ":billing-evidence-normalization-v1").encode())
     if data.get("duplicate_key"):
         raise Stop("stopped", "duplicate_job_no_relaunch")
+    # squash merge objectを取得・検証してからIssueを作る。準備失敗で外部writeを残さない。
+    if git(task.root, "remote", "get-url", "origin") != f"https://github.com/{REPOSITORY}.git":
+        raise Stop("stopped", "origin_not_allowed")
+    git(task.root, "fetch", "origin", "main")
+    if git(task.root, "merge-base", data["base"], "origin/main") != data["base"]:
+        raise Stop("stopped", "runner_merge_not_on_main")
+    workspace = task.directory / "checkout"
+    if workspace.exists():
+        raise Stop("stopped", "helper_checkout_exists")
+    git(task.root, "clone", "--no-hardlinks", str(task.root), str(workspace))
+    git(workspace, "checkout", "-b", "codex/billing-debrief-helper", data["base"])
+    git(workspace, "remote", "set-url", "origin", f"https://github.com/{REPOSITORY}.git")
+    git(workspace, "update-ref", "refs/remotes/origin/main", data["base"])
+    if any((workspace / path).exists() for path in SCOPES["billing-helper"]):
+        raise Stop("stopped", "helper_targets_must_be_new")
     data.update(debrief=evidence, duplicate_key=duplicate)
     task.save_event(data, "debrief_candidate_created")
     issue = task.transport.call(
@@ -48,13 +67,6 @@ def implement(task, source: Path):
     if not isinstance(data["issue"], int):
         raise Stop("unknown", "issue_identity_missing")
     task.save_event(data, "helper_issue_created")
-    workspace = task.directory / "checkout"
-    if workspace.exists():
-        raise Stop("stopped", "helper_checkout_exists")
-    git(task.root, "clone", "--no-hardlinks", str(task.root), str(workspace))
-    git(workspace, "checkout", "-b", "codex/billing-debrief-helper", data["base"])
-    git(workspace, "remote", "set-url", "origin", "https://github.com/yomote/agent-world.git")
-    git(workspace, "update-ref", "refs/remotes/origin/main", data["base"])
     prompt = (
         "あなたは独立helper実装ownerです。他ownerの編集を戻さない。"
         "次の3新規fileだけを作成・検証・local commitしてください: "
