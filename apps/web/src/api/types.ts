@@ -5,6 +5,7 @@ export type Entity = components["schemas"]["Entity"];
 export type Action = components["schemas"]["Action"];
 export type WorldEvent = components["schemas"]["Event"];
 export type ActionResult = components["schemas"]["ActionResult"];
+export type EventHistory = components["schemas"]["EventHistory"];
 
 export type Observation = Readonly<Omit<WorldState, "entities">> & {
   readonly entities: readonly {

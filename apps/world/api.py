@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Response
 
-from .models import Action, ActionResult, WorldState
+from .models import Action, ActionResult, EventHistory, WorldState
 from .simulator import WorldSimulator
 
 
@@ -16,6 +16,11 @@ def create_app() -> FastAPI:
     @app.post("/api/actions", response_model=ActionResult)
     def act(action: Action) -> ActionResult:
         return simulator.apply(action)
+
+    @app.get("/api/events", response_model=EventHistory)
+    def events(response: Response) -> EventHistory:
+        response.headers["Cache-Control"] = "no-store"
+        return simulator.observe_events()
 
     return app
 

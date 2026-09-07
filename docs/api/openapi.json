@@ -60,6 +60,24 @@
           }
         }
       }
+    },
+    "/api/events": {
+      "get": {
+        "summary": "Events",
+        "operationId": "events_api_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventHistory"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -98,16 +116,24 @@
       },
       "ActionResult": {
         "properties": {
-          "event": {
-            "$ref": "#/components/schemas/Event"
-          },
           "world": {
             "$ref": "#/components/schemas/WorldState"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "maxItems": 80,
+            "title": "Events"
+          },
+          "event": {
+            "$ref": "#/components/schemas/Event"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["event", "world"],
+        "required": ["world", "events", "event"],
         "title": "ActionResult"
       },
       "Entity": {
@@ -188,6 +214,25 @@
           "world_revision"
         ],
         "title": "Event"
+      },
+      "EventHistory": {
+        "properties": {
+          "world": {
+            "$ref": "#/components/schemas/WorldState"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "maxItems": 80,
+            "title": "Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["world", "events"],
+        "title": "EventHistory"
       },
       "HTTPValidationError": {
         "properties": {

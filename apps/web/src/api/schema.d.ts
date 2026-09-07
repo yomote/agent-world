@@ -38,6 +38,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Events */
+    get: operations["events_api_events_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -63,8 +80,10 @@ export interface components {
     };
     /** ActionResult */
     ActionResult: {
-      event: components["schemas"]["Event"];
       world: components["schemas"]["WorldState"];
+      /** Events */
+      events: components["schemas"]["Event"][];
+      event: components["schemas"]["Event"];
     };
     /** Entity */
     Entity: {
@@ -99,6 +118,12 @@ export interface components {
       world_id: string;
       /** World Revision */
       world_revision: number;
+    };
+    /** EventHistory */
+    EventHistory: {
+      world: components["schemas"]["WorldState"];
+      /** Events */
+      events: components["schemas"]["Event"][];
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -199,6 +224,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  events_api_events_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EventHistory"];
         };
       };
     };

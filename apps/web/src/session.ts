@@ -1,7 +1,7 @@
-import type { Action, ActionResult, WorldEvent, WorldState } from "./api/types";
+import type { Action, ActionResult, EventHistory, WorldEvent, WorldState } from "./api/types";
 
 export interface WorldApi {
-  observe(): Promise<WorldState>;
+  observe(): Promise<EventHistory>;
   act(action: Action): Promise<ActionResult>;
 }
 
@@ -27,6 +27,8 @@ export class SandboxSession {
   };
   private listeners = new Set<() => void>();
   private observing: Promise<void> | null = null;
+  // 表示から押し出されたEventも次のpollで再追加しない。保持は最新snapshotの最大80 IDだけ。
+  private observedEventIds = new Set<string>();
 
   constructor(private readonly api: WorldApi) {}
 
@@ -42,12 +44,30 @@ export class SandboxSession {
     this.listeners.forEach((listener) => listener());
   }
 
-  private accept(world: WorldState) {
+  private accept({ world, events }: EventHistory) {
     const previous = this.state.world;
     if (previous?.world_id === world.world_id && previous.revision > world.revision) return;
+    const reset = previous !== null && previous.world_id !== world.world_id;
+    if (reset) this.observedEventIds.clear();
+    const snapshot = new Map(
+      events
+        .filter((event) => event.world_id === world.world_id)
+        .slice(-80)
+        .map((event) => [event.event_id, event]),
+    );
+    const added = [...snapshot.values()]
+      .filter((event) => !this.observedEventIds.has(event.event_id))
+      .reverse()
+      .map((event): TraceEntry => ({ kind: "event", event }));
+    const retained = reset
+      ? []
+      : this.state.trace.filter(
+          (entry) => entry.kind === "unknown" || snapshot.has(entry.event.event_id),
+        );
+    this.observedEventIds = new Set(snapshot.keys());
     this.update({
       world,
-      trace: previous && previous.world_id !== world.world_id ? [] : this.state.trace,
+      trace: [...added, ...retained].slice(0, 80),
       connection: "online",
       error: null,
     });
@@ -58,7 +78,7 @@ export class SandboxSession {
     if (this.observing) return this.observing;
     this.observing = this.api
       .observe()
-      .then((world) => this.accept(world))
+      .then((history) => this.accept(history))
       .catch((error: unknown) => {
         this.update({ connection: "offline", error: `Worldを取得できません: ${String(error)}` });
       })
@@ -74,10 +94,7 @@ export class SandboxSession {
     await this.observing;
     try {
       const result = await this.api.act(action);
-      this.accept(result.world);
-      this.update({
-        trace: [{ kind: "event" as const, event: result.event }, ...this.state.trace].slice(0, 80),
-      });
+      this.accept(result);
       return true;
     } catch (error) {
       const detail = `通信失敗・結果不明（自動再送なし）: ${String(error)}`;

@@ -197,7 +197,7 @@ export default function App() {
       <section className="trace-panel" aria-labelledby="trace-title">
         <div className="panel-heading">
           <h2 id="trace-title">Action Trace</h2>
-          <span>このタブの直近 {trace.length} / 80 件 · 新しい順</span>
+          <span>共有Worldの履歴 {trace.length} / 80 件 · 結果不明はこのタブのみ · 新しい順</span>
         </div>
         <div className="causal-path">
           <span>Agent</span>

@@ -6,12 +6,15 @@ flowchart LR
   Actor[独立した random actor] --> Action
   Action[Action: move] -->|POST /api/actions| Simulator[World Simulator]
   Simulator -->|唯一の変更者| State[WorldState]
-  Simulator -->|同時に確定| Result[Event + WorldState]
+  Simulator -->|同時に確定| Result[Event + WorldState + 直近80件のEvent]
   Result --> Trace[React Action Trace]
   Result --> Canvas[Phaser 描画]
   State -->|GET /api/world| Observation[読み取り専用の観測]
   Observation --> Actor
   Observation --> Canvas
+  Simulator -->|GET /api/events・1秒polling| History[WorldState + 直近80件のEvent]
+  History --> Trace
+  History --> Canvas
 ```
 
 ## モデル
@@ -36,7 +39,7 @@ Pythonの正典は `apps/world/models.py`。OpenAPI JSONとTypeScript定義は�
 
 ## HTTP契約
 
-GET `/api/world` はキャッシュしない観測。POST `/api/actions` は以下のActionを受け、`{ event, world }` を返す。
+GET `/api/world` はキャッシュしないWorldStateの観測。GET `/api/events` は同じ時点の `{ world, events }` を `Cache-Control: no-store` で返す。eventsは確定順（古い順）の直近80件で、successとfailureを含む。POST `/api/actions` は以下のActionを受け、`{ event, world, events }` を返す。eventsの末尾はこのPOSTで確定したeventである。
 
 ```json
 {
@@ -50,18 +53,20 @@ GET `/api/world` はキャッシュしない観測。POST `/api/actions` は以�
 
 ルール上の成功・失敗はどちらもHTTP 200でEventを返す。型違い、余分なフィールド、不正UUID、move以外のtypeはHTTP 422で状態を変更しない。通信・プロトコルエラーはUIで結果不明として記録する。
 
-ロックは判定・State更新・EventとStateのスナップショット作成を一括で保護する。FastAPIは1プロセスで起動する。複数workerはそれぞれ別のWorldを作るため非対応。
+ロックは判定・State更新・上限80件のdequeへのEvent追加・Stateと履歴のスナップショット作成を一括で保護する。履歴のGETも同じロックを使い、Worldと履歴の観測時点を揃える。422の不正な入力は履歴にも追加しない。FastAPIは1プロセスで起動する。複数workerはそれぞれ別のWorldを作るため非対応。
 
 ## UIとActorの境界
 
 `Actor.propose(readonly observation) → Action | null` は通信・描画に依存しない。random actorは境界外でも提案し、許否はSimulatorに任せる。将来のMAF等はこの提案責務を置換するか、別プロセスからHTTPで観測とActionを実行する。World側にSDKのimportやAgentのライフサイクルを追加しない。
 
-`SandboxSession` はGETとPOSTを直列化し、同じworld_idの古いrevisionを採用しない。POSTが返るまで座標を更新せず、その後Phaserへ確定Stateを渡す。通信失敗時は最後の確定Stateに未接続表示を付ける。自動再送・楽観更新・クライアントのmove判定はしない。
+`SandboxSession` はGET `/api/events` とPOSTを直列化し、同じworld_idの古いrevisionを採用しない。POSTが返るまで座標を更新せず、その後Phaserへ確定Stateを渡す。どちらの応答も同じWorldと履歴の組として取り込むため、別タブのActionがPOST直前に確定しても順序を保つ。通信失敗時は最後の確定Stateと履歴に未接続表示を付ける。自動再送・楽観更新・クライアントのmove判定はしない。
 
-random実行は停止可能。停止時にすでに送信済みのActionがあれば、その結果までは反映される。Traceはタブ内80件で、サーバーのworld_idが変わると旧履歴をクリアする。
+random実行は停止可能。停止時にすでに送信済みのActionがあれば、その結果までは反映される。Traceは共有Eventとタブ内の通信結果不明を合わせて最大80件、新しい順で表示する。1秒ごとのpollingで別タブのEventも取得し、直前の履歴snapshotのevent_id（最大80件）で重複を除く。revisionが同じfailureも取り込む。サーバーのworld_idが変わると旧Traceと既読IDをクリアし、新Worldの履歴へ切り替える。異なるworld_idのEventは取り込まない。
+
+履歴は揮発性で、プロセス再起動で破棄する。新規タブは保持中の最大80件を取得できるが、80件を超える過去や取得間隔中に破棄されたEventは復元できない。通信結果不明が表示枠を使う場合、表示される確定Eventは80件未満となる。設計判断とトレードオフは[ADR 0008](adr/0008-shared-action-trace.md)に記録する。
 
 ## 今回の境界
 
-Event永続化、全クライアントへのEvent配信、重複排除、認証、World設定の実行時変更は次段階。APIに同一action_idを再送すればもう一度評価される。現在のUIは自動再送しない。複数自律Resident・一時グループ・God Agentは概念上の将来像に留める。
+Event永続化、欠落のない配信、WebSocket、Action実行の冪等性、認証、World設定の実行時変更は対象外。event_idによる表示の重複排除は、Action再実行の抑止ではない。APIに同一action_idを再送すればもう一度評価される。現在のUIは自動再送しない。複数自律Resident・一時グループ・God Agentは概念上の将来像に留める。
 
 技術参照: [Vite](https://vite.dev/guide/)、[Phaser](https://docs.phaser.io/phaser/getting-started/installation)、[FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/)。

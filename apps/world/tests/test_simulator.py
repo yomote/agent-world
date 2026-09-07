@@ -88,3 +88,55 @@ def test_concurrent_actions_are_serialized():
     assert sorted(result.world.revision for result in results) == list(range(1, 21))
     assert simulator.observe().entities[0].position.x == start_x + 20
     assert all(result.world.entities[0].position == result.event.after for result in results)
+    assert all(result.events[-1] == result.event for result in results)
+    assert all(len(result.events) == result.world.revision for result in results)
+
+
+def test_event_history_is_bounded_ordered_and_volatile():
+    """failureでrevisionが増えなくても履歴を残し、81件目で最古を破棄する。"""
+    simulator = WorldSimulator(width=1, height=1)
+    empty = simulator.observe_events()
+    assert empty.events == ()
+    events = [simulator.apply(move()).event for _ in range(81)]
+    observed = simulator.observe_events()
+    assert observed.events == tuple(events[-80:])
+    assert observed.world == empty.world
+    assert all(event.status == "failure" for event in observed.events)
+    assert len({event.event_id for event in observed.events}) == 80
+    assert empty.events == ()
+    restarted = WorldSimulator().observe_events()
+    assert restarted.events == ()
+    assert restarted.world.world_id != observed.world.world_id
+
+
+def test_event_history_snapshot_cannot_modify_simulator():
+    """取得した履歴やPOST応答の参照からSimulator所有の履歴を変更する抜け道を防ぐ。"""
+    simulator = WorldSimulator()
+    result = simulator.apply(move())
+    observed = simulator.observe_events()
+    with pytest.raises(ValidationError):
+        observed.events[0].action.dx = 100
+    with pytest.raises(ValidationError):
+        result.events[0].after.x = 100
+    payload = observed.model_dump()
+    payload["events"][0]["action"]["dx"] = 100
+    simulator.apply(move())
+    assert len(observed.events) == len(result.events) == 1
+    assert simulator.observe_events().events[0] == result.event
+
+
+def test_concurrent_history_reads_match_world_snapshot():
+    """World読取と履歴読取の間にActionが入り、異なる時点を返す回帰を防ぐ。"""
+    simulator = WorldSimulator(width=200, height=1)
+
+    def apply_and_observe(_):
+        simulator.apply(move())
+        return simulator.observe_events()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        snapshots = list(executor.map(apply_and_observe, range(40)))
+    for snapshot in snapshots:
+        assert len(snapshot.events) == snapshot.world.revision
+        assert snapshot.events[-1].world_revision == snapshot.world.revision
+        assert snapshot.events[-1].after == snapshot.world.entities[0].position
+        assert all(event.world_id == snapshot.world.world_id for event in snapshot.events)
