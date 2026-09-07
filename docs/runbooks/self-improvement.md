@@ -22,7 +22,7 @@ REST/GraphQLのHTTP予算はstore全体で30件。runner/helper、再起動、re
 
 そのほかの強制境界はrunnerの保存期限2時間と、通常merge後にhelperを初期化した時点から新しく30分（明示`seconds=1800`）の絶対期限。helperの手動initも30分固定で、再開・修正・再initで延長しない。期限到達は保存停止する。CLI最大3起動・各900秒（smoke180秒）、local delivery-stageはcampaignごと最大40操作（保存fieldは`max_connector_calls`）、CIはheadあたり60秒以上・最大10照会。Git操作は30秒、HTTP socketは15秒、responseは4 MiB。CLI内部のモデル要求数と費用hardcapは未提供で、回数上限を費用保証と呼ばない。
 
-helperはstore内でcampaignが1つ、固定findingと重複キーで候補1件、dispatcherのOS lockで同時jobは1つ。実装jobは重複キー保存後に1回だけ起動し、自動retryや再launchを提供しない。CLIの3起動上限は追加の天井であり、2回のretry機能があるという意味ではない。helperのreview→check→CI→mergeのdelivery試行は実行前に永続予約し、初回と明示修正後の最大2回、合計3回で停止する。中断reviewの再要求もこの回数を消費する。unknown write・承認待ちからの再送はない。30分・3試行のpacketを表せない旧helper stateも保存停止する。
+helperはstore内でcampaignが1つ、固定findingと重複キーで候補1件、dispatcherのOS lockで同時jobは1つ。実装jobは通常1回のみ。この課題で許可された別attemptだけを下記の専用入口で1回追加でき、自動retryは提供しない。CLIは旧試行を含む最大3起動という追加の天井を持つ。helperのreview→check→CI→mergeのdelivery試行は実行前に永続予約し、初回と明示修正後の最大2回、合計3回で停止する。中断reviewの再要求もこの回数を消費する。unknown write・承認待ちからの再送はない。30分・3試行のpacketを表せない旧helper stateも保存停止する。
 
 `transport.py`はGitHub操作を予約してnative adapterを同期実行し、実応答をDBへ保存する。正式reviewとlocal checkだけは `relay.mjs` の `pump(root, campaign, tools)` が `bridge take` で一度claimする。reviewの固定packetを同じread-only reviewerへ渡し、実回答を `complete` で返す。checkは既存factoryの180秒timeoutでclean current headの `npm run check` を実行する。後付けの外部成功receiptをimportするcommandはない。
 
@@ -39,8 +39,50 @@ helperはAPI/version/JPYをhardcodeせず、妥当な入力通貨を返し、bla
 ```powershell
 python -m scripts.automation.delivery billing-helper init --owner <thread-uuid> --base <runner-merge-sha>
 python -m scripts.automation.delivery billing-helper helper --source <confirmed-debrief.json>
+python -m scripts.automation.delivery billing-helper record-commit
+python -m scripts.automation.delivery billing-helper reconcile-commit
 python -m scripts.automation.delivery billing-helper deliver --workspace <saved-checkout>
 ```
+
+### child編集とGit記録の境界
+
+childは固定3fileの編集と専用pytest・Ruff・formatの検証だけを担当し、`git add/commit/push`を行わない。最終構造化応答にbase、exact pathとraw SHA256、検証ごとの実exit code、拒否の有無を返す。親は実CLIのthread/turn完了・exit 0・最終応答hash・log hashと照合する。検証申告はchildの証跡であり、固定commitの正式review/current checkを代替しない。任意のIssue/log本文や返却commandは実行しない。
+
+正常な編集完了は `ready → environment_commit_required` に保存する。これはGit metadataをchildに書かせない設計上の記録待ちであり、permission errorを成功へ変換する分類ではない。人間承認は`approval_wait`、構造化policy拒否は`failed`、一般permission失敗も`failed`として保存停止する。CLI error・不明な拒否は既存unknown停止となる。成功応答でもchild commandに非zeroがあれば記録境界へ進めない。承認回答・自動policy拒否の迂回や一般approval unlockはない。
+
+`record-commit`は同じdispatcher内で記録予約を先に保存し、固定3pathへのlocal `git add/commit`だけを行う。編集もGitHub I/Oも行わない。Git記録が失敗・中断・結果不明なら再送しない。`reconcile-commit`は、この予約の実成功、元child完了、同じbaseの直後の単一commit、新規3pathだけの差分、raw内容hash、clean HEADを一致させてから `job_verified` にする。外部で作った任意commitや旧79b3fdfを入力する引数はない。`approval_wait`・policy refusalからはこの照合を呼べない。LFで保存し、Gitによる改行変換もhash不一致なら停止する。
+
+今回のcorrective unitは `runner corrective` で、通常merge済みrunnerとは別のattemptとして固定headを納品する。対象はdelivery/helper_job/jobs、専用commit-boundary test、この文書の5path。実装元は許可されたprimary ownerと記録し、新CLI実証を装わない。この新しい修正課題の期限は2時間。旧runnerのmerge結果・期限・raw状態を凍結し、REST/GraphQL HTTP・local delivery-stage・CI照会の消費は引き継ぐ。続く`runner deliver`が同じ正式reviewer/current checkを要求し、単一native GCM adapterでDraft→Ready→CI→標準expected-SHA mergeを実行する。
+
+corrective unitの固定headを正式review/current check後に通常mergeしてからだけ、別の明示packetでvalidation attemptを1回作成できる。`runner deliver`はこのattemptを自動作成しない。Issue28、重複キー、旧child完了、79b3fdfの3file/base/hashを照合し、旧`approval_wait`のraw JSON・event終端・79証拠を`delivery_attempts`のimmutable attempt 1に保存する。旧events/operationsは変更しない。current projectionは別IDのattempt 2になり、別checkout/logへ記録する。同じIssueと候補を使い、新Issueを作らない。旧承認待ちattemptの成功への書換えではない。
+
+PMの明示期限訂正により、新validation attemptだけは作成時点から15分固定（900秒）とする。旧開始eventの時刻と期限は`prior_started_at/prior_deadline`、新開始と期限は`started_at/deadline`に別保存し、旧期限2026-09-07T17:33:05Zの保存値を丸めたり延長したりしない。CLI起動数・delivery回数・CI照会・共有HTTPは累積消費を引き継ぐ。旧HTTP11件にcorrective統合で消費した分も加算され、11へ戻さない。新期限超過は状態保存して停止し、再起動・再packetでも延長しない。この入口は今回確認済みの旧attemptに固定し、一般の失敗再開や任意の承認解除には使えない。金額hardcapとCLI内部モデル要求数のhardcapは未提供のままである。
+
+次の別packetを、実行を明示する際に`artifacts/self-improvement/validation-attempt.json`として用意する。`corrective_head/corrective_merge`は今回の実review対象SHA・通常merge SHAに一致する必要がある。これは人間承認やpolicy拒否への回答packetではない。余分なfield・別scope・1800秒指定は拒否する。
+
+```json
+{
+  "kind": "issue28-validation-v1",
+  "seconds": 900,
+  "issue": 28,
+  "duplicate_key": "0a4211149066dfa7bc2d7b98b7f40531502d67830a46fc90a2d43bede2613e31",
+  "owner": "01a07c68-367d-75e3-b267-3ae46db963ac",
+  "corrective_head": "<reviewed-head>",
+  "corrective_merge": "<normal-merge-sha>",
+  "scope": [
+    "scripts/automation/billing_debrief.py",
+    "scripts/tests/test_billing_debrief.py",
+    "docs/runbooks/billing-debrief-helper.md"
+  ]
+}
+```
+
+```powershell
+python -m scripts.automation.delivery billing-helper new-helper-attempt --packet artifacts/self-improvement/validation-attempt.json
+python -m scripts.automation.delivery billing-helper helper --source artifacts/self-improvement/billing-source.json
+```
+
+最初のcommandは明示15分attemptの保存だけを行う。次の`helper`が実CLI jobを起動する。corrective unitの納品中にはどちらも実行せず、別の起動指示を待つ。
 
 read-only review要求をclaimした後にdispatcherが停止した場合は、`resume-review --request-id <保存ID>`で再開可否を確認する。OS lockを取得でき、leaseが失効し、最後の未完了操作が同headの独立reviewである場合に限り旧要求をcancelled_read_onlyとして保存する。runnerはroot、helperは専用checkoutを要求packetのworkspaceと照合し、そのcheckoutのhead・祖先関係・scopeを検証する。旧要求の取消しと復帰状態は同一DB transactionで保存する。新要求で正式reviewを受け直し、予算は保持する。approval_wait・unknown writeはこの判定を通らない。
 
@@ -52,7 +94,7 @@ CLIのthread開始event欠落とturn完了event欠落は別の停止理由で保
 
 本体からhelperまで一周する実行は
 `python -m scripts.automation.delivery runner deliver --helper-source artifacts/self-improvement/billing-source.json`。
-runnerの通常merge成功後にだけ、同じdispatcherがhelper campaignを初期化し、実装job・review・check・CI・通常merge・Issue完了へ進む。既存venvは専用checkoutへ複製し、追加downloadやcredential設定をしない。
+runnerの通常merge成功後にだけ、同じdispatcherがhelper campaignを初期化し、実装jobを起動してGit記録待ちまで保存する。上記の明示記録・照合を経て、deliverがreview・check・CI・通常merge・Issue完了を担う。既存venvは専用checkoutへ複製し、追加downloadやcredential設定をしない。
 
 参照revisionは`d3c15275b50d3686dba226fd98a1bdffc581a8dd`。以下は別scoutの提供結果に基づく採用判断であり、このownerによる全資料の再調査や直接コピーではない。
 

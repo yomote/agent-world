@@ -31,6 +31,13 @@ SCOPES = {
         "docs/runbooks/billing-debrief-helper.md",
     ),
 }
+CORRECTIVE_PATHS = (
+    "scripts/automation/delivery.py",
+    "scripts/automation/helper_job.py",
+    "scripts/automation/jobs.py",
+    "scripts/tests/test_self_improvement_commit_boundary.py",
+    "docs/runbooks/self-improvement.md",
+)
 
 
 def git(workspace: Path, *arguments: str) -> str:
@@ -60,6 +67,16 @@ class Campaign:
             CREATE TABLE IF NOT EXISTS delivery_operations(
                 id TEXT PRIMARY KEY,campaign TEXT,operation TEXT,state TEXT,
                 request TEXT,response TEXT);
+            CREATE TABLE IF NOT EXISTS delivery_attempts(
+                campaign TEXT, attempt INTEGER, data TEXT NOT NULL,
+                frozen INTEGER NOT NULL, evidence TEXT NOT NULL,
+                PRIMARY KEY(campaign,attempt));
+            CREATE TRIGGER IF NOT EXISTS frozen_attempt_update
+                BEFORE UPDATE ON delivery_attempts WHEN OLD.frozen=1
+                BEGIN SELECT RAISE(ABORT,'frozen_attempt'); END;
+            CREATE TRIGGER IF NOT EXISTS frozen_attempt_delete
+                BEFORE DELETE ON delivery_attempts WHEN OLD.frozen=1
+                BEGIN SELECT RAISE(ABORT,'frozen_attempt'); END;
         """)
         self.token = None
         self.monotonic_deadline = time.monotonic()
@@ -82,6 +99,13 @@ class Campaign:
         return data
 
     def save(self, data):
+        if data.get("attempt_id"):
+            changed = self.db.execute(
+                "UPDATE delivery_attempts SET data=? WHERE campaign=? AND attempt=? AND frozen=0",
+                (json.dumps(data), self.name, data["attempt_id"]),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("attempt_not_mutable")
         self.db.execute(
             "INSERT OR REPLACE INTO delivery_campaigns VALUES (?,?)", (self.name, json.dumps(data))
         )
@@ -105,6 +129,101 @@ class Campaign:
                 (self.name, time.time(), kind, json.dumps(data)),
             )
         atomic_json(self.directory / "status.json", data)
+
+    @property
+    def artifact_directory(self):
+        row = self.db.execute(
+            "SELECT data FROM delivery_campaigns WHERE name=?", (self.name,)
+        ).fetchone()
+        attempt = json.loads(row[0]).get("attempt_id") if row else None
+        path = self.directory / f"attempt-{attempt}" if attempt else self.directory
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def workspace(self):
+        return self.root if self.name == "runner" else self.artifact_directory / "checkout"
+
+    def new_attempt(self, data, evidence):
+        """明示corrective unit専用。旧raw状態とevent範囲を凍結し、別attemptを作る。"""
+        raw = self.db.execute(
+            "SELECT data FROM delivery_campaigns WHERE name=?", (self.name,)
+        ).fetchone()[0]
+        if (
+            json.loads(raw).get("attempt_id")
+            or self.db.execute(
+                "SELECT 1 FROM delivery_attempts WHERE campaign=?", (self.name,)
+            ).fetchone()
+        ):
+            raise Stop("stopped", "explicit_attempt_already_recorded")
+        evidence = {
+            **evidence,
+            "prior_raw_sha256": digest(raw.encode()),
+            "prior_event_end": self.db.execute(
+                "SELECT MAX(seq) FROM delivery_events WHERE campaign=?", (self.name,)
+            ).fetchone()[0],
+            "http_used_at_boundary": self.data()["http_requests"],
+        }
+        data.update(attempt_id=2, previous_attempt=1)
+        # 旧attemptの凍結とcurrent projectionの切替は一つのtransaction。
+        with self.db:
+            self.db.execute(
+                "INSERT INTO delivery_attempts VALUES (?,1,?,1,?)",
+                (self.name, raw, json.dumps(evidence)),
+            )
+            self.db.execute(
+                "INSERT INTO delivery_attempts VALUES (?,2,?,0,'{}')",
+                (self.name, json.dumps(data)),
+            )
+            self.save(data)
+        self.save_event(data, "explicit_attempt_created")
+
+    def corrective(self):
+        """通常merge済みrunnerから、この5fileの明示修正を別unitとして納品する。"""
+        old = self.data()
+        if self.name != "runner" or old["state"] != "merged" or old.get("attempt_id"):
+            raise Stop("stopped", "merged_runner_required_for_corrective_unit")
+        base, head = old["merge_sha"], git(self.root, "rev-parse", "HEAD")
+        self.check_scope(self.root, head, base=base)
+        if (
+            git(self.root, "merge-base", base, head) != base
+            or git(self.root, "branch", "--show-current")
+            != "codex/self-improvement-commit-boundary"
+            or set(git(self.root, "diff", "--name-only", base, head).splitlines())
+            != set(CORRECTIVE_PATHS)
+        ):
+            raise Stop("stopped", "corrective_scope_or_base_mismatch")
+        data = {
+            key: old[key]
+            for key in (
+                "owner",
+                "name",
+                "cli_starts",
+                "max_cli_starts",
+                "connector_calls",
+                "max_connector_calls",
+                "ci_queries",
+                "cost_hardcap",
+                "model_request_hardcap",
+                "upstream_http_hardcap",
+                "github_backend",
+            )
+        }
+        data.update(
+            base=base,
+            integration_base=base,
+            head=head,
+            pr=None,
+            token=None,
+            lease_until=None,
+            job_owner=old["owner"],
+            implementation_source="authorized_primary_owner",
+            state="job_verified",
+            reason="corrective_fixed_head",
+            purpose="commit_boundary",
+            deadline=time.time() + 7200,
+            last_seen=time.time(),
+        )
+        self.new_attempt(data, {"kind": "separate_corrective_unit", "prior_merge": base})
 
     def init(self, owner: str, base: str, *, seconds=None, cli_starts=3, connector_calls=40):
         if self.db.execute(
@@ -161,7 +280,18 @@ class Campaign:
         }:
             raise Stop(data["state"], data["reason"])
         if self.name == "billing-helper" and (
-            data.get("campaign_seconds") != 1800
+            (data.get("attempt_id") != 2 and data.get("campaign_seconds") != 1800)
+            or (
+                data.get("attempt_id") == 2
+                and (
+                    data.get("purpose") != "explicit_billing_validation"
+                    or data.get("campaign_seconds") != 900
+                    or data.get("deadline") != data.get("started_at", 0) + 900
+                    or data.get("validation_packet", {}).get("seconds") != 900
+                    or data.get("validation_packet_sha256")
+                    != digest(json.dumps(data.get("validation_packet"), sort_keys=True).encode())
+                )
+            )
             or data.get("max_delivery_attempts") != 3
             or type(data.get("delivery_attempts")) is not int
             or not 0 <= data["delivery_attempts"] <= 3
@@ -234,7 +364,7 @@ class Campaign:
         request = json.loads(row[3])
         if request["arguments"]["head"] != data["head"]:
             raise Stop("stopped", "review_resume_head_mismatch")
-        workspace = self.root if self.name == "runner" else self.directory / "checkout"
+        workspace = self.workspace()
         if Path(request["arguments"].get("workspace", "")).resolve() != workspace.resolve():
             raise Stop("stopped", "review_resume_workspace_mismatch")
         head = git(workspace, "rev-parse", "HEAD")
@@ -274,6 +404,9 @@ class Campaign:
             raise Stop("stopped", "head_dirty_or_moved")
         base = base or self.data().get("integration_base", self.data()["base"])
         paths = git(workspace, "diff", "--name-only", base, head).splitlines()
+        if self.name == "runner" and self.data().get("purpose") == "commit_boundary":
+            if not paths or not set(paths).issubset(CORRECTIVE_PATHS):
+                raise Stop("stopped", "corrective_scope_mismatch")
         if not paths or any(
             not any(
                 path == entry
@@ -307,7 +440,7 @@ class Campaign:
                 raise Stop("stopped", "helper_delivery_attempt_budget")
             data["delivery_attempts"] += 1
             self.save_event(data, "helper_delivery_attempt_reserved")
-        expected = self.root if self.name == "runner" else self.directory / "checkout"
+        expected = self.workspace()
         if workspace.resolve() != expected.resolve():
             raise Stop("stopped", "workspace_not_allowed")
         if git(workspace, "remote", "get-url", "origin") != f"https://github.com/{REPOSITORY}.git":
@@ -358,8 +491,16 @@ class Campaign:
         if not branch.startswith("codex/"):
             raise Stop("stopped", "branch_not_allowed")
         self.transport.github.git_transfer(workspace, "push", head=head, branch=branch)
+        corrective = data.get("purpose") == "commit_boundary"
+        summary = (
+            "childのGit metadata書込失敗を承認待ちと混同しないため、編集・検証とGit記録を分離。"
+            "exact path/hash/baseと実CLI完了を照合した記録だけをjob_verifiedへ進める。"
+            "旧Issue28の失敗はimmutableな別attemptに保存し、共有予算と期限を保持する。"
+            if corrective
+            else "明示起動するbounded改善の実装と証跡。"
+        )
         body = (
-            "明示起動するbounded改善の実装と証跡。\n\n"
+            summary + "\n\n"
             f"対象head: {head}\n独立review: {REVIEWER} / pass\n"
             "検証: npm run check / clean current head pass\n"
             "承認待ち・結果不明で停止。Azure操作・credential・保護変更なし。\n"
@@ -371,7 +512,11 @@ class Campaign:
                     "repository_full_name": REPOSITORY,
                     "head_branch": branch,
                     "base_branch": "main",
-                    "title": "feat: bounded local improvement " + self.name,
+                    "title": (
+                        "fix: child編集とGit記録の境界を分離する"
+                        if corrective
+                        else "feat: bounded local improvement " + self.name
+                    ),
                     "body": body,
                     "draft": True,
                 },
@@ -731,6 +876,11 @@ def main():
     sub.add_parser("status")
     sub.add_parser("smoke")
     sub.add_parser("reconcile-push")
+    sub.add_parser("corrective")
+    new_helper = sub.add_parser("new-helper-attempt")
+    new_helper.add_argument("--packet", type=Path, required=True)
+    sub.add_parser("record-commit")
+    sub.add_parser("reconcile-commit")
     handoff = sub.add_parser("handoff")
     handoff.add_argument("--reviewed-head", required=True)
     resume_review = sub.add_parser("resume-review")
@@ -763,11 +913,22 @@ def main():
                         from .helper_job import implement
 
                         implement(task, args.helper_source)
-                        task.deliver(task.directory / "checkout")
+                        # childの編集完了はGit記録待ち。成功receiptを後付けしてdeliveryしない。
                 elif args.command == "helper":
                     from .helper_job import implement
 
                     implement(task, args.source)
+                elif args.command == "corrective":
+                    task.corrective()
+                elif args.command in {"new-helper-attempt", "record-commit", "reconcile-commit"}:
+                    from .helper_job import new_attempt, reconcile_commit, record_commit
+
+                    if args.command == "new-helper-attempt":
+                        new_attempt(task, args.packet)
+                    else:
+                        {"record-commit": record_commit, "reconcile-commit": reconcile_commit}[
+                            args.command
+                        ](task)
                 elif args.command == "revise":
                     task.revise(args.workspace)
                 elif args.command == "handoff":

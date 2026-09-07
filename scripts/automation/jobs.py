@@ -1,5 +1,6 @@
 """公開Codex CLIを制限時間内に起動し、構造化eventを生存中に記録する。"""
 
+import hashlib
 import json
 import os
 import queue
@@ -42,7 +43,7 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
         raise Stop("stopped", "codex_unavailable")
     data["cli_starts"] += 1
     task.save_event(data, "cli_reserved")
-    output_path = task.directory / f"cli-{data['cli_starts']}.jsonl"
+    output_path = task.artifact_directory / f"cli-{data['cli_starts']}.jsonl"
     arguments = [
         executable,
         "-a",
@@ -58,7 +59,7 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
         "-",
     ]
     if schema is not None:
-        schema_path = task.directory / "job-output-schema.json"
+        schema_path = task.artifact_directory / "job-output-schema.json"
         schema_path.write_text(json.dumps(schema), encoding="utf-8")
         arguments[-1:-1] = ["--output-schema", str(schema_path)]
     child = subprocess.Popen(
@@ -91,6 +92,7 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
     reader.start()
     end = min(time.monotonic() + seconds, task.monotonic_deadline)
     consumed, completed, owner, last_message = 0, False, None, None
+    command_failed = False
     try:
         with output_path.open("wb") as output:
             while time.monotonic() < end:
@@ -120,12 +122,17 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
                     task.save_event(data, "job_owner_observed")
                 elif kind in ("approval_requested", "approval.required"):
                     raise Stop("approval_wait", "cli_approval_required")
+                elif kind in ("policy.denied", "approval.denied"):
+                    raise Stop("failed", "cli_policy_denied")
                 elif kind in ("turn.failed", "error"):
                     raise Stop("unknown", "cli_error_no_retry")
                 elif kind == "item.completed":
                     item = event.get("item", {})
                     if isinstance(item, dict) and item.get("type") == "agent_message":
                         last_message = item.get("text")
+                    if isinstance(item, dict) and item.get("type") == "command_execution":
+                        if item.get("exit_code") not in (0, None):
+                            command_failed = True
                 elif kind == "turn.completed":
                     completed = True
             else:
@@ -140,6 +147,15 @@ def run_job(task, workspace: Path, prompt: str, *, seconds=900, read_only=False,
         data = task.data()
         data["cli_exit_code"] = code
         data["cli_pid"] = None
+        data["cli_completion"] = {
+            "owner": owner,
+            "exit_code": code,
+            "turn_completed": True,
+            "command_failed": command_failed,
+            "log": str(output_path.relative_to(task.root)),
+            "log_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+            "message_sha256": hashlib.sha256(str(last_message).encode()).hexdigest(),
+        }
         task.save_event(data, "cli_completed")
         return {"owner": owner, "message": last_message, "exit_code": code}
     finally:
