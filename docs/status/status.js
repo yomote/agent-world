@@ -48,6 +48,23 @@ export function statusDescription(status) {
   return STATUS_LABELS[status] || status;
 }
 
+export function summarizeItems(items) {
+  const statuses = new Map();
+  for (const item of items) statuses.set(item.status, (statuses.get(item.status) || 0) + 1);
+  return {
+    total: items.length,
+    statuses: [...statuses.entries()].map(([status, count]) => ({ status, count })),
+  };
+}
+
+export function activityDescription(item) {
+  if (!item.latest_activity_at) return null;
+  return {
+    label: ACTIVITY_LABELS[item.latest_activity] || item.latest_activity || "種別未取得",
+    observedAt: item.latest_activity_at,
+  };
+}
+
 function text(tag, value, className) {
   const node = document.createElement(tag);
   node.textContent = value;
@@ -88,6 +105,14 @@ function render(snapshot) {
   document.querySelector("#source-kind").textContent = sourceLabel;
   document.querySelector("#source-note").textContent = sourceNote;
 
+  const summary = summarizeItems(snapshot.items);
+  document.querySelector("#task-total").textContent = `表示中のタスク ${summary.total}件`;
+  const statusCounts = document.querySelector("#status-counts");
+  statusCounts.replaceChildren();
+  for (const item of summary.statuses) {
+    statusCounts.append(text("li", `${statusDescription(item.status)} ${item.count}件`));
+  }
+
   const target = document.querySelector("#work-items");
   target.replaceChildren();
   for (const item of snapshot.items) {
@@ -104,23 +129,33 @@ function render(snapshot) {
     card.append(top, text("h3", owner));
     const dl = document.createElement("dl");
     dl.className = "meta";
-    metaRow(dl, "課題", task);
+    metaRow(dl, "目的・課題", task);
+    metaRow(dl, "進捗状態", statusDescription(item.status));
+    metaRow(dl, "現在の作業メモ", item.current_action || "未取得");
+    metaRow(dl, "進捗メモ", item.progress_summary || "未取得");
     metaRow(
       dl,
-      "観測",
+      "メモ更新",
+      item.summary_updated_at
+        ? `${new Date(item.summary_updated_at).toLocaleString("ja-JP")}（${elapsed(item.summary_updated_at)}）`
+        : "未取得",
+    );
+    metaRow(dl, "阻害要因", item.blocker || "未取得");
+    metaRow(
+      dl,
+      "状態観測",
       `${new Date(item.observed_at).toLocaleString("ja-JP")}（${elapsed(item.observed_at)}）`,
     );
-    if (item.latest_activity_at) {
-      const activity = ACTIVITY_LABELS[item.latest_activity] || item.latest_activity;
-      metaRow(
-        dl,
-        "最新activity",
-        `${activity} / ${new Date(item.latest_activity_at).toLocaleString("ja-JP")}（${elapsed(item.latest_activity_at)}）`,
-      );
-    }
+    const activity = activityDescription(item);
+    metaRow(
+      dl,
+      "最新activity",
+      activity
+        ? `${activity.label} / ${new Date(activity.observedAt).toLocaleString("ja-JP")}（${elapsed(activity.observedAt)}）`
+        : "未取得",
+    );
     if (item.stale) metaRow(dl, "鮮度", "activity途絶");
-    if (item.next_action) metaRow(dl, "次の行動", item.next_action);
-    if (item.blocker) metaRow(dl, "blocker", item.blocker);
+    metaRow(dl, "次の作業", item.next_action || "未取得");
     metaRow(dl, "Issue", optionalLink("開く", item.issue_url));
     metaRow(dl, "PR", optionalLink("開く", item.pr_url));
     if (item.note) metaRow(dl, "根拠", item.note);

@@ -43,6 +43,9 @@ def config(path: Path) -> None:
                         "agent": "status owner",
                         "role": "実装担当",
                         "task": "Issue #17",
+                        "current_action": "表示の検証中",
+                        "progress_summary": "実装済み、レビュー待ち",
+                        "summary_updated_at": "2026-09-06T12:00:00Z",
                         "issue_url": "https://github.com/yomote/agent-world/issues/17",
                     }
                 ],
@@ -96,6 +99,9 @@ def test_sync_emits_only_sanitized_idle_state_and_does_not_refresh_old_record(tm
     payload = json.loads(original)
     assert payload["source"] == "local-event-record"
     assert payload["items"][0]["status"] == "stopped"
+    assert payload["items"][0]["current_action"] == "表示の検証中"
+    assert payload["items"][0]["progress_summary"] == "実装済み、レビュー待ち"
+    assert payload["items"][0]["summary_updated_at"] == "2026-09-06T12:00:00Z"
     assert payload["items"][0]["stale"] is False
     assert "agent_path" not in original
     assert "root-1" not in original

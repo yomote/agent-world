@@ -33,6 +33,9 @@ class WorkItem(BaseModel):
     ) = None
     latest_activity_at: AwareDatetime | None = None
     stale: bool = False
+    current_action: str | None = Field(default=None, max_length=500)
+    progress_summary: str | None = Field(default=None, max_length=500)
+    summary_updated_at: AwareDatetime | None = None
     next_action: str | None = Field(default=None, max_length=500)
     blocker: str | None = Field(default=None, max_length=500)
 
