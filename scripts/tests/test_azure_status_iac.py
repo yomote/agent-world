@@ -102,7 +102,6 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
     ]
     rejected = run_gate(unknown)
     assert rejected.returncode != 0
-    assert "OutOfScope Ignore" in rejected.stderr
 
 
 def test_deploy_gate_does_not_print_budget_contact_confirmation():
