@@ -95,22 +95,27 @@ if ($LASTEXITCODE -ne 0 -or $signedInObjectId -notmatch $guidPattern -or $signed
 }
 
 $protected = $Phase -eq 'Protected'
-$template = Join-Path $PSScriptRoot '..\..\infra\azure-status\main.bicep'
+$templateName = if ($protected) { 'protected-main.bicep' } else { 'main.bicep' }
+$template = Join-Path $PSScriptRoot "..\..\infra\azure-status\$templateName"
 $parameters = @(
     "resourceGroupName=$ResourceGroupName"
     "location=$Location"
     "appName=$AppName"
     "image=$Image"
-    "confirmedBillingCurrency=$ConfirmedBillingCurrency"
-    "budgetContactEmail=$BudgetContactEmail"
-    "budgetAmount=$BudgetAmount"
-    "budgetStartDate=$BudgetStartDate"
-    "enableProtectedIngress=$($protected.ToString().ToLowerInvariant())"
     "tenantId=$TenantId"
     "authClientId=$AuthClientId"
     "operatorObjectId=$OperatorObjectId"
     "ingestObjectId=$IngestObjectId"
 )
+if (-not $protected) {
+    $parameters += @(
+        "confirmedBillingCurrency=$ConfirmedBillingCurrency"
+        "budgetContactEmail=$BudgetContactEmail"
+        "budgetAmount=$BudgetAmount"
+        "budgetStartDate=$BudgetStartDate"
+        'enableProtectedIngress=false'
+    )
+}
 
 $confirmationRecord = [ordered]@{
     headSha = $ApprovedHeadSha

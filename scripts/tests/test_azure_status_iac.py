@@ -55,6 +55,32 @@ def test_deploy_gate_does_not_print_budget_contact_confirmation():
     assert 'Write-Host "Confirmation SHA-256: $confirmationHash"' in script
 
 
+def test_protected_phase_redeclares_only_app_and_auth():
+    """Protected公開時にCore資源のprovider既定値を再送する回帰を防ぐ。"""
+    script = (ROOT / "scripts/azure-status/Deploy-ManagementStatus.ps1").read_text(encoding="utf-8")
+    protected = (ROOT / "infra/azure-status/protected-resources.bicep").read_text(encoding="utf-8")
+
+    assert "if ($protected) { 'protected-main.bicep' } else { 'main.bicep' }" in script
+    assert "resource app 'Microsoft.App/containerApps@" in protected
+    assert "resource auth 'Microsoft.App/containerApps/authConfigs@" in protected
+    assert "resource appIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@" in protected
+    identity_declaration = (
+        "resource appIdentity "
+        "'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing"
+    )
+    assert identity_declaration in protected
+    assert "resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' existing" in protected
+    assert "resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing" in protected
+    assert (
+        "resource environment 'Microsoft.App/managedEnvironments@2025-01-01' existing" in protected
+    )
+    assert "roleAssignments@" not in protected
+    assert "Microsoft.Consumption/budgets@" not in protected
+    assert "blobServices@" not in protected
+    assert "name: 'AGENT_WORLD_STATUS_REQUIRE_AUTH'\n              value: 'true'" in protected
+    assert "value: 'True'" not in protected
+
+
 def test_status_image_publish_is_manual_and_head_pinned():
     """未承認branchや自動triggerから管理status imageを公開する回帰を防ぐ。"""
     workflow = (ROOT / ".github/workflows/status-image.yml").read_text(encoding="utf-8")
