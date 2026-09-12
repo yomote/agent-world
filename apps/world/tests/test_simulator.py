@@ -38,6 +38,9 @@ def test_invalid_move_does_not_mutate(dx, dy):
     assert result.event.status == "failure"
     assert result.event.reason == "invalid_move"
     assert result.event.before == result.event.after
+    # failureのEventが返却snapshotとは別のWorldやrevisionを指す回帰を防ぐ。
+    assert result.event.world_id == result.world.world_id
+    assert result.event.world_revision == result.world.revision == before.revision
     assert simulator.observe() == result.world == before
 
 
