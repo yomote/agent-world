@@ -192,6 +192,7 @@ def work_item(mapping: dict[str, Any], events: list[tuple[datetime, str]], now: 
     stale = age > ACTIVE_WINDOW_SECONDS
     if event_type == "task_complete":
         status = "stopped"
+        stale = False
         note = "記録上、このturnは終了しています。課題全体の完了は示しません。"
     elif stale:
         status = "unknown"

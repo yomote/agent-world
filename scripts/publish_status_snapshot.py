@@ -103,7 +103,8 @@ def publish_if_new(
     state = read_state(args.state)
     if state.get("outcome") in {"attempting", "unknown"}:
         raise RuntimeError("previous write result is unknown; inspect actual before continuing")
-    snapshot = StatusSnapshot.model_validate_json(args.snapshot.read_text(encoding="utf-8"))
+    payload = args.snapshot.read_bytes()
+    snapshot = StatusSnapshot.model_validate_json(payload)
     if snapshot.source != "local-event-record":
         raise ValueError("only local-event-record snapshots can be published")
     observed_at = snapshot.observed_at.isoformat()
@@ -111,9 +112,11 @@ def publish_if_new(
     if state.get("last_confirmed_digest") == digest:
         return False
     previous_observation = state.get("last_attempted_observed_at")
-    if previous_observation and "last_confirmed_digest" not in state:
+    if previous_observation:
         previous_time = datetime.fromisoformat(previous_observation.replace("Z", "+00:00"))
-        if snapshot.observed_at <= previous_time:
+        if snapshot.observed_at < previous_time:
+            return False
+        if snapshot.observed_at == previous_time and "last_confirmed_digest" not in state:
             return False
 
     token = token_provider(args.audience, args.ingest_client_id)
@@ -128,7 +131,7 @@ def publish_if_new(
         response_status = sender(
             f"{args.base_url.rstrip('/')}/api/status",
             token,
-            snapshot.model_dump_json().encode(),
+            payload,
         )
         if response_status != 204:
             raise RuntimeError(f"unexpected HTTP status {response_status}")

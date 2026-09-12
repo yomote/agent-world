@@ -96,6 +96,7 @@ def test_sync_emits_only_sanitized_idle_state_and_does_not_refresh_old_record(tm
     payload = json.loads(original)
     assert payload["source"] == "local-event-record"
     assert payload["items"][0]["status"] == "stopped"
+    assert payload["items"][0]["stale"] is False
     assert "agent_path" not in original
     assert "root-1" not in original
     assert "must-not-leak" not in original

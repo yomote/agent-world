@@ -4,8 +4,10 @@ import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 spec = importlib.util.spec_from_file_location(
     "publish_status_snapshot", Path(__file__).parents[1] / "publish_status_snapshot.py"
@@ -14,6 +16,29 @@ publish_status_snapshot = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = publish_status_snapshot
 spec.loader.exec_module(publish_status_snapshot)
 publish_if_new = publish_status_snapshot.publish_if_new
+
+
+class V1WorkItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str
+    role: str
+    task: str
+    status: Literal["running", "idle", "unknown", "review-wait", "blocked"]
+    observed_at: AwareDatetime
+    issue_url: str | None = None
+    pr_url: str | None = None
+    note: str | None = None
+
+
+class V1Snapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    source: Literal["local-event-record"]
+    observed_at: AwareDatetime
+    received_at: AwareDatetime
+    items: list[V1WorkItem]
 
 
 def snapshot(observed_at: datetime, status: str = "running") -> dict:
@@ -58,6 +83,7 @@ def test_publisher_sends_new_snapshot_once(tmp_path):
     assert publish_if_new(settings, lambda *_: "token", send) is True
     assert publish_if_new(settings, lambda *_: "token", send) is False
     assert len(sends) == 1
+    V1Snapshot.model_validate_json(sends[0][2])
     assert json.loads(settings.state.read_text())["outcome"] == "confirmed"
 
 
@@ -93,6 +119,24 @@ def test_publisher_sends_stale_transition_for_the_same_source_observation(tmp_pa
 
     assert publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 204)
     assert len(sends) == 2
+
+
+def test_publisher_rejects_older_snapshot_after_its_own_confirmed_write(tmp_path):
+    """digest付き実運用stateで古い観測を不要PUTする回帰を防ぐ。"""
+    observed_at = datetime.now(UTC)
+    settings = args(tmp_path, observed_at)
+    sends = []
+
+    assert publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 204)
+    settings.snapshot.write_text(
+        json.dumps(snapshot(observed_at - timedelta(days=1), status="unknown")), encoding="utf-8"
+    )
+
+    assert (
+        publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 204)
+        is False
+    )
+    assert len(sends) == 1
 
 
 @pytest.mark.parametrize("next_observation_delay", [0, 1])
