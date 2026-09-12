@@ -190,3 +190,56 @@ def test_ingest_rejects_manual_snapshot():
     )
 
     assert response.status_code == 422
+
+
+def test_runtime_capacity_keeps_turn_counts_and_limit_sources_separate():
+    """task件数をruntimeの実行枠へ混ぜ、上限の根拠を失う回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["runtime_capacity"] = {
+        "scope": "/root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "limit_source": "runtime-instructions",
+        "running": 4,
+        "idle": 0,
+        "completed": 2,
+        "total": 6,
+        "max_concurrent_agents": 8,
+    }
+
+    parsed = StatusSnapshot.model_validate(data)
+
+    assert parsed.runtime_capacity is not None
+    assert parsed.runtime_capacity.running == 4
+    assert parsed.runtime_capacity.max_concurrent_agents == 8
+
+
+@pytest.mark.parametrize(
+    "capacity",
+    [
+        {"scope": "/root", "observed_at": "2026-09-12T16:55:23Z", "running": 4},
+        {
+            "scope": "/root",
+            "observed_at": "2026-09-12T16:55:23Z",
+            "state_source": "runtime-list-agents-metadata",
+            "running": 4,
+            "total": 3,
+        },
+        {
+            "scope": "/root",
+            "observed_at": "2026-09-12T16:55:23Z",
+            "state_source": "runtime-list-agents-metadata",
+            "limit_source": "runtime-instructions",
+            "running": 9,
+            "max_concurrent_agents": 8,
+        },
+    ],
+)
+def test_runtime_capacity_rejects_unattributed_or_inconsistent_counts(capacity):
+    """未知状態を0扱いし、出所なしのcapacityを公開する回帰を防ぐ。"""
+    data = snapshot(datetime.now(UTC))
+    data["runtime_capacity"] = capacity
+
+    with pytest.raises(ValueError):
+        StatusSnapshot.model_validate(data)
