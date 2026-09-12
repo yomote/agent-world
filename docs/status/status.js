@@ -65,6 +65,49 @@ export function activityDescription(item) {
   };
 }
 
+export function capacityDescription(capacity) {
+  if (!capacity) {
+    return {
+      headline: "このセッション：観測時点の実行中 未取得 / 同時実行上限 未取得",
+      note: "runtimeの実行枠snapshotはまだ受信していません。",
+      rows: [],
+    };
+  }
+  const running = capacity.running ?? "未取得";
+  const limit = capacity.max_concurrent_agents ?? "未取得";
+  const rows = [
+    ["対象範囲", capacity.scope],
+    [
+      "実行状態の出所",
+      capacity.state_source === "runtime-list-agents-metadata"
+        ? "実行状態の観測（集計のみ）"
+        : "未取得",
+    ],
+    [
+      "同時実行上限の出所",
+      capacity.limit_source === "runtime-instructions" ? "セッション設定／明示入力" : "未取得",
+    ],
+    [
+      "容量観測",
+      `${new Date(capacity.observed_at).toLocaleString("ja-JP")}（${elapsed(capacity.observed_at)}）`,
+    ],
+  ];
+  if (capacity.total !== null && capacity.total !== undefined) {
+    rows.push(["存在総数", `${capacity.total}（実行中とは別）`]);
+  }
+  for (const [label, value] of [
+    ["idle", capacity.idle],
+    ["completed", capacity.completed],
+  ]) {
+    if (value !== null && value !== undefined) rows.push([`${label}（観測値）`, String(value)]);
+  }
+  return {
+    headline: `このセッション：観測時点の実行中 ${running} / 同時実行上限 ${limit}`,
+    note: "runtimeのturn状態の集計です。タスク件数・進捗・実作業人数とは別です。観測が古い場合も、未取得とは区別して表示します。",
+    rows,
+  };
+}
+
 function text(tag, value, className) {
   const node = document.createElement(tag);
   node.textContent = value;
@@ -104,6 +147,13 @@ function render(snapshot) {
     `${new Date(snapshot.observed_at).toLocaleString("ja-JP")}（${elapsed(snapshot.observed_at)}）`;
   document.querySelector("#source-kind").textContent = sourceLabel;
   document.querySelector("#source-note").textContent = sourceNote;
+
+  const capacity = capacityDescription(snapshot.runtime_capacity);
+  document.querySelector("#capacity-headline").textContent = capacity.headline;
+  document.querySelector("#capacity-note").textContent = capacity.note;
+  const capacityMeta = document.querySelector("#capacity-meta");
+  capacityMeta.replaceChildren();
+  for (const [name, value] of capacity.rows) metaRow(capacityMeta, name, value);
 
   const summary = summarizeItems(snapshot.items);
   document.querySelector("#task-total").textContent = `表示中のタスク ${summary.total}件`;

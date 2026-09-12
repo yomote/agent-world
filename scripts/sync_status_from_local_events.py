@@ -12,7 +12,7 @@ from typing import Any
 ACTIVE_WINDOW_SECONDS = 120
 TASK_EVENTS = {"task_started", "task_complete"}
 ACTIVITY_EVENTS = {"item_completed"}
-CONFIG_KEYS = {"root_thread_id", "agents"}
+CONFIG_KEYS = {"root_thread_id", "agents", "runtime_capacity"}
 AGENT_KEYS = {
     "agent_path",
     "session_id",
@@ -113,12 +113,20 @@ class EventReader:
 
 
 def validate_config(data: Any) -> dict[str, Any]:
-    if not isinstance(data, dict) or set(data) != CONFIG_KEYS:
-        raise ValueError("config must contain only root_thread_id and agents")
+    if (
+        not isinstance(data, dict)
+        or not {"root_thread_id", "agents"} <= set(data)
+        or not set(data).issubset(CONFIG_KEYS)
+    ):
+        raise ValueError(
+            "config must contain root_thread_id, agents, and optional runtime_capacity"
+        )
     if not isinstance(data["root_thread_id"], str) or not data["root_thread_id"]:
         raise ValueError("root_thread_id must be a non-empty string")
     if not isinstance(data["agents"], list) or not data["agents"]:
         raise ValueError("agents must be a non-empty list")
+    if "runtime_capacity" in data and not isinstance(data["runtime_capacity"], dict):
+        raise ValueError("runtime_capacity must be an object when supplied")
     paths = set()
     required = REQUIRED_AGENT_KEYS
     for agent in data["agents"]:
@@ -247,6 +255,7 @@ def snapshot_payload(snapshot: Any, compat_v1: bool) -> dict[str, Any]:
         }
         for item in payload["items"]
     ]
+    payload.pop("runtime_capacity", None)
     return payload
 
 
@@ -281,6 +290,7 @@ def sync_once(args: argparse.Namespace, config: dict[str, Any], reader: EventRea
             "observed_at": observed_at,
             "received_at": now,
             "items": items,
+            "runtime_capacity": config.get("runtime_capacity"),
         }
     )
     payload = snapshot_payload(snapshot, args.compat_v1)

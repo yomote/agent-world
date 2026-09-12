@@ -3,11 +3,55 @@ import test from "node:test";
 
 import {
   activityDescription,
+  capacityDescription,
   elapsed,
   sourceDescription,
   statusDescription,
   summarizeItems,
 } from "../../docs/status/status.js";
+
+test("runtime capacityはtask件数と別に実行中と上限を表示する", () => {
+  // taskカードの件数を実行中agent数へ混ぜる回帰を防ぐ。
+  assert.deepEqual(
+    capacityDescription({
+      scope: "/root session tree",
+      observed_at: "2026-09-12T16:55:23.9476494Z",
+      state_source: "runtime-list-agents-metadata",
+      limit_source: "runtime-instructions",
+      running: 4,
+      idle: 0,
+      completed: 2,
+      total: 6,
+      max_concurrent_agents: 8,
+    }).headline,
+    "このセッション：観測時点の実行中 4 / 同時実行上限 8",
+  );
+});
+
+test("maxだけのcapacityで実行中を推測しない", () => {
+  // max-runningを空き枠や実行中として捏造する回帰を防ぐ。
+  const description = capacityDescription({
+    scope: "/root session tree",
+    observed_at: "2026-09-12T16:55:23.9476494Z",
+    limit_source: "runtime-instructions",
+    max_concurrent_agents: 8,
+  });
+  assert.equal(description.headline, "このセッション：観測時点の実行中 未取得 / 同時実行上限 8");
+  assert.equal(description.rows.find(([name]) => name === "実行状態の出所")[1], "未取得");
+});
+
+test("capacity未取得と古いcapacity観測を区別する", () => {
+  // snapshotの再受信をcapacity観測の更新へ見せる回帰を防ぐ。
+  assert.match(capacityDescription(null).headline, /未取得/);
+  const oldCapacity = capacityDescription({
+    scope: "/root session tree",
+    observed_at: "2020-01-01T00:00:00Z",
+    state_source: "runtime-list-agents-metadata",
+    running: 4,
+  });
+  assert.match(oldCapacity.headline, /観測時点/);
+  assert.match(oldCapacity.rows.find(([name]) => name === "容量観測")[1], /日前/);
+});
 
 test("PM確認snapshotをCodex liveと表示しない", () => {
   // 手動報告をruntime eventへ格上げして見せる回帰を防ぐ。
