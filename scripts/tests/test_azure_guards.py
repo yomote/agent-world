@@ -1,5 +1,4 @@
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,12 +16,6 @@ EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
 )
 PWSH = shutil.which("pwsh")
-
-
-def _normalized_powershell_error(stderr: str) -> str:
-    """pwshがTTY幅で挿入するANSIと改行を除いてerror contractを比較する。"""
-    without_ansi = re.sub(r"\x1b\[[0-9;]*m", "", stderr)
-    return " ".join(without_ansi.split())
 
 
 def _resource_ids(subscription: str, group: str, app: str) -> list[str]:
@@ -313,21 +306,18 @@ def _fake_external_state_az_script(
 
 
 def _run_external_deployment_resolution(fake: Path) -> subprocess.CompletedProcess[str]:
+    script = str(EXTERNAL_DEPLOYMENT_FAILURE).replace("'", "''")
+    fake_cli = str(fake).replace("'", "''")
+    command = (
+        "try { "
+        f"& '{script}' -ResourceGroupName 'rg-agent-world-jpe' "
+        "-AppName 'agent-world-yomote-jpe' "
+        "-DeploymentName 'agent-world-core-20260913000000' "
+        f"-AzureCli '{fake_cli}' "
+        "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"
+    )
     return subprocess.run(
-        [
-            PWSH,
-            "-NoProfile",
-            "-File",
-            str(EXTERNAL_DEPLOYMENT_FAILURE),
-            "-ResourceGroupName",
-            "rg-agent-world-jpe",
-            "-AppName",
-            "agent-world-yomote-jpe",
-            "-DeploymentName",
-            "agent-world-core-20260913000000",
-            "-AzureCli",
-            str(fake),
-        ],
+        [PWSH, "-NoProfile", "-Command", command],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -389,9 +379,7 @@ def test_running_deployment_does_not_claim_internal_actual_is_final(tmp_path):
     )
     result = _run_external_deployment_resolution(fake)
     assert result.returncode != 0
-    assert "no terminal provisioning state was verified" in _normalized_powershell_error(
-        result.stderr
-    )
+    assert "no terminal provisioning state was verified" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert len([call for call in calls if "deployment sub show" in call]) == 1
     assert len(calls) == 1
@@ -408,9 +396,7 @@ def test_unreadable_deployment_state_stops_before_ingress_actual(tmp_path):
     )
     result = _run_external_deployment_resolution(fake)
     assert result.returncode != 0
-    assert "no terminal provisioning state was verified" in _normalized_powershell_error(
-        result.stderr
-    )
+    assert "no terminal provisioning state was verified" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1
 
