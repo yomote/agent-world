@@ -216,7 +216,6 @@ $planPath = [IO.Path]::GetFullPath((Join-Path $PWD $PlanOutput))
 $planHash = (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Host "Reviewed-plan candidate saved: $planPath"
 Write-Host "Plan SHA-256: $planHash"
-Write-Host "Confirmation record: $confirmationJson"
 Write-Host "Confirmation SHA-256: $confirmationHash"
 
 if (-not $Apply) {

@@ -47,6 +47,14 @@ def test_deploy_gate_rejects_unreviewed_or_broad_changes():
     assert "deployment sub create" in script
 
 
+def test_deploy_gate_does_not_print_budget_contact_confirmation():
+    """本人のBudget通知先をwhat-if/applyの標準出力へ残す回帰を防ぐ。"""
+    script = (ROOT / "scripts/azure-status/Deploy-ManagementStatus.ps1").read_text(encoding="utf-8")
+
+    assert 'Write-Host "Confirmation record: $confirmationJson"' not in script
+    assert 'Write-Host "Confirmation SHA-256: $confirmationHash"' in script
+
+
 def test_status_image_publish_is_manual_and_head_pinned():
     """未承認branchや自動triggerから管理status imageを公開する回帰を防ぐ。"""
     workflow = (ROOT / ".github/workflows/status-image.yml").read_text(encoding="utf-8")
