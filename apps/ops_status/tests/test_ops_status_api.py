@@ -147,6 +147,32 @@ def test_ingest_does_not_rewrite_blob_for_same_observation():
     assert store.write_count == 0
 
 
+def test_ingest_keeps_state_transition_for_same_source_observation():
+    """同じtask event時刻でactivityがstaleへ変わったsnapshotを落とす回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "local-event-record"
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    changed = snapshot(current)
+    changed["source"] = "local-event-record"
+    changed["received_at"] = (current + timedelta(seconds=1)).isoformat()
+    changed["items"][0].update(
+        {
+            "status": "unknown",
+            "latest_activity": "structured-item",
+            "latest_activity_at": current.isoformat(),
+            "stale": True,
+        }
+    )
+
+    response = TestClient(create_app(store)).put("/api/status", json=changed)
+
+    assert response.status_code == 204
+    assert store.write_count == 1
+    assert store.value.items[0].status == "unknown"
+    assert store.value.items[0].stale is True
+
+
 def test_ingest_rejects_manual_snapshot():
     """手動snapshotを外部runtime eventとして公開する回帰を防ぐ。"""
     response = TestClient(create_app(MemoryStore())).put(

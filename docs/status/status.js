@@ -1,9 +1,21 @@
 const STATUS_LABELS = {
+  "not-started": "未着手",
   running: "実装中",
+  "review-wait": "レビュー待ち",
+  "human-wait": "人の判断待ち",
+  stopped: "停止済み",
+  completed: "完了",
+  // v1 snapshots already stored in Azure remain readable.
   idle: "turn終了",
   unknown: "状態不明",
-  "review-wait": "レビュー待ち",
   blocked: "停止中",
+};
+
+const ACTIVITY_LABELS = {
+  "session-created": "session作成",
+  "task-started": "task開始",
+  "task-complete": "turn終了",
+  "structured-item": "構造化activity",
 };
 
 const SOURCE_LABELS = {
@@ -32,6 +44,10 @@ export function sourceDescription(source) {
   return SOURCE_LABELS[source] || ["不明", "未対応の入力種別です。"];
 }
 
+export function statusDescription(status) {
+  return STATUS_LABELS[status] || status;
+}
+
 function text(tag, value, className) {
   const node = document.createElement(tag);
   node.textContent = value;
@@ -58,10 +74,13 @@ function optionalLink(label, url) {
 function render(snapshot) {
   const [sourceLabel, sourceNote] = sourceDescription(snapshot.source);
   const notice = document.querySelector(".notice");
-  notice.dataset.state = snapshot.stale ? "stale" : "live";
+  const hasStaleItem = snapshot.items.some((item) => item.stale);
+  notice.dataset.state = snapshot.stale || hasStaleItem ? "stale" : "live";
   document.querySelector("#health").textContent = snapshot.stale
-    ? `更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
-    : "最新snapshotを表示しています。";
+    ? `snapshot更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
+    : hasStaleItem
+      ? "snapshotは届いていますが、activityが途絶したsessionがあります。"
+      : "最新snapshotを表示しています。";
   document.querySelector("#fetched-at").textContent =
     `${new Date(snapshot.received_at).toLocaleString("ja-JP")}（${elapsed(snapshot.received_at)}）`;
   document.querySelector("#next-refresh").textContent =
@@ -72,25 +91,39 @@ function render(snapshot) {
   const target = document.querySelector("#work-items");
   target.replaceChildren();
   for (const item of snapshot.items) {
+    const owner = item.owner_label || item.agent;
+    const session = item.session_label || item.role;
+    const task = item.task_label || item.task;
     const card = document.createElement("article");
     card.className = "card";
     card.dataset.status = item.status;
     const top = document.createElement("div");
     top.className = "card-top";
-    top.append(text("span", item.role, "issue-number"));
-    top.append(text("span", STATUS_LABELS[item.status] || item.status, "badge"));
-    card.append(top, text("h3", item.agent));
+    top.append(text("span", session, "issue-number"));
+    top.append(text("span", statusDescription(item.status), "badge"));
+    card.append(top, text("h3", owner));
     const dl = document.createElement("dl");
     dl.className = "meta";
-    metaRow(dl, "課題", item.task);
+    metaRow(dl, "課題", task);
     metaRow(
       dl,
       "観測",
       `${new Date(item.observed_at).toLocaleString("ja-JP")}（${elapsed(item.observed_at)}）`,
     );
+    if (item.latest_activity_at) {
+      const activity = ACTIVITY_LABELS[item.latest_activity] || item.latest_activity;
+      metaRow(
+        dl,
+        "最新activity",
+        `${activity} / ${new Date(item.latest_activity_at).toLocaleString("ja-JP")}（${elapsed(item.latest_activity_at)}）`,
+      );
+    }
+    if (item.stale) metaRow(dl, "鮮度", "activity途絶");
+    if (item.next_action) metaRow(dl, "次の行動", item.next_action);
+    if (item.blocker) metaRow(dl, "blocker", item.blocker);
     metaRow(dl, "Issue", optionalLink("開く", item.issue_url));
     metaRow(dl, "PR", optionalLink("開く", item.pr_url));
-    if (item.note) metaRow(dl, item.status === "blocked" ? "停止理由" : "状況", item.note);
+    if (item.note) metaRow(dl, "根拠", item.note);
     card.append(dl);
     target.append(card);
   }
