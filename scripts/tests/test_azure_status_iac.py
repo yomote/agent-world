@@ -30,7 +30,7 @@ def test_status_iac_keeps_storage_private_and_capacity_bounded():
 
 
 def test_deploy_gate_rejects_unreviewed_or_broad_changes():
-    """reviewしていないplanやDelete/Ignoreをapplyする回帰を防ぐ。"""
+    """reviewしていないplanやDeleteをapplyする回帰を防ぐ。"""
     script = (ROOT / "scripts/azure-status/Deploy-ManagementStatus.ps1").read_text(encoding="utf-8")
 
     assert "ApprovedPlanSha256" in script
@@ -45,6 +45,8 @@ def test_deploy_gate_rejects_unreviewed_or_broad_changes():
     assert "changeType -eq 'Create'" in script
     assert "What-if contains changes outside" in script
     assert "deployment sub create" in script
+    assert "changeType -in @('NoChange', 'Ignore')" in script
+    assert script.index("OutOfScope") < script.index("changeType -in @('NoChange', 'Ignore')")
 
 
 def test_deploy_gate_does_not_print_budget_contact_confirmation():

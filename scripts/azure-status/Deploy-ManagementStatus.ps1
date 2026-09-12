@@ -197,7 +197,9 @@ foreach ($change in $changes) {
         $unexpected += "OutOfScope $($change.changeType) $id"
         continue
     }
-    if ($change.changeType -eq 'NoChange') { continue }
+    # Existing resources used only as references are reported as Ignore. They are
+    # non-write dependencies, but still pass the exact resource scope check above.
+    if ($change.changeType -in @('NoChange', 'Ignore')) { continue }
     if ($Phase -eq 'Core' -and $change.changeType -eq 'Create') { continue }
     if ($Phase -eq 'Protected' -and $change.changeType -eq 'Create' -and $isAuthResource) { continue }
     if ($Phase -eq 'Protected' -and $change.changeType -eq 'Modify' -and $id -ieq $appId) { continue }
