@@ -83,8 +83,11 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
         fixture.write_text(json.dumps({"changes": changes}), encoding="utf-8")
         command = (
             f". '{gate}'; $p=Get-Content -LiteralPath '{fixture}' -Raw|ConvertFrom-Json; "
+            "try { "
             f"Assert-ManagementStatusPlan -Changes @($p.changes) -Phase Protected "
-            f"-SubscriptionId {subscription} -ResourceGroupName {resource_group} -AppName {app}"
+            f"-SubscriptionId {subscription} -ResourceGroupName {resource_group} -AppName {app}; "
+            "exit 0 } catch { if ($_.Exception.Message -like '*OutOfScope Ignore*') { "
+            "exit 42 }; exit 43 }"
         )
         return subprocess.run(
             ["pwsh", "-NoProfile", "-Command", command],
@@ -101,7 +104,7 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
         }
     ]
     rejected = run_gate(unknown)
-    assert rejected.returncode != 0
+    assert rejected.returncode == 42
 
 
 def test_deploy_gate_does_not_print_budget_contact_confirmation():
