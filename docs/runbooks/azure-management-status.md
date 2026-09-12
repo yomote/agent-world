@@ -121,11 +121,11 @@ scriptはreview済み40文字headが現在のcheckoutと一致することを検
 1. 確認済みJPYのsource・UTC時刻を利用し、未回答のBudget通知先メールと本人確認日時を揃える。Azure context、region、候補名、実行identityの照合結果も公開前に揃え、confirmation recordを承認packetへ添付する。この文書更新ではBilling/Cost readを追加せず、JPYだけから実単価や当月costを推定しない。
 2. 承認済みmain headで、手動`Management status image` workflowを同じ40文字head、`publish=false`で実行し、buildとhealth smokeを確認する。Actions利用枠・料金と非公開GHCR packageを確認し、非公開pushの本人承認後に1回だけ`publish=true`を実行する。このrunのbuild/smokeとimmutable digestを記録し、JPYの証拠・時刻、通知メール本人確認、identity照合、rollbackを含む具体的packetでpackage public化・Azure公開の本人承認を得る。その後にpackageをpublicにし、同じdigestの匿名pullを確認してからwhat-ifへ進む。途中の値や結果が不明なら停止する。
 3. Core what-ifを実行し、専用RGのCreateだけをreviewする。同じ引数でCore applyを1回行う。この時点はinternal ingressである。
-4. API app / service principalを作り、callbackを`https://<fqdn>/.auth/login/aad/callback`、single tenant、`Status.Ingest` roleにする。本人OIDを記録する。
+4. API app / service principalを作り、callbackを`https://<fqdn>/.auth/login/aad/callback`、single tenant、`Status.Ingest` roleにする。Container Apps Easy Authのhybrid loginに必要なID token発行だけを有効にし、implicit access token発行は無効のままにする。本人OIDを記録する。
 5. API appの1年secretを作り、値を表示・file保存せずKey Vaultへ直送する。失敗時はkey IDでcredentialを削除する。
 6. ingest app / service principalを作り、承認済みpublic certificateを登録し、API appの`Status.Ingest`をadmin consentする。private keyはlocalから出さない。
 7. 作成直後にAPI app object ID / client ID、API service principal ID、secret key ID、ingest app object ID / client ID、ingest service principal ID、certificate key ID、app role assignment IDをlocal recovery journalへ保存する。secret値は保存しない。
-8. Protected what-ifでContainer App Modifyとauth config Createだけを確認してapplyする。未認証UI/API拒否、本人login、ingest PUT、ingest identityのGET拒否、本人のPUT拒否を検査する。
+8. Protected what-if前にApp RegistrationのID token発行が有効、implicit access token発行が無効であることをdeploy scriptで検査する。Container App Modifyとauth config Createだけを確認してapplyする。未認証UI/API拒否、本人login、ingest PUT、ingest identityのGET拒否、本人のPUT拒否を検査する。
 9. local collectorとpublisherを明示commandで起動する。OS service / startupへ登録しない。新event、PC sleep、reader停止、unknown writeを確認する。
 10. 本人がスマートフォンからloginし、source、最終受信、元の観測、stale / unknown、Issue / PR linkを確認する。
 
