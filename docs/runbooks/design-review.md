@@ -57,9 +57,11 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> submitted
-    submitted --> rejected: 前提違反 / 容量超過
+    submitted --> not_accepted: 容量超過
+    submitted --> rejected: 受付時の前提違反
     submitted --> accepted: 受付を永続化
     accepted --> succeeded: 即時move
+    accepted --> rejected: 開始前の再検証
     accepted --> running: 将来の長時間作業
     accepted --> cancelled: 開始前の取消
     running --> succeeded
@@ -75,25 +77,39 @@ stateDiagram-v2
 
 ```mermaid
 sequenceDiagram
+    participant UI as UI / Actor runner
     participant API as FastAPI / Action受付
+    participant W as WorldSimulator
     participant DB as Job DB + outbox
     participant Q as Azure Service Bus
     participant WK as Python worker
-    participant W as WorldSimulator
-    API->>DB: 受付票とoutboxを同一transactionで保存
+    UI->>API: Actionを送信
+    API->>W: Action受付を要求
+    W->>W: 重複・容量・前提を検証、job_id / attempt_idを生成
+    W->>DB: State・受付票・Event・outboxを同一transactionで確定
     API-->>UI: accepted + action_id
     DB->>Q: outbox dispatcherがMessageId付き送信
     Q->>WK: PeekLockで配送
-    WK->>WK: 判断 / 外部I/O（Worldを変更しない）
-    WK->>API: attempt_id付き結果候補
-    API->>W: 世代・revision・取消を再検証
-    W->>DB: terminal状態・Eventを一括確定
-    API-->>WK: accepted または既存結果
-    WK->>Q: complete
+    WK->>API: job開始を要求
+    API->>W: 世代・revision・取消を再検証、資源を予約
+    alt runningへ遷移
+        W->>DB: runningを確定
+        API-->>WK: 実行可
+        WK->>WK: 判断 / 外部I/O（Worldを変更しない）
+        WK->>API: attempt_id付き結果候補
+        API->>W: 実行世代・取消・必要な前提を再検証
+        W->>DB: terminal状態・Eventを一括確定
+        API-->>WK: accepted または既存結果
+        WK->>Q: complete
+    else rejected / cancelled
+        W->>DB: terminal状態・Eventを確定
+        API-->>WK: 実行不可
+        WK->>Q: complete（外部I/Oなし）
+    end
     Note over Q,WK: complete前の失敗・lock切れは再配送され得る
 ```
 
-配送はat-least-onceなので、`MessageId`の重複検出だけでexactly-onceとは扱いません。アプリ側でも`world_id + action_id + attempt_id`を一意にし、同じ結果候補を何度受けてもterminal状態とEventを一度だけ確定します。workerはService Bus messageを`complete`する前に、Worldが候補を採用したか既存結果として認識したことを確認します。取消・古い世代・stale revisionなら結果候補を棄却し、WorldStateへ直接書きません。
+配送はat-least-onceなので、`MessageId`の重複検出だけでexactly-onceとは扱いません。アプリ側でも`world_id + action_id + attempt_id`を一意にし、同じ結果候補を何度受けてもterminal状態とEventを一度だけ確定します。workerは開始許可を得るまで外部I/Oを行わず、Service Bus messageを`complete`する前に、Worldが候補を採用したか既存結果として認識したことを確認します。取消・古い世代・stale revisionなら結果候補を棄却し、WorldStateへ直接書きません。
 
 安全性に必要な自作部分は、受付票の状態遷移、DB transaction、outbox、結果候補の冪等な取込、取消と期限、Simulatorによる最終確定です。brokerへ任せるのは配送、lock、再配送、dead-letterです。この境界はService BusでもCeleryでも消えません。最初から優先度、複雑な再試行policy、複数queue、schedule、workflow DAGは作りません。
 
