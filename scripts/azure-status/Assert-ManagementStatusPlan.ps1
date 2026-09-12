@@ -35,6 +35,14 @@ function Assert-ManagementStatusPlan {
     )
     $appId = "$resourceGroupId/providers/Microsoft.App/containerApps/$AppName"
     $authId = "$appId/authConfigs/current"
+    $protectedIgnorePatterns = @(
+        "^$escapedResourceGroupId$",
+        "^$escapedResourceGroupId/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/$escapedAppName-identity$",
+        "^$storageId$",
+        "^$keyVaultId$",
+        "^$escapedResourceGroupId/providers/Microsoft\.OperationalInsights/workspaces/$escapedAppName-logs$",
+        "^$escapedResourceGroupId/providers/Microsoft\.App/managedEnvironments/$escapedAppName-env$"
+    )
     $unexpected = @()
     foreach ($change in $Changes) {
         $id = [string] $change.resourceId
@@ -44,8 +52,13 @@ function Assert-ManagementStatusPlan {
             $unexpected += "OutOfScope $($change.changeType) $id"
             continue
         }
-        # Existing dependencies are non-write Ignore entries. Scope is checked first.
-        if ($change.changeType -in @('NoChange', 'Ignore')) { continue }
+        if ($change.changeType -eq 'NoChange') { continue }
+        if ($change.changeType -eq 'Ignore') {
+            $isProtectedDependency = $Phase -eq 'Protected' -and @(
+                $protectedIgnorePatterns | Where-Object { $id -match $_ }
+            ).Count -gt 0
+            if ($isProtectedDependency) { continue }
+        }
         if ($Phase -eq 'Core' -and $change.changeType -eq 'Create') { continue }
         if ($Phase -eq 'Protected' -and $change.changeType -eq 'Create' -and $isAuthResource) { continue }
         if ($Phase -eq 'Protected' -and $change.changeType -eq 'Modify' -and $id -ieq $appId) { continue }
@@ -53,6 +66,17 @@ function Assert-ManagementStatusPlan {
     }
     if ($unexpected.Count -gt 0) {
         throw "What-if contains changes outside the $Phase allowlist:`n$($unexpected -join "`n")"
+    }
+    if ($Phase -eq 'Protected') {
+        $appChanges = @($Changes | Where-Object {
+            $_.resourceId -ieq $appId -and $_.changeType -eq 'Modify'
+        })
+        $authChanges = @($Changes | Where-Object {
+            $_.resourceId -ieq $authId -and $_.changeType -eq 'Create'
+        })
+        if ($appChanges.Count -ne 1 -or $authChanges.Count -ne 1) {
+            throw 'Protected requires exactly one App Modify and one authConfig Create.'
+        }
     }
     if ($Phase -eq 'Core') {
         $resourceGroupChange = @($Changes | Where-Object {

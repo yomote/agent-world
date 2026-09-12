@@ -51,8 +51,9 @@ def test_deploy_gate_rejects_unreviewed_or_broad_changes():
     assert "changeType -eq 'Create'" in gate
     assert "What-if contains changes outside" in gate
     assert "deployment sub create" in script
-    assert "changeType -in @('NoChange', 'Ignore')" in gate
-    assert gate.index("OutOfScope") < gate.index("changeType -in @('NoChange', 'Ignore')")
+    assert "protectedIgnorePatterns" in gate
+    assert "Protected requires exactly one App Modify and one authConfig Create" in gate
+    assert gate.index("OutOfScope") < gate.index("protectedIgnorePatterns | Where-Object")
 
 
 def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_path):
@@ -105,6 +106,15 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
     ]
     rejected = run_gate(unknown)
     assert rejected.returncode == 42
+    for disallowed in (
+        {"changeType": "Ignore", "resourceId": app_id},
+        {
+            "changeType": "Ignore",
+            "resourceId": f"{root}/providers/Microsoft.Consumption/budgets/{app}-monthly-jpy",
+        },
+    ):
+        assert run_gate(accepted + [disallowed]).returncode == 43
+    assert run_gate(accepted[:-2]).returncode == 43
 
 
 def test_deploy_gate_does_not_print_budget_contact_confirmation():
