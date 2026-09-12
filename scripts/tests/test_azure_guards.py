@@ -11,6 +11,10 @@ AUTH_PLAN_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureAuthPlan.ps1"
 CONTAINMENT = ROOT / "scripts" / "azure" / "Disable-AzureExternalIngress.ps1"
 APPLY_INPUT_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureApplyInputs.ps1"
 BILLING_CURRENCY = ROOT / "scripts" / "azure" / "Test-AzureBillingCurrency.ps1"
+BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
+EXTERNAL_DEPLOYMENT_FAILURE = (
+    ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
+)
 PWSH = shutil.which("pwsh")
 
 
@@ -67,6 +71,35 @@ def _run_apply_input_guard(*arguments: str) -> subprocess.CompletedProcess[str]:
         errors="replace",
         check=False,
     )
+
+
+def _run_budget_email_guard(*addresses: str) -> subprocess.CompletedProcess[str]:
+    values = ",".join("'" + address.replace("'", "''") + "'" for address in addresses)
+    command = f"& '{BUDGET_EMAILS.as_posix()}' -BudgetContactEmails @({values})"
+    return subprocess.run(
+        [PWSH, "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_budget_email_guard_accepts_and_trims_multiple_addresses():
+    """複数の妥当な通知先をtrim済み値として渡す。"""
+    result = _run_budget_email_guard(" owner@example.invalid ", "ops@example.invalid")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["owner@example.invalid", "ops@example.invalid"]
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("address", ["", "   ", "not-an-email", "Owner <owner@example.invalid>"])
+def test_budget_email_guard_rejects_blank_or_invalid_address(address):
+    """空白・空文字・不正形式でApplyやGitHub書き込みへ進まない。"""
+    result = _run_budget_email_guard(address)
+    assert result.returncode != 0
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
@@ -234,6 +267,89 @@ def _fake_cost_az_script(tmp_path: Path, *, currency: str, exit_code: int = 0) -
         encoding="utf-8",
     )
     return fake, log
+
+
+def _fake_external_state_az_script(
+    tmp_path: Path, *, initial: str, read_exit_code: int = 0
+) -> tuple[Path, Path]:
+    log = tmp_path / "external-state-az.log"
+    marker = tmp_path / "ingress-disabled"
+    fake = tmp_path / "fake-external-state-az.ps1"
+    fake.write_text(
+        "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)\n"
+        f"Add-Content -LiteralPath '{log.as_posix()}' -Value ($Args -join ' ')\n"
+        "$command = $Args -join ' '\n"
+        "if ($command -match 'ingress disable') {\n"
+        f"  Set-Content -LiteralPath '{marker.as_posix()}' -Value disabled\n"
+        "  exit 0\n"
+        "}\n"
+        "if ($command -match 'containerapp show') {\n"
+        f"  if ({read_exit_code} -ne 0) {{ exit {read_exit_code} }}\n"
+        f"  if (Test-Path -LiteralPath '{marker.as_posix()}') {{ Write-Output 'false' }} "
+        f"else {{ Write-Output '{initial}' }}\n"
+        "  exit 0\n"
+        "}\n"
+        "exit 64\n",
+        encoding="utf-8",
+    )
+    return fake, log
+
+
+def _run_external_deployment_resolution(fake: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(EXTERNAL_DEPLOYMENT_FAILURE),
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-AzureCli",
+            str(fake),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
+def test_external_deployment_nonzero_or_timeout_after_side_effect_contains_once(tmp_path):
+    """nonzero/timeout相当の応答不明でexternal actualを1回だけ封じ込める。"""
+    fake, log = _fake_external_state_az_script(tmp_path, initial="true")
+    result = _run_external_deployment_resolution(fake)
+    assert result.returncode != 0
+    assert "containment was verified" in result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len([call for call in calls if "ingress disable" in call]) == 1
+    assert len([call for call in calls if "containerapp show" in call]) == 2
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
+def test_external_deployment_nonzero_preserves_internal_actual(tmp_path):
+    """deployment応答不明でinternalなactualに余計なwriteを行わない。"""
+    fake, log = _fake_external_state_az_script(tmp_path, initial="false")
+    result = _run_external_deployment_resolution(fake)
+    assert result.returncode != 0
+    assert "remained internal" in result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert not [call for call in calls if "ingress disable" in call]
+    assert len([call for call in calls if "containerapp show" in call]) == 1
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
+def test_external_deployment_nonzero_stops_if_actual_is_unreadable(tmp_path):
+    """actualを読めない結果不明を成功と推測せず再送なしで停止する。"""
+    fake, log = _fake_external_state_az_script(tmp_path, initial="", read_exit_code=1)
+    result = _run_external_deployment_resolution(fake)
+    assert result.returncode != 0
+    assert "actual could not be verified" in result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 1
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell billing test requires pwsh")

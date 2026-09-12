@@ -42,6 +42,7 @@ def test_image_mutation_requires_explicit_bootstrap_or_image_only_confirmation()
     assert guard < image
     assert 'test "${DEPLOY_ENABLED}" = "true"' in WORKFLOW
     assert 'test "${IMAGE_CONFIRMATION}" = "publish-ghcr-image"' in WORKFLOW
+    assert 'test("^[^[:space:]@]+@[^[:space:]@]+\\\\.[^[:space:]@]+$")' in WORKFLOW
     assert "AZURE_DEPLOY_ENABLED = 'true'" in ENVIRONMENT_SCRIPT
     assert "[Parameter(Mandatory)] [switch] $EnableDeployment" in ENVIRONMENT_SCRIPT
 
@@ -66,4 +67,5 @@ def test_core_apply_requires_budget_plan_and_billing_guards():
 def test_external_auth_failure_triggers_single_containment_path():
     """公開直後のauth smoke失敗でexternal ingressを残す回帰を防ぐ。"""
     assert DEPLOY_SCRIPT.count("Disable-AzureExternalIngress.ps1") == 1
+    assert DEPLOY_SCRIPT.count("Resolve-AzureExternalDeploymentFailure.ps1") == 1
     assert "POST-APPLY AUTH FAILURE" in DEPLOY_SCRIPT

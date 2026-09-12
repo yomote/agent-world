@@ -19,6 +19,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($BudgetContactEmails.Count -gt 0) {
+  $BudgetContactEmails = @(& "$PSScriptRoot/Assert-BudgetContactEmails.ps1" `
+      -BudgetContactEmails $BudgetContactEmails)
+}
 if ($Apply) {
   & "$PSScriptRoot/Assert-AzureApplyInputs.ps1" `
     -BudgetContactEmails $BudgetContactEmails `
@@ -147,7 +151,14 @@ try {
     throw "Auth Apply requires the dedicated Resource Group to exist."
   }
   & az deployment sub create @common --name "agent-world-core-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))" --output json
-  if ($LASTEXITCODE -ne 0) { throw "Azure core deployment failed." }
+  if ($LASTEXITCODE -ne 0) {
+    if ($ExternalIngress) {
+      & "$PSScriptRoot/Resolve-AzureExternalDeploymentFailure.ps1" `
+        -ResourceGroupName $ResourceGroupName `
+        -AppName $AppName
+    }
+    throw "Azure core deployment failed or its result is unknown; deployment was not retried."
+  }
   if ($ExternalIngress) {
     try {
       $fqdn = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'properties.configuration.ingress.fqdn' --output tsv

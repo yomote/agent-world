@@ -23,6 +23,8 @@ if (-not $EnableDeployment) { throw "Deployment enablement requires an explicit 
 if ($AuthMode -ne 'entra' -or $BudgetCurrency -ne 'JPY' -or $BudgetContactEmails.Count -eq 0) {
   throw "Deployment requires Entra auth, verified JPY billing currency, and at least one Budget contact."
 }
+$BudgetContactEmails = @(& "$PSScriptRoot/Assert-BudgetContactEmails.ps1" `
+    -BudgetContactEmails $BudgetContactEmails)
 & "$PSScriptRoot/Test-GitHubEnvironment.ps1" -Repository $Repository -Environment $Environment
 $credentialLines = "protocol=https`nhost=github.com`n`n" | git credential fill
 $credential = @{}

@@ -198,7 +198,7 @@ jobs:
             done
             test "${AZURE_AUTH_MODE}" = "entra"
             test "${AZURE_BUDGET_CURRENCY}" = "JPY"
-            jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' \
+            jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and test("^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$"))' \
               <<<"${AZURE_BUDGET_CONTACT_EMAILS_JSON}" >/dev/null
           fi
           echo "image_only=${image_only}" >>"${GITHUB_OUTPUT}"

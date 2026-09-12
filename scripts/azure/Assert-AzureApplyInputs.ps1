@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 if ($BudgetContactEmails.Count -eq 0) {
   throw 'Applyには確認済みのBudget通知先が1件以上必要です。'
 }
+$null = & "$PSScriptRoot/Assert-BudgetContactEmails.ps1" -BudgetContactEmails $BudgetContactEmails
 if ($ConfirmedBudgetCurrency -ne 'JPY') {
   throw 'Applyには実請求通貨JPYの確認が必要です。'
 }
