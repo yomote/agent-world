@@ -6,6 +6,8 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 2026-09-13の再開時点で、PR #14はcurrent main `1b245335cee6b9298dd165cb5166fddb85457783`から19 commits遅れ、GitHubで`CONFLICTING`だった。Azure公開対象をcurrent mainへ合わせるため同SHAをbranchへ統合した。競合は`apps/world/api.py`と`apps/world/tests/test_api.py`の2ファイルだけで、mainの共有Event historyとPR #14のhealth / production static配信を両方保持した。mainから入った管理status層は変更していない。
 
+最初の固定後にmainへ入った非機能の文書・構成図2 commitsも競合なしで統合し、今回のpreflight基点を`c94baa8ce49b129aa988948fc27ef0d3b49007e6`に固定した。以後のmain更新はPR #14のmergeabilityまたはdeploy対象へ影響する場合だけ追加統合する。
+
 必須check `container-check`が無関係なPRで生成されない問題は、`Deploy Azure` workflowをmain向けの全PRで起動し、production containerへの入力が変わった場合だけbuildする方式へ修正した。無関係なReady PRでも同じcheck名が軽量に成功する。Draftのskipは受入証跡にしない。
 
 ## 独立レビュー依頼packet
