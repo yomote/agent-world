@@ -14,6 +14,8 @@ Front DeskとPM controllerの調査、編集、検証、レビュー、統合、
 
 PM controllerは管理の節目に次の差分snapshotをFront Deskへ1メッセージで返し、Front Deskがユーザーへ取り次ぎます。これは報告の書式であり、自動通知の実装や停止後の監視継続を保証しません。Issue/PRへの記録は対象を割り当てられたworkerが行います。
 
+製品内の非同期Action、Human in the Loop、開発taskのwakeと通知を混同せずに確認する入口は[重要設計レビュー](design-review.md)です。PMは設計の節目で閲覧依頼と判断依頼を分け、判断点がない閲覧依頼を承認待ちにしません。
+
 ```text
 changed: <前回snapshotから変わった事実。なければ「なし」>
 running: <ownerと実行中のwork item。なければ「なし」>
