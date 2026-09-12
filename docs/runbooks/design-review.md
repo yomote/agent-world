@@ -91,9 +91,9 @@ sequenceDiagram
     DB->>Q: outbox dispatcherがMessageId付き送信
     Q->>WK: PeekLockで配送
     WK->>API: job開始を要求
-    API->>W: 世代・revision・取消を再検証、資源を予約
-    alt runningへ遷移
-        W->>DB: runningを確定
+    API->>W: attemptの状態・世代・revision・取消を照合
+    alt accepted（初回開始）
+        W->>DB: 資源を予約しrunning + 実行leaseをCAS確定
         API-->>WK: 実行可
         WK->>WK: 判断 / 外部I/O（Worldを変更しない）
         WK->>API: attempt_id付き結果候補
@@ -101,6 +101,24 @@ sequenceDiagram
         W->>DB: terminal状態・Eventを一括確定
         API-->>WK: accepted または既存結果
         WK->>Q: complete
+    else 同じattemptがterminal
+        API-->>WK: 保存済み結果
+        WK->>Q: complete（外部I/Oなし）
+    else running + lease有効
+        API-->>WK: 実行中
+        WK->>Q: boundedに延期（外部I/Oなし）
+    else running + lease失効
+        API-->>WK: result reconciliationが必要
+        WK->>WK: 同じ冪等性キーで外部状態を照会
+        alt 結果を確定できる
+            WK->>API: 保存済み結果の候補
+            API->>W: 実行世代と前提を再検証
+            W->>DB: terminal状態・Eventを一括確定
+            WK->>Q: complete
+        else 結果不明
+            WK->>API: result_unknownを保存
+            WK->>Q: 自動再実行せず停止 / dead-letter
+        end
     else rejected / cancelled
         W->>DB: terminal状態・Eventを確定
         API-->>WK: 実行不可
@@ -109,7 +127,9 @@ sequenceDiagram
     Note over Q,WK: complete前の失敗・lock切れは再配送され得る
 ```
 
-配送はat-least-onceなので、`MessageId`の重複検出だけでexactly-onceとは扱いません。アプリ側でも`world_id + action_id + attempt_id`を一意にし、同じ結果候補を何度受けてもterminal状態とEventを一度だけ確定します。workerは開始許可を得るまで外部I/Oを行わず、Service Bus messageを`complete`する前に、Worldが候補を採用したか既存結果として認識したことを確認します。取消・古い世代・stale revisionなら結果候補を棄却し、WorldStateへ直接書きません。
+配送はat-least-onceなので、`MessageId`の重複検出だけでexactly-onceとは扱いません。アプリ側でも`world_id + action_id + attempt_id`を一意にし、冪等な`begin`で初回の`accepted → running`だけに実行leaseを発行します。同じ結果候補を何度受けてもterminal状態とEventは一度だけ確定します。
+
+workerは開始許可を得るまで外部I/Oを行いません。再配送時に既存`running`なら処理を再実行せず、lease中は延期し、失効後は外部サービスへ同じ冪等性キーで状態照会します。結果不明なら自動再writeせず停止します。Service Bus messageを`complete`する前に、Worldが候補を採用したか既存結果として認識したことを確認します。取消・古い世代・stale revisionなら結果候補を棄却し、WorldStateへ直接書きません。
 
 安全性に必要な自作部分は、受付票の状態遷移、DB transaction、outbox、結果候補の冪等な取込、取消と期限、Simulatorによる最終確定です。brokerへ任せるのは配送、lock、再配送、dead-letterです。この境界はService BusでもCeleryでも消えません。最初から優先度、複雑な再試行policy、複数queue、schedule、workflow DAGは作りません。
 
