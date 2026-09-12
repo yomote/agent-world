@@ -50,7 +50,7 @@ sourceは次の4種類だけを受け付け、画面にも表示する。
 | `pm-confirmed`       | PMが確認した時点の手動snapshot。runtimeのlive状態とは表示しない                    |
 | `fixture`            | 表示・test用。実際のagent稼働とは表示しない                                        |
 
-work itemは従来のagent / role / taskに加え、owner / session / task label、`not-started` / `running` / `review-wait` / `human-wait` / `stopped` / `completed` / `unknown`、task観測時刻、sanitized activity種別と時刻、stale、next action、blockerを持つ。保存済みv1を読むため`idle` / `blocked`も受け付ける。会話本文、reasoning、tool引数・結果、local path、raw session ID、secret、token usageは受け付けない。未知fieldと未知sourceはbackendが拒否する。
+work itemは従来のagent / role / taskに加え、owner / session / task label、`not-started` / `running` / `review-wait` / `human-wait` / `stopped` / `completed` / `unknown`、task観測時刻、sanitized activity種別と時刻、stale、current action、progress summary、その要約の更新時刻、next action、blockerを持つ。current actionとprogress summaryはPMまたは設定ownerが公開用に要約した任意fieldであり、event本文から推測しない。画面は要約を手動更新の公開用メモとしてactivity時刻と分け、値または要約更新時刻がなければ「未取得」と表示する。保存済みv1を読むため`idle` / `blocked`も受け付ける。会話本文、reasoning、tool引数・結果、local path、raw session ID、secret、token usageは受け付けない。未知fieldと未知sourceはbackendが拒否する。
 
 writerは検証済みsnapshotを一時fileからrenameして置き換える。履歴は保存せず`artifacts/status/current.json`だけを読む。ブラウザcacheとAPI response cacheは使わない。
 

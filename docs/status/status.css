@@ -173,6 +173,33 @@ summary:focus-visible {
   margin: 0;
   font-size: 1.25rem;
 }
+.task-total {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.summary-note {
+  margin: -5px 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.status-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.status-counts li {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #0e141e;
+  font-size: 0.78rem;
+}
 
 .work-grid {
   display: grid;
@@ -406,6 +433,11 @@ footer {
   }
   .work-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .section-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
   }
   .action-row {
     grid-template-columns: 1fr auto;

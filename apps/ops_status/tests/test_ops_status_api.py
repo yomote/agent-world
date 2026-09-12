@@ -75,8 +75,18 @@ def test_status_page_is_served_from_same_origin():
     response = TestClient(create_app()).get("/")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
     assert "connect-src 'self'" in response.text
     assert "api.github.com" not in response.text
+
+
+@pytest.mark.parametrize("path", ["/status.css", "/status.js"])
+def test_status_assets_do_not_keep_an_old_dashboard_after_deploy(path):
+    """公開更新後も端末cacheが旧dashboardを表示し続ける回帰を防ぐ。"""
+    response = TestClient(create_app()).get(path)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize("expected_upper", [False, True])

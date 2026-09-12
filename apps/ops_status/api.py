@@ -39,7 +39,15 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             )
             if not principal_allowed(request, principal_key):
                 return JSONResponse(status_code=403, content={"detail": "forbidden"})
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method == "GET" and request.url.path in {
+            "/",
+            "/index.html",
+            "/status.css",
+            "/status.js",
+        }:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/healthz")
     def health() -> dict[str, str]:
