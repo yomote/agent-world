@@ -52,7 +52,7 @@ def test_deploy_gate_rejects_unreviewed_or_broad_changes():
     assert "What-if contains changes outside" in gate
     assert "deployment sub create" in script
     assert "protectedIgnorePatterns" in gate
-    assert "Protected requires exactly one App Modify and one authConfig Create" in gate
+    assert "Protected requires exactly one App Modify and one authConfig Create or Modify" in gate
     assert gate.index("OutOfScope") < gate.index("protectedIgnorePatterns | Where-Object")
 
 
@@ -98,6 +98,8 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
         )
 
     assert run_gate(accepted).returncode == 0
+    auth_modify = [*accepted[:-1], {**accepted[-1], "changeType": "Modify"}]
+    assert run_gate(auth_modify).returncode == 0
     unknown = accepted + [
         {
             "changeType": "Ignore",
@@ -108,6 +110,7 @@ def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_pat
     assert rejected.returncode == 42
     for disallowed in (
         {"changeType": "Ignore", "resourceId": app_id},
+        {"changeType": "Ignore", "resourceId": f"{app_id}/authConfigs/current"},
         {
             "changeType": "Ignore",
             "resourceId": f"{root}/providers/Microsoft.Consumption/budgets/{app}-monthly-jpy",

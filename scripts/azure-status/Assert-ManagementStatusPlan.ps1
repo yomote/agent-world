@@ -60,7 +60,11 @@ function Assert-ManagementStatusPlan {
             if ($isProtectedDependency) { continue }
         }
         if ($Phase -eq 'Core' -and $change.changeType -eq 'Create') { continue }
-        if ($Phase -eq 'Protected' -and $change.changeType -eq 'Create' -and $isAuthResource) { continue }
+        if (
+            $Phase -eq 'Protected' -and
+            $change.changeType -in @('Create', 'Modify') -and
+            $isAuthResource
+        ) { continue }
         if ($Phase -eq 'Protected' -and $change.changeType -eq 'Modify' -and $id -ieq $appId) { continue }
         $unexpected += "$($change.changeType) $id"
     }
@@ -72,10 +76,10 @@ function Assert-ManagementStatusPlan {
             $_.resourceId -ieq $appId -and $_.changeType -eq 'Modify'
         })
         $authChanges = @($Changes | Where-Object {
-            $_.resourceId -ieq $authId -and $_.changeType -eq 'Create'
+            $_.resourceId -ieq $authId -and $_.changeType -in @('Create', 'Modify')
         })
         if ($appChanges.Count -ne 1 -or $authChanges.Count -ne 1) {
-            throw 'Protected requires exactly one App Modify and one authConfig Create.'
+            throw 'Protected requires exactly one App Modify and one authConfig Create or Modify.'
         }
     }
     if ($Phase -eq 'Core') {
