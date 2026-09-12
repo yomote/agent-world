@@ -12,8 +12,8 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 ## 独立レビュー依頼packet
 
-- base: `origin/main` (`37f95ab6b2710779477d91371fcdb44edb2799d4`)
-- review対象: PR #14のcurrent headに、この引き渡しのworkflow修正を加えたcommit
+- base: `origin/main` (`c94baa8ce49b129aa988948fc27ef0d3b49007e6`、今回のpreflight固定基点)
+- review対象: PR #14のcurrent head。過去review SHAは履歴であり、修正後SHAへ再reviewする
 - 重点観点:
   - main向けの全Ready PRで`container-check`が生成されるか
   - forkを含むPRでbase / head SHAを安全かつ確実に比較できるか
@@ -24,7 +24,9 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 ## 初回deploy承認packet
 
-初回の有料resource作成、Entra権限作成、Internet公開を含むため、以下の全項目をcurrent headの独立レビュー後に一括で提示し、ユーザーの明示承認を得てから実行する。承認前にwhat-ifを含むread-only検査は実施できるが、`-Apply`、app registration作成、role assignment、GitHub environment書き込み、package公開は行わない。
+初回の有料resource作成、Entra権限作成、Internet公開を含む。まずcurrent headの独立レビューとローカル検証を揃え、PRのpush / Ready化とDocker CIへ進める具体的判断を提示する。mergeは自動化せず、current-head CI後に別の人間判断を残す。mainの実image、実請求通貨、Budget通知先を得た最終what-ifが揃ってから、Azure apply / Entra / OIDC / Internet公開の適用gateを提示する。
+
+承認前にwhat-ifを含むread-only検査は実施できるが、`-Apply`、app registration作成、role assignment、GitHub environment書き込み、package公開は行わない。一度の包括承認で未確定の後続条件まで成立したとは扱わない。
 
 ### 対象と上限
 
@@ -66,7 +68,7 @@ Budgetは通知でありhard capではない。Budget未作成は金額通知も
 
 | 検査 / 操作                                                                    | 状態                                                                                        |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| ローカル実装、unit / build、独立レビュー                                       | main統合後のcurrent headで再検証・再レビュー中                                              |
+| ローカル実装、unit / build、独立レビュー                                       | 初回reviewの5指摘を修正し、修正stateのローカル再検証はPASS。固定SHAの限定reviewは未実行     |
 | GitHub `azure-production`のmain限定 / admin bypass無効                         | APIでactual確認済み                                                                         |
 | Azure subscription / provider / regionのread-only確認                          | 2026-09-13に再確認。Enabled 1件、本人user、Japan East、必要provider登録済み                 |
 | 専用Resource Group                                                             | 2026-09-13に`rg-agent-world-jpe`が存在しないことを確認                                      |
@@ -80,24 +82,25 @@ Budgetは通知でありhard capではない。Budget未作成は金額通知も
 
 本人から必要な未回答は、Budget通知を受け取るメールアドレスである。
 
-推奨案は、実請求通貨と通知先を確認し、Budgetを同じapplyに含められるまでresource作成を保留する。JPYは提案するBudget額の通貨であり、確認済みの実請求通貨ではない。Cost Managementが再び429になる、実通貨がJPYでない、または通知先が得られない場合は初回apply前に停止し、金額を勝手に読み替えたりBudgetなしで公開したりしない。
+Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの既定値も1000で一致する。この金額は既決の目安であってhard capではない。推奨案は、実請求通貨と通知先を確認し、通貨がJPYなら月1,000円のBudgetを同じapplyに含められるまでresource作成を保留する。JPYは確認済みの実請求通貨ではない。Cost Managementが再び429になる、実通貨がJPYでない、または通知先が得られない場合は初回apply前に停止し、金額を勝手に読み替えたりBudgetなしで公開したりしない。
 
 2026-09-06の照会は429後に既定の60秒・120秒待機とread retry上限を使い切ったが、応答の`Retry-After` / reset値は証跡に残っていない。2026-09-13 01:44 JSTは別taskから1週間経過し明示resumeされた新preflightとしてsubscription scopeを1回だけ照会した。再び429だったため、今回のshared budgetはrequests 1、retries 0で停止した。Azure CLIの安全な出力には今回も`Retry-After` / reset値がなく、次回再開時刻は確定していない。
 
 承認前のread-only preflightでは、subscription名とstate、本人user context、本人object IDを取得できること、Japan East、必要provider、専用RG不存在を秘密値を出さず再照合した。未公開imageの代わりにゼロのplaceholder digestを使ったsubscription what-ifは、専用RG、Container App / environment、Key Vault、managed identity、Log Analytics、Key Vault role 2件のCreate 8件だけで、Modify / Deleteは0件だった。Budget通知先が空なのでBudgetはこの差分に含まれない。この結果は実deployment image、実通貨、通知先を入れたapply直前の最終what-ifの代わりにはしない。
 
-### 承認後の実行順
+### 準備と適用gate
 
-1. current mainのsource imageを一度buildし、GHCRへSHA tagでpushする。packageをpublicにした後、匿名pullを確認してdigestを記録する。
-2. subscription、tenant、本人object ID、region、専用RG不存在をread-onlyで再照合する。Cost Managementの再照会は新しいretry budgetと再開条件を明示できる場合だけ1回行う。
-3. `Deploy-AzureCore.ps1`を`-Apply`なしで実行し、専用RG内のCreateだけで削除・既存更新がないことを確認する。Budgetなしを許容していない場合は、JPY・通知先・Budget Createもここで確認する。
-4. 同じ引数で`-Apply`し、internal ingressのcore、Key Vault、managed identity、Log Analyticsを作る。
-5. `Configure-Entra.ps1`でsingle-tenant app、本人assignment、1年secretを作る。secret値はKey Vaultだけへ保存する。
-6. Entra DirectoryとEasy Authのactualが本人1件、HTTPS必須、匿名path `/healthz`だけであることを確認する。
-7. Entra引数と`-ExternalIngress`を加えたwhat-ifを確認後、applyする。直後に未認証UI / APIの拒否とhealthを検査する。
-8. 専用RG scopeのOIDC identityを作成し、保護済み`azure-production` environmentへ非secret変数を設定する。
-9. `Deploy Azure`を手動で1回実行し、OIDC login、digest deploy、HTTPS / auth smokeを確認する。
-10. 本人がスマートフォンでlogin、move、Event / position一致を確認する。別アカウント拒否と再起動resetは確認できる場合だけ証跡にする。
+1. 固定したPR headをpushし、Ready化してcurrent-head `check`と`container-check`を実行する。両方の成功と独立reviewを提示し、PR #14をmergeするか人間が判断する。自動mergeは行わない。
+2. merge承認後、`Deploy Azure`を`image_only=true`、確認文字列`publish-ghcr-image`で手動実行し、current mainのsource imageを一度buildしてGHCRへSHA tagでpushする。通常のmain pushはbootstrap enablementと全Azure変数が揃う前にimageを書き込めない。package公開の承認を確認してpublic化し、匿名pullで解決したdigestを記録する。
+3. subscription alias `omote-dev-subscription`、tenant、本人object ID、Japan East、専用RG `rg-agent-world-jpe`の不存在、Container App候補`agent-world-yomote-jpe`をread-onlyで再照合する。Cost Managementの再照会は新しいretry budgetと再開条件を明示できる場合だけ1回行う。
+4. 実image digest、実通貨、確認済み通知先で`Deploy-AzureCore.ps1`を`-Apply`なしで実行する。専用RG内のCreateだけで削除・既存更新がなく、Budget Createを含む結果とFullResourcePayloadsの内容を含むwhat-if SHA256を提示してAzure適用の明示承認を得る。ここまでの準備承認をapply承認へ流用しない。
+5. 適用承認後、同じ引数へ確認済みJPYと承認済みwhat-if SHA256、`-Apply`を加える。scriptはCost ManagementでJPYを再確認し、通知先非空、専用RG不存在、Create-only allowlist、plan hash一致を満たす場合だけinternal ingressのcore、Key Vault、managed identity、Log Analytics、Budgetを作る。自己申告のJPY文字列だけをactual billing確認の代わりにしない。
+6. `Configure-Entra.ps1`でsingle-tenant app、本人assignment、1年secretを作る。secret値はKey Vaultだけへ保存する。
+7. Entra DirectoryとEasy Authのactualが本人1件、HTTPS必須、匿名path `/healthz`だけであることを確認する。
+8. Entra引数と`-ExternalIngress`を加えたwhat-ifを確認後、applyする。直後に未認証UI / APIの拒否とhealthを検査する。
+9. 専用RG scopeのOIDC identityを作成し、保護済み`azure-production` environmentへ非secret変数を設定する。
+10. `Deploy Azure`を手動で1回実行し、OIDC login、digest deploy、HTTPS / auth smokeを確認する。
+11. 本人がスマートフォンでlogin、move、Event / position一致を確認する。別アカウント拒否と再起動resetは確認できる場合だけ証跡にする。
 
 各書き込みの結果が不明なら自動再送しない。actualを読んでから復旧方針を決める。
 
@@ -105,20 +108,20 @@ Budgetは通知でありhard capではない。Budget未作成は金額通知も
 
 - application回帰: 直前に成功したdigestへContainer Appを1回だけ更新し、auth / health / UI smokeを再実行する。
 - 認証境界の不一致: external ingressを無効化し、本人限定actualが一致するまで公開完了としない。
+- external適用直後のFQDN取得またはauth smoke失敗: scriptが`az containerapp ingress disable`を1回だけ実行し、actualがexternalでないことを読む。書き込み失敗・結果不明でも再送せずactual確認後に停止する。
 - OIDC権限の不一致: GitHub environmentを使用停止にし、専用RG外のrole assignmentを回収する。
 - 初回core失敗: 自動再applyせずdeployment operationとactual resourceを確認する。Resource Group削除は別の破壊操作として対象を確認する。
 
 ## 検証
 
-- 独立レビュー: `d4e882d9a718abad1a3c6f4fa724cfbd9de6265d`で初回High 1件・Medium 1件の解消を確認し、追加指摘なし。main統合後のcurrent head reviewは未実行
-- `npm run check`: main統合stateでPASS（Vitest 24、Node 5、pytest 397、build）
-- `npm run test:factory`: main統合stateでPASS（353）
-- 追加回帰test: PASS
-- workflow / runbookのPrettier、PythonのRuff: PASS
+- 独立レビュー: `d4e882d9a718abad1a3c6f4fa724cfbd9de6265d`は履歴。`8332a33a8f4514fef5b88bfdba3fb47ec4aa0ad6`でHigh 3件・Medium 2件を検出し、5件すべてを修正。修正後current head reviewは未実行
+- `npm run check`: 修正stateでPASS（Vitest 24、Node 5、pytest 418、build）
+- Azure guard / workflow追加回帰test 23件: PASS
+- workflow / runbookのPrettier、PythonのRuff、actionlint 1.7.12: PASS
 - `npm run iac:check`: PASS（CI固定Terraform 1.16.1、fmt / init / validate / mock test 1）
-- `npm run docs:check`: PASS（CI固定lychee 0.24.2、153 links、error 0）
-- Bicep 0.46.1の4 template build、Azure PowerShell 12 script parse: PASS
+- `npm run docs:check`: PASS（CI固定lychee 0.24.2、160 total / 96 unique links、error 0）
+- Bicep 0.46.1の4 template buildは補助証跡としてPASS。修正stateのAzure PowerShell script parse: PASS
 - production単一origin smoke: health、UI、World、Event history、move、未知API 404がPASS
-- Docker daemon / actionlint: ローカルにないため未実行。Dockerのproduction build / runはcurrent-head CIで確認する
+- Docker daemon: ローカルにないため未実行。Dockerのproduction build / runはcurrent-head CIで確認する
 - GitHub Actions上の新しい`container-check`: 未検証
 - Azure / Entra / GHCR / OIDCのlive操作: 未実施

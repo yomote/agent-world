@@ -98,7 +98,7 @@ resource "github_repository_ruleset" "main" {
       strict_required_status_checks_policy = true
       dynamic "required_check" {
         # workflowのjob名と照合する (tests/policy.tftest.hcl)。
-        for_each = toset(["check"])
+        for_each = toset(["check", "container-check"])
         content {
           context = required_check.value
         }

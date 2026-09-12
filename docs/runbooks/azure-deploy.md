@@ -6,6 +6,8 @@
 
 `Deploy Azure`はmainへの通常push、手動実行、工場の`repository_dispatch: agent-world-merged`を受ける。dispatchはPR番号、PR head SHA、merge commit SHAをGitHub APIのmerged PRへ照合し、そのmergeがjob開始時に固定したcurrent mainの祖先であることを確認する。pushもevent commitがcurrent mainの祖先であることを確認する。どのeventでもcurrent mainからdeploy対象pathを最後に変更したcommitをdesired sourceにするため、後続のdocs-only mergeやconcurrencyのpending置換があっても対象変更を取りこぼさない。
 
+source eventのread-only照合後、image mutationより先にmodeを検査する。通常deployは承認済みbootstrapが設定した`AZURE_DEPLOY_ENABLED=true`、Azure ID / RG / app、Entra auth、実測JPY、1件以上のBudget通知先を必須にする。初回image準備だけは手動dispatchの`image_only=true`と確認文字列`publish-ghcr-image`を必須にし、Azure login / deployをskipする。これによりPR mergeやmain pushだけではGHCR packageを作成・更新しない。
+
 通常pushとdispatchは同じconcurrencyへ直列化する。desired sourceの公開GHCR SHA tagが既にあればそのdigestを再利用し、なければ1回だけbuild/pushする。manifest取得の404だけを未作成と扱い、認証・通信エラーではtagを上書きしない。現在Container Appのimageが同じdigestならrevision更新を省略してsmokeだけを行う。
 
 工場が`GITHUB_TOKEN`でmergeすると通常push workflowが抑止されるため、merge成功応答を得た同じtrusted `workflow_dispatch`からrepository dispatchを1回だけ送る。dispatch結果不明時は再送せず、merge済み・deploy不明として失敗を残す。Azure workflowがdefault branchへ入る前のmergeは受信できないため、初回はAzure変更がmainへ入ったpushまたは手動実行で開始する。
@@ -39,3 +41,5 @@ az containerapp update `
 ```
 
 rollbackも新しいrevisionであり、メモリ内Worldはresetする。書き込み結果不明なら同じ更新を再送せず、actual imageとrevisionを読む。停止が必要ならmin replicasは既に0なのでtrafficを止めるかingressを無効化する。Resource Group削除は通常の停止手段にせず、削除対象と回収不能なKey Vault purge protectionを確認した別作業にする。
+
+初回external ingress適用直後のFQDN取得またはauth smokeが失敗した場合、`Deploy-AzureCore.ps1`は`az containerapp ingress disable`を1回だけ実行し、externalでないactualを読む。disableの応答が失敗でもactualが閉じていれば封じ込め済みとして記録し、成功・失敗のどちらでも元の公開検証は失敗として停止する。actualを読めない、またはexternalのままなら結果不明または封じ込め失敗として停止し、自動再送しない。

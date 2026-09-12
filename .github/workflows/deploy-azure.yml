@@ -20,6 +20,16 @@ on:
   repository_dispatch:
     types: [agent-world-merged]
   workflow_dispatch:
+    inputs:
+      image_only:
+        description: Build and push the current main image without Azure deployment
+        required: true
+        default: false
+        type: boolean
+      confirm_image_publish:
+        description: For image-only mode, enter publish-ghcr-image
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -157,6 +167,42 @@ jobs:
           esac
           echo "sha=${main_sha}" >>"${GITHUB_OUTPUT}"
 
+      - name: Require approved deployment mode
+        id: approval
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMAGE_ONLY: ${{ inputs.image_only }}
+          IMAGE_CONFIRMATION: ${{ inputs.confirm_image_publish }}
+          DEPLOY_ENABLED: ${{ vars.AZURE_DEPLOY_ENABLED }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+          AZURE_AUTH_MODE: ${{ vars.AZURE_AUTH_MODE }}
+          AZURE_BUDGET_CURRENCY: ${{ vars.AZURE_BUDGET_CURRENCY }}
+          AZURE_BUDGET_CONTACT_EMAILS_JSON: ${{ vars.AZURE_BUDGET_CONTACT_EMAILS_JSON }}
+        run: |
+          set -euo pipefail
+          image_only=false
+          if test "${EVENT_NAME}" = "workflow_dispatch" && test "${IMAGE_ONLY}" = "true"; then
+            test "${IMAGE_CONFIRMATION}" = "publish-ghcr-image"
+            image_only=true
+          else
+            test "${DEPLOY_ENABLED}" = "true"
+            for value in \
+              "${AZURE_CLIENT_ID}" "${AZURE_TENANT_ID}" "${AZURE_SUBSCRIPTION_ID}" \
+              "${AZURE_RESOURCE_GROUP}" "${AZURE_CONTAINER_APP}"; do
+              test -n "${value}"
+            done
+            test "${AZURE_AUTH_MODE}" = "entra"
+            test "${AZURE_BUDGET_CURRENCY}" = "JPY"
+            jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' \
+              <<<"${AZURE_BUDGET_CONTACT_EMAILS_JSON}" >/dev/null
+          fi
+          echo "image_only=${image_only}" >>"${GITHUB_OUTPUT}"
+
       - name: Check out exact main commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -213,10 +259,20 @@ jobs:
           echo "reference=${image_repository}@${digest}" >>"${GITHUB_OUTPUT}"
 
       - name: Require anonymous GHCR pull
+        if: steps.approval.outputs.image_only != 'true'
         shell: pwsh
         run: ./scripts/azure/Test-GhcrPublic.ps1 -Image '${{ steps.image.outputs.reference }}'
 
+      - name: Record approved image preparation
+        if: steps.approval.outputs.image_only == 'true'
+        shell: bash
+        run: |
+          echo "### GHCR image prepared" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- image: \`${{ steps.image.outputs.reference }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- Azure deployment: not attempted" >>"${GITHUB_STEP_SUMMARY}"
+
       - name: Sign in to Azure with OIDC
+        if: steps.approval.outputs.image_only != 'true'
         uses: Azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -224,6 +280,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy image once
+        if: steps.approval.outputs.image_only != 'true'
         id: deploy
         shell: bash
         env:
@@ -247,10 +304,12 @@ jobs:
           echo "url=https://${fqdn}" >>"${GITHUB_OUTPUT}"
 
       - name: Verify HTTPS and authorization boundary
+        if: steps.approval.outputs.image_only != 'true'
         shell: pwsh
         run: ./scripts/azure/Test-AzureSmoke.ps1 -BaseUrl '${{ steps.deploy.outputs.url }}' -AuthMode '${{ vars.AZURE_AUTH_MODE }}'
 
       - name: Record deployment
+        if: steps.approval.outputs.image_only != 'true'
         shell: bash
         run: |
           echo "### Azure deployment" >>"${GITHUB_STEP_SUMMARY}"

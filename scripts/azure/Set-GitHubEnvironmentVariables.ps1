@@ -13,11 +13,16 @@ param(
   [Parameter(Mandatory)] [string] $BudgetCurrency,
   [Parameter(Mandatory)] [string] $BudgetStartDate,
   [string[]] $BudgetContactEmails = @(),
+  [Parameter(Mandatory)] [switch] $EnableDeployment,
   [string] $Repository = "yomote/agent-world",
   [string] $Environment = "azure-production"
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $EnableDeployment) { throw "Deployment enablement requires an explicit switch." }
+if ($AuthMode -ne 'entra' -or $BudgetCurrency -ne 'JPY' -or $BudgetContactEmails.Count -eq 0) {
+  throw "Deployment requires Entra auth, verified JPY billing currency, and at least one Budget contact."
+}
 & "$PSScriptRoot/Test-GitHubEnvironment.ps1" -Repository $Repository -Environment $Environment
 $credentialLines = "protocol=https`nhost=github.com`n`n" | git credential fill
 $credential = @{}
@@ -51,6 +56,7 @@ try {
     AZURE_BUDGET_CURRENCY = $BudgetCurrency
     AZURE_BUDGET_START_DATE = $BudgetStartDate
     AZURE_BUDGET_CONTACT_EMAILS_JSON = ConvertTo-Json -InputObject @($BudgetContactEmails) -Compress
+    AZURE_DEPLOY_ENABLED = 'true'
   }
   foreach ($entry in $values.GetEnumerator()) {
     $body = @{ name = $entry.Key; value = $entry.Value } | ConvertTo-Json -Compress

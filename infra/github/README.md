@@ -4,15 +4,15 @@
 
 ## 管理範囲
 
-| 対象           | 宣言                                                                                                        |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| リポジトリ     | 公開範囲は明示入力、Issues有効、squashのみ、native auto-merge無効、マージ後のブランチ削除                   |
-| default branch | 存在するmainを指定。新規作成・renameはしない                                                                |
-| main ruleset   | PR経由、force push・削除禁止、linear history、未解決スレッド禁止、CIのcheck jobを必須化、管理者バイパスなし |
-| Actions        | 有効、GitHub製とAzure/login等の選択Actionのみ、SHA固定必須、既定tokenはread、PRの自己approve不可            |
-| 依存脆弱性     | alertsとDependabot security updatesを有効化                                                                 |
-| secret検出     | public repoのsecret scanningとpush protectionを有効化                                                       |
-| 更新対象と頻度 | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない     |
+| 対象           | 宣言                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| リポジトリ     | 公開範囲は明示入力、Issues有効、squashのみ、native auto-merge無効、マージ後のブランチ削除                                |
+| default branch | 存在するmainを指定。新規作成・renameはしない                                                                             |
+| main ruleset   | PR経由、force push・削除禁止、linear history、未解決スレッド禁止、`check`と`container-check`を必須化、管理者バイパスなし |
+| Actions        | 有効、GitHub製とAzure/login等の選択Actionのみ、SHA固定必須、既定tokenはread、PRの自己approve不可                         |
+| 依存脆弱性     | alertsとDependabot security updatesを有効化                                                                              |
+| secret検出     | public repoのsecret scanningとpush protectionを有効化                                                                    |
+| 更新対象と頻度 | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない                  |
 
 CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。[merge gate ADR](../../docs/adr/0005-trusted-merge-gate.md)のmarkerは、別会話で実施した独立Sol reviewのcurrent-head受入記録であり、GitHub identityの独立性を証明しない。
 
@@ -40,7 +40,7 @@ terraform -chdir=infra/github providers lock -platform=windows_amd64 -platform=l
 2026-09-06にユーザーが指定した公開先は **Publicの `yomote/agent-world`**。`terraform.tfvars.example`にも反映した。これは適用先の指定であり、repo作成やTerraform適用の完了を示すものではない。
 
 1. 対象repoと公開範囲を確認する。現在のローカルフォルダから接続先を推測して適用しない。このTerraformは既存repoをimportする方式で、新規repo作成は別途行う。
-2. 初回PRをReady for reviewにし、current headでCIのcheck jobが完走したことを確認する。Draftのskipは使用しない。
+2. 初回PRをReady for reviewにし、current headでCIの`check`と`container-check`が完走したことを確認する。Draftのskipは使用しない。
 3. 管理権限のある既存の`gh`ログインを使用する。providerは`gh auth token`へフォールバックできる。トークンをtfvars・リポジトリ・CI artifactへ保存しない。`GITHUB_OWNER`など別のowner設定を環境変数で上書きしていないことも確認する。
 4. `terraform.tfvars.example`を`terraform.tfvars`へコピーし、owner/name/現状のvisibilityを記入する。private repoでrulesetが利用できるかはアカウントのプランに依存する。利用できない場合に公開範囲を自動変更しない。
 5. `gh api repos/OWNER/REPO/rulesets` と既存のbranch protectionを確認する。`agent-world-main`が既にあれば`existing_ruleset_id`へ実IDを記入し、二重作成を防ぐ。

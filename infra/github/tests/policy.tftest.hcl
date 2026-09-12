@@ -44,8 +44,11 @@ run "factory_policy" {
     error_message = "未解決スレッドは止め、単独開発の自己承認待ちは作らない。"
   }
   assert {
-    condition     = toset([for check in github_repository_ruleset.main.rules[0].required_status_checks[0].required_check : check.context]) == toset([for key, job in yamldecode(file("${path.module}/../../.github/workflows/ci.yml")).jobs : try(job.name, key)])
-    error_message = "rulesetの必須チェックとCI workflowのjob名が一致していません。"
+    condition = toset([for check in github_repository_ruleset.main.rules[0].required_status_checks[0].required_check : check.context]) == toset(concat(
+      [for key, job in yamldecode(file("${path.module}/../../.github/workflows/ci.yml")).jobs : try(job.name, key)],
+      [try(yamldecode(file("${path.module}/../../.github/workflows/deploy-azure.yml")).jobs["container-check"].name, "container-check")]
+    ))
+    error_message = "rulesetの必須チェックとCI / container workflowのjob名が一致していません。"
   }
   assert {
     condition     = github_actions_repository_permissions.project.sha_pinning_required && github_repository_vulnerability_alerts.project.enabled && github_repository_dependabot_security_updates.project.enabled

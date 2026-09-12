@@ -8,6 +8,8 @@ param(
   [Parameter(Mandatory)] [ValidatePattern('^\d{4}-\d{2}-01T00:00:00Z$')] [string] $BudgetStartDate,
   [ValidateRange(1, 1000000)] [int] $BudgetAmount = 1000,
   [string[]] $BudgetContactEmails = @(),
+  [string] $ConfirmedBudgetCurrency = '',
+  [string] $ApprovedWhatIfSha256 = '',
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $OperatorPrincipalObjectId,
   [string] $TenantId = '',
   [string] $EntraClientId = '',
@@ -17,6 +19,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($Apply) {
+  & "$PSScriptRoot/Assert-AzureApplyInputs.ps1" `
+    -BudgetContactEmails $BudgetContactEmails `
+    -ConfirmedBudgetCurrency $ConfirmedBudgetCurrency `
+    -ApprovedWhatIfSha256 $ApprovedWhatIfSha256
+}
 & "$PSScriptRoot/Assert-AzureContext.ps1" -SubscriptionId $SubscriptionId
 $accountType = & az account show --only-show-errors --query user.type --output tsv
 $signedInUserId = & az ad signed-in-user show --only-show-errors --query id --output tsv
@@ -24,6 +32,11 @@ if ($accountType -ne 'user' -or $signedInUserId -ne $OperatorPrincipalObjectId) 
   throw "OperatorPrincipalObjectIdは現在login中の本人object IDと一致させてください。"
 }
 & "$PSScriptRoot/Test-GhcrPublic.ps1" -Image $Image
+if ($Apply) {
+  & "$PSScriptRoot/Test-AzureBillingCurrency.ps1" `
+    -SubscriptionId $SubscriptionId `
+    -ExpectedCurrency $ConfirmedBudgetCurrency
+}
 if ($ExternalIngress -and -not $EnableEntraAuth) {
   throw "ExternalIngressはEnableEntraAuthと同時にだけ有効化できます。"
 }
@@ -85,23 +98,74 @@ $parameters = @{
   operatorPrincipalObjectId = @{ value = $OperatorPrincipalObjectId }
 }
 $parameterFile = [System.IO.Path]::GetTempFileName()
+$whatIfFile = [System.IO.Path]::GetTempFileName()
 try {
   @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'; contentVersion = '1.0.0.0'; parameters = $parameters } |
     ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $parameterFile -Encoding utf8NoBOM
   $common = @('--only-show-errors', '--location', $Location, '--template-file', "$PSScriptRoot/../../infra/azure/main.bicep", '--parameters', "@$parameterFile")
-  & az deployment sub what-if @common --result-format FullResourcePayloads --no-pretty-print
-  if ($LASTEXITCODE -ne 0) { throw "Azure subscription what-if failed; apply was not attempted." }
+  $whatIfJson = & az deployment sub what-if @common --result-format FullResourcePayloads --no-pretty-print --output json
+  if ($LASTEXITCODE -ne 0 -or -not $whatIfJson) { throw "Azure subscription what-if failed; apply was not attempted." }
+  $whatIfJson | Set-Content -LiteralPath $whatIfFile -Encoding utf8NoBOM
+  $whatIf = $whatIfJson | ConvertFrom-Json
+  if ($whatIf.status -ne 'Succeeded') { throw "Azure subscription what-if was not successful; apply was not attempted." }
+  $planText = @($whatIf.changes) |
+    Sort-Object resourceId, changeType |
+    ConvertTo-Json -Depth 100 -Compress
+  $planHash = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($planText))
+  ).ToLowerInvariant()
+  Write-Output "WHAT-IF SHA256: $planHash"
+  if (-not $EnableEntraAuth -and ($Apply -or $BudgetContactEmails.Count -gt 0)) {
+    & "$PSScriptRoot/Assert-AzureInitialPlan.ps1" `
+      -WhatIfPath $whatIfFile `
+      -SubscriptionId $SubscriptionId `
+      -ResourceGroupName $ResourceGroupName `
+      -AppName $AppName
+  } elseif ($EnableEntraAuth) {
+    & "$PSScriptRoot/Assert-AzureAuthPlan.ps1" `
+      -WhatIfPath $whatIfFile `
+      -SubscriptionId $SubscriptionId `
+      -ResourceGroupName $ResourceGroupName `
+      -AppName $AppName
+  }
   if (-not $Apply) {
     Write-Output "WHAT-IF ONLY: no Azure resource was created or changed."
     return
   }
+  if ($planHash -ne $ApprovedWhatIfSha256) {
+    throw "Current what-if SHA256 does not match the approved plan; apply was not attempted."
+  }
+  $resourceGroupExists = & az group exists --only-show-errors --name $ResourceGroupName
+  if ($LASTEXITCODE -ne 0) {
+    throw "Resource Group stage check failed; apply was not attempted."
+  }
+  if (-not $EnableEntraAuth) {
+    if ([System.Convert]::ToBoolean($resourceGroupExists)) {
+      throw "Initial Apply requires the dedicated Resource Group to be absent."
+    }
+  } elseif (-not [System.Convert]::ToBoolean($resourceGroupExists)) {
+    throw "Auth Apply requires the dedicated Resource Group to exist."
+  }
   & az deployment sub create @common --name "agent-world-core-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))" --output json
   if ($LASTEXITCODE -ne 0) { throw "Azure core deployment failed." }
   if ($ExternalIngress) {
-    $fqdn = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'properties.configuration.ingress.fqdn' --output tsv
-    if ($LASTEXITCODE -ne 0 -or -not $fqdn) { throw "公開後のContainer App FQDNを取得できません。" }
-    & "$PSScriptRoot/Test-AzureSmoke.ps1" -BaseUrl "https://$fqdn" -AuthMode entra
+    try {
+      $fqdn = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'properties.configuration.ingress.fqdn' --output tsv
+      if ($LASTEXITCODE -ne 0 -or -not $fqdn) { throw "公開後のContainer App FQDNを取得できません。" }
+      & "$PSScriptRoot/Test-AzureSmoke.ps1" -BaseUrl "https://$fqdn" -AuthMode entra
+    } catch {
+      $verificationFailure = $_.Exception.Message
+      try {
+        & "$PSScriptRoot/Disable-AzureExternalIngress.ps1" `
+          -ResourceGroupName $ResourceGroupName `
+          -AppName $AppName
+      } catch {
+        throw "POST-APPLY AUTH FAILURE: smoke failed ($verificationFailure); containment failed or is unknown ($($_.Exception.Message)). No retry was attempted."
+      }
+      throw "POST-APPLY AUTH FAILURE: smoke failed ($verificationFailure); external ingress containment was verified."
+    }
   }
 } finally {
   Remove-Item -LiteralPath $parameterFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $whatIfFile -Force -ErrorAction SilentlyContinue
 }

@@ -30,6 +30,8 @@ GitHub Packagesで最初のcontainer packageをpublicにする。public source�
 
 SHA tagはbuildし直せば上書き可能で、それ自体は不変保証ではない。Container App、deploy証跡、rollbackでは解決後の`sha256:` digestだけを使う。
 
+Dockerを使える承認済みlocal環境がない場合は、PR #14のcurrent-head CIと人間によるmerge判断を終えた後、`Deploy Azure`を`image_only=true`、確認文字列`publish-ghcr-image`で手動実行する。このmodeはcurrent mainのimageをGHCRへpushするがAzure login / deployは行わない。通常のmain pushとrepository dispatchは、`AZURE_DEPLOY_ENABLED=true`とAzure / Entra / Budget変数が揃う前にGHCRへ書き込めずfail-closedになる。
+
 ## coreのwhat-ifと適用
 
 月初値は `2026-09-01T00:00:00Z` のようなRFC 3339日時を使う。最初は`-Apply`なしで差分と対象Resource Groupを確認する。
@@ -43,10 +45,11 @@ SHA tagはbuildし直せば上書き可能で、それ自体は不変保証で�
   -Image ghcr.io/yomote/agent-world@sha256:<digest> `
   -BudgetStartDate 2026-09-01T00:00:00Z `
   -BudgetAmount 1000 `
+  -BudgetContactEmails <confirmed-email> `
   -OperatorPrincipalObjectId <signed-in-user-object-id>
 ```
 
-what-ifで新規専用Resource Groupと意図した資源だけがCreateになり、削除・既存更新がないことを確認して同じ引数へ`-Apply`を加える。初回coreはingressをinternalに固定するため、UI/APIはInternetから到達できない。
+what-ifで新規専用Resource Groupと意図した資源だけがCreateになり、削除・既存更新がないこと、Budgetを含むことを確認する。scriptがFullResourcePayloadsの内容から出す`WHAT-IF SHA256`を適用承認packetへ記録する。承認後、同じ引数へ`-ConfirmedBudgetCurrency JPY -ApprovedWhatIfSha256 <approved-hash> -Apply`を加える。ApplyはCost Managementで実請求通貨がJPYであることを1回再確認し、通知先非空、専用RG不存在、Create-only allowlist、plan hash一致を満たさなければ停止する。429や認証失敗では再試行もresource作成も行わない。初回coreはingressをinternalに固定するため、UI/APIはInternetから到達できない。
 
 ## 本人限定Entraを構成する
 
@@ -60,7 +63,7 @@ signed-in userのobject IDは `az ad signed-in-user show --query id -o tsv` か�
   -AllowedUserObjectId <signed-in-user-object-id>
 ```
 
-Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraClientId <client-id> -EnableEntraAuth -ExternalIngress`を追加してwhat-ifを確認し、最後に`-Apply`を加える。scriptは外部公開前にDirectoryのsingle-tenant registration・本人assignmentと、Easy Authの本人1名allowlist、未認証redirect、HTTPS必須、匿名pathが`/healthz`だけ、他provider無効であるactualを検査する。公開変更の直後にもHTTPSのhealthと未認証UI/API拒否をsmokeし、失敗なら公開完了としない。
+Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraClientId <client-id> -EnableEntraAuth -ExternalIngress`を追加してwhat-ifを確認する。新しいhashの承認後に`-ApprovedWhatIfSha256 <approved-hash> -ConfirmedBudgetCurrency JPY -Apply`を加える。scriptは外部公開前にDirectoryのsingle-tenant registration・本人assignmentと、Easy Authの本人1名allowlist、未認証redirect、HTTPS必須、匿名pathが`/healthz`だけ、他provider無効であるactualを検査する。公開変更の直後にもHTTPSのhealthと未認証UI/API拒否をsmokeする。FQDN取得またはsmokeが失敗した場合はexternal ingressを1回だけ無効化し、actualを読み、再送せず公開失敗として停止する。
 
 途中失敗時は自動再送しない。scriptが出す`clientId`、一意なcredential `displayName`、取得済みなら`keyId`と期限を使い、app registration、enterprise app、Key Vault secret、authConfigのactualを確認してから復旧する。secret値は再取得できない。Key Vault格納前に止まったcredentialはmetadataを確認し、`az ad app credential delete --id <client-id> --key-id <key-id>`で回収する。
 
@@ -84,4 +87,4 @@ OIDCは設定が存在するだけでは合格にしない。`Deploy Azure`を�
 
 OIDC作成前に工場側`infra/github`を適用し、read-onlyの`Test-GitHubEnvironment.ps1`を実行する。`azure-production` environmentのresponseにBooleanのadmin bypass無効が明示され、custom deployment branch policyが`main` 1件だけであるactualを確認する。field欠落は無効と推測せず失敗する。workflowにもmain判定を置くが、任意branchの改変workflowへenvironment OIDCを渡さない本当の境界はこのGitHub側policyである。
 
-`Set-GitHubEnvironmentVariables.ps1`でOIDC ID、専用RG、app、auth、本人OID、実測したbudget通貨・通知先をenvironment variablesへまとめて設定する。いずれもcredentialではなく、Easy Auth client secretは含めない。同scriptは設定後にenvironment branch policyも再検証する。
+`Set-GitHubEnvironmentVariables.ps1 -EnableDeployment`でOIDC ID、専用RG、app、auth、本人OID、実測したbudget通貨・通知先をenvironment variablesへまとめて設定する。scriptはEntra auth、JPY、通知先非空を要求し、同時に`AZURE_DEPLOY_ENABLED=true`を設定する。いずれもcredentialではなく、Easy Auth client secretは含めない。同scriptは設定後にenvironment branch policyも再検証する。
