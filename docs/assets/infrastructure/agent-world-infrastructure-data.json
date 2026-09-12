@@ -1,0 +1,242 @@
+{
+  "title": "Agent World 管理status インフラ構成",
+  "observed_at": "2026-09-13T01:09:00+09:00",
+  "disclaimer": "構成説明。live dashboardではない。",
+  "statuses": {
+    "placed": "配置済",
+    "unverified": "接続未検証",
+    "working": "作業中",
+    "planned": "計画"
+  },
+  "boundaries": [
+    {
+      "id": "local_pc",
+      "label": "Local PC / Codex",
+      "management": "local process + allowlist",
+      "nodes": ["codex_tasks", "collector", "publisher"]
+    },
+    {
+      "id": "github",
+      "label": "GitHub",
+      "management": "repository + Actions + GHCR",
+      "nodes": ["repository", "actions", "ghcr", "github_terraform"]
+    },
+    {
+      "id": "entra_tenant",
+      "label": "Microsoft Entra tenant",
+      "management": "CLI + recovery journal",
+      "nodes": ["entra"]
+    },
+    {
+      "id": "management_rg",
+      "label": "Azure 管理Resource Group",
+      "management": "Azure Bicep: Core / Protected",
+      "nodes": ["container_app", "private_blob", "key_vault", "uami", "log_analytics", "budget"]
+    },
+    {
+      "id": "world_rg",
+      "label": "Azure World Resource Group",
+      "management": "今回の管理RGと別",
+      "nodes": ["world_app"]
+    },
+    {
+      "id": "user_device",
+      "label": "User device",
+      "management": "browser",
+      "nodes": ["smartphone"]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "codex_tasks",
+      "label": "Codex tasks",
+      "status": "placed",
+      "detail": "ローカル実行状態。停止sessionの自動wakeは別課題。"
+    },
+    {
+      "id": "collector",
+      "label": "Allowlist collector",
+      "status": "placed",
+      "detail": "許可fieldだけをsnapshot化。会話本文・秘密・private pathを除外。"
+    },
+    {
+      "id": "publisher",
+      "label": "Local publisher",
+      "status": "placed",
+      "detail": "fresh snapshotのsingle PUTは確認済み。snapshotは期限切れで、継続自動更新は未成立。"
+    },
+    {
+      "id": "repository",
+      "label": "Repository",
+      "status": "placed",
+      "detail": "source / review / CIの正本。"
+    },
+    {
+      "id": "actions",
+      "label": "GitHub Actions",
+      "status": "placed",
+      "detail": "image build・smoke・GHCR publish入口。Azure deployは実行しない。"
+    },
+    {
+      "id": "ghcr",
+      "label": "GHCR image",
+      "status": "placed",
+      "detail": "immutable digest固定、匿名pull成功。"
+    },
+    {
+      "id": "github_terraform",
+      "label": "GitHub Terraform",
+      "status": "unverified",
+      "detail": "code/import/local state 9件。2026-09-06 local fmt/validate/mock PASS。実apply・最新plan 0未確認、shared state/drift未実装。"
+    },
+    {
+      "id": "entra",
+      "label": "Entra app / SP / role",
+      "status": "placed",
+      "detail": "app、service principal、Key Vault secret、certificate、role、token claims実証済。BicepではなくCLI + recovery journal管理。"
+    },
+    {
+      "id": "container_app",
+      "label": "Container Apps",
+      "status": "placed",
+      "detail": "Protectedはmain 1b24533でapply成功。external=true / Succeeded / Running / Healthy / auth有効。外部health 200・匿名401確認済み、本人login・UIは未検証。"
+    },
+    {
+      "id": "private_blob",
+      "label": "Private Blob",
+      "status": "placed",
+      "detail": "fresh snapshotのsingle PUT確認済み。ingest GETは403でread/write分離確認、viewer GETは未検証。"
+    },
+    {
+      "id": "key_vault",
+      "label": "Key Vault",
+      "status": "placed",
+      "detail": "認証secretを管理。値は図に含めない。"
+    },
+    {
+      "id": "uami",
+      "label": "Managed Identity",
+      "status": "placed",
+      "detail": "管理AppからBlob等へのidentity境界。"
+    },
+    {
+      "id": "log_analytics",
+      "label": "Log Analytics",
+      "status": "placed",
+      "detail": "管理Appの運用log。"
+    },
+    {
+      "id": "budget",
+      "label": "Azure Budget",
+      "status": "placed",
+      "detail": "費用通知。hard capではない。"
+    },
+    {
+      "id": "smartphone",
+      "label": "Smartphone",
+      "status": "unverified",
+      "detail": "Entra認証後の管理UI/API実表示は未確認。"
+    },
+    {
+      "id": "world_app",
+      "label": "World app",
+      "status": "unverified",
+      "detail": "実配備未確認。今回の管理RGと別枠。"
+    }
+  ],
+  "edges": [
+    {
+      "from": "codex_tasks",
+      "to": "collector",
+      "kind": "data",
+      "label": "local events"
+    },
+    {
+      "from": "collector",
+      "to": "publisher",
+      "kind": "data",
+      "label": "sanitized snapshot"
+    },
+    {
+      "from": "publisher",
+      "to": "container_app",
+      "kind": "data",
+      "label": "PUT /api/status",
+      "status": "placed"
+    },
+    {
+      "from": "container_app",
+      "to": "private_blob",
+      "kind": "data",
+      "label": "current snapshot"
+    },
+    {
+      "from": "smartphone",
+      "to": "entra",
+      "kind": "auth",
+      "label": "sign in"
+    },
+    {
+      "from": "entra",
+      "to": "container_app",
+      "kind": "auth",
+      "label": "Easy Auth + claims",
+      "status": "unverified"
+    },
+    {
+      "from": "repository",
+      "to": "actions",
+      "kind": "deploy",
+      "label": "reviewed head"
+    },
+    {
+      "from": "actions",
+      "to": "ghcr",
+      "kind": "deploy",
+      "label": "immutable digest"
+    },
+    {
+      "from": "ghcr",
+      "to": "container_app",
+      "kind": "deploy",
+      "label": "固定digest参照"
+    },
+    {
+      "from": "container_app",
+      "to": "uami",
+      "kind": "auth",
+      "label": "managed identity"
+    },
+    {
+      "from": "uami",
+      "to": "private_blob",
+      "kind": "auth",
+      "label": "Blob data role"
+    },
+    {
+      "from": "uami",
+      "to": "key_vault",
+      "kind": "auth",
+      "label": "Key Vault access role"
+    },
+    {
+      "from": "container_app",
+      "to": "key_vault",
+      "kind": "auth",
+      "label": "secret reference"
+    },
+    {
+      "from": "container_app",
+      "to": "log_analytics",
+      "kind": "data",
+      "label": "logs"
+    },
+    {
+      "from": "smartphone",
+      "to": "container_app",
+      "kind": "data",
+      "label": "authenticated UI/API view",
+      "status": "unverified"
+    }
+  ]
+}

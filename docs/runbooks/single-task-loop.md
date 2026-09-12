@@ -63,7 +63,7 @@ Issueには状態ごとに、次の担当、具体的な次手順、既実施と
 2. 統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAをreviewerへ渡す。Issueには `review_pending` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
 3. 独立Sol reviewerは実装会話を継承せず、対象SHA、確認したDoD、検証結果と未検証、指摘の有無を返す。SHAが変わったら、その旧reviewは新しい変更の受入証跡にならない。
 4. 指摘があれば担当workerが修正し、影響に応じて再検証する。統合workerは新しいcommitを作り、最新SHAに対する独立reviewを再依頼する。
-5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、review結果、検証結果、未検証を記録する。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[ADR 0005](../adr/0005-trusted-merge-gate.md)の独立review markerも同じコメントの先頭へ記録する。
+5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、確認範囲、指摘の意味と影響、対応fileまたはcommit、変更後の再確認、未検証を記録する。`PASS`や指摘件数だけではreview証跡にしない。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[ADR 0005](../adr/0005-trusted-merge-gate.md)の独立review markerも同じコメントの先頭へ記録する。
 6. 統合workerはPRをReadyにしcurrent-head CIを確認する。GitHub設定とrulesetが適用済みなら、`main`のmerge gateへPR番号、40桁head、merge実行の明示trueを渡す。gateは条件後のsquash mergeまで同じ実行で進める。初回PRだけはADRのbootstrap手順を使う。
 7. merge後にIssueを完了し、PMは証跡に基づき成果、検証、未検証をユーザーへ報告する。条件が不足または不明ならmergeせず状態と次手順を記録する。
 
@@ -75,13 +75,15 @@ PR本文またはコメントには、最後に次の短い記録を残す。PR�
 
 ```text
 対象head: <40桁SHA>
-独立review: <reviewer> / <指摘なし または 指摘と解消先>
+独立review: <reviewer> / <確認範囲>
+指摘と影響: <何が起こり、利用者や運用上なぜ困るか。指摘なしなら「具体的な指摘なし」>
+対応: <修正fileまたはcommit。対応不要なら理由>
 検証: <command または 手動確認> — <pass / fail / not_run / skipped / unknown>
 変更後の再確認: <対象headで行った確認、または not_run>
 未検証: <CI、実機、merge後など>
 ```
 
-DraftのCI jobが`skipped`なら、その事実を記録し、`pass`と書かない。レビューや検証が対象headより前のものなら、対象headに対して再確認するまで納品証跡に使わない。
+DraftのCI jobが`skipped`なら、その事実を記録し、`pass`と書かない。レビューや検証が対象headより前のものなら、対象headに対して再確認するまで納品証跡に使わない。過去のmerged PRへ当時の記録を補う場合は「ローカル独立レビューの後日補記」と明示し、GitHub上でReviewやApproveが行われたように書かない。記録にないreviewer、時刻、検証、指摘を推測で補わず、当時の未検証と後日の稼働確認を分ける。
 
 ## 受渡し時の振返り
 

@@ -43,5 +43,6 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 
 - [Mind Inboxの移植計画・参照履歴](docs/porting-plan.md)
 - [設計とAPI契約](docs/architecture.md) / [ADR](docs/adr/0001-authoritative-world.md)
+- [管理statusのインフラ構成図](docs/assets/infrastructure/agent-world-infrastructure.svg)
 - [起動・品質チェック・トラブルシュート](docs/runbooks/local-dev.md)
 - [テスト方針](docs/testing.md) / [Agent向け規約](AGENTS.md)
