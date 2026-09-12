@@ -150,12 +150,14 @@ try {
   } elseif (-not [System.Convert]::ToBoolean($resourceGroupExists)) {
     throw "Auth Apply requires the dedicated Resource Group to exist."
   }
-  & az deployment sub create @common --name "agent-world-core-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))" --output json
+  $deploymentName = "agent-world-core-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))"
+  & az deployment sub create @common --name $deploymentName --output json
   if ($LASTEXITCODE -ne 0) {
     if ($ExternalIngress) {
       & "$PSScriptRoot/Resolve-AzureExternalDeploymentFailure.ps1" `
         -ResourceGroupName $ResourceGroupName `
-        -AppName $AppName
+        -AppName $AppName `
+        -DeploymentName $deploymentName
     }
     throw "Azure core deployment failed or its result is unknown; deployment was not retried."
   }

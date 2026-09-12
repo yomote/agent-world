@@ -270,7 +270,12 @@ def _fake_cost_az_script(tmp_path: Path, *, currency: str, exit_code: int = 0) -
 
 
 def _fake_external_state_az_script(
-    tmp_path: Path, *, initial: str, read_exit_code: int = 0
+    tmp_path: Path,
+    *,
+    initial: str,
+    deployment_state: str = "Failed",
+    deployment_read_exit_code: int = 0,
+    ingress_read_exit_code: int = 0,
 ) -> tuple[Path, Path]:
     log = tmp_path / "external-state-az.log"
     marker = tmp_path / "ingress-disabled"
@@ -279,12 +284,17 @@ def _fake_external_state_az_script(
         "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)\n"
         f"Add-Content -LiteralPath '{log.as_posix()}' -Value ($Args -join ' ')\n"
         "$command = $Args -join ' '\n"
+        "if ($command -match 'deployment sub show') {\n"
+        f"  if ({deployment_read_exit_code} -ne 0) {{ exit {deployment_read_exit_code} }}\n"
+        f"  Write-Output '{deployment_state}'\n"
+        "  exit 0\n"
+        "}\n"
         "if ($command -match 'ingress disable') {\n"
         f"  Set-Content -LiteralPath '{marker.as_posix()}' -Value disabled\n"
         "  exit 0\n"
         "}\n"
         "if ($command -match 'containerapp show') {\n"
-        f"  if ({read_exit_code} -ne 0) {{ exit {read_exit_code} }}\n"
+        f"  if ({ingress_read_exit_code} -ne 0) {{ exit {ingress_read_exit_code} }}\n"
         f"  if (Test-Path -LiteralPath '{marker.as_posix()}') {{ Write-Output 'false' }} "
         f"else {{ Write-Output '{initial}' }}\n"
         "  exit 0\n"
@@ -306,6 +316,8 @@ def _run_external_deployment_resolution(fake: Path) -> subprocess.CompletedProce
             "rg-agent-world-jpe",
             "-AppName",
             "agent-world-yomote-jpe",
+            "-DeploymentName",
+            "agent-world-core-20260913000000",
             "-AzureCli",
             str(fake),
         ],
@@ -320,11 +332,14 @@ def _run_external_deployment_resolution(fake: Path) -> subprocess.CompletedProce
 @pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
 def test_external_deployment_nonzero_or_timeout_after_side_effect_contains_once(tmp_path):
     """nonzero/timeout相当の応答不明でexternal actualを1回だけ封じ込める。"""
-    fake, log = _fake_external_state_az_script(tmp_path, initial="true")
+    fake, log = _fake_external_state_az_script(
+        tmp_path, initial="true", deployment_state="Succeeded"
+    )
     result = _run_external_deployment_resolution(fake)
     assert result.returncode != 0
     assert "containment was verified" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
+    assert len([call for call in calls if "deployment sub show" in call]) == 1
     assert len([call for call in calls if "ingress disable" in call]) == 1
     assert len([call for call in calls if "containerapp show" in call]) == 2
 
@@ -332,22 +347,58 @@ def test_external_deployment_nonzero_or_timeout_after_side_effect_contains_once(
 @pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
 def test_external_deployment_nonzero_preserves_internal_actual(tmp_path):
     """deployment応答不明でinternalなactualに余計なwriteを行わない。"""
-    fake, log = _fake_external_state_az_script(tmp_path, initial="false")
+    fake, log = _fake_external_state_az_script(tmp_path, initial="false", deployment_state="Failed")
     result = _run_external_deployment_resolution(fake)
     assert result.returncode != 0
     assert "remained internal" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
+    assert len([call for call in calls if "deployment sub show" in call]) == 1
     assert not [call for call in calls if "ingress disable" in call]
     assert len([call for call in calls if "containerapp show" in call]) == 1
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
-def test_external_deployment_nonzero_stops_if_actual_is_unreadable(tmp_path):
+def test_external_deployment_nonzero_stops_if_ingress_actual_is_unreadable(tmp_path):
     """actualを読めない結果不明を成功と推測せず再送なしで停止する。"""
-    fake, log = _fake_external_state_az_script(tmp_path, initial="", read_exit_code=1)
+    fake, log = _fake_external_state_az_script(
+        tmp_path,
+        initial="",
+        deployment_state="Canceled",
+        ingress_read_exit_code=1,
+    )
     result = _run_external_deployment_resolution(fake)
     assert result.returncode != 0
     assert "actual could not be verified" in result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len([call for call in calls if "deployment sub show" in call]) == 1
+    assert len([call for call in calls if "containerapp show" in call]) == 1
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
+def test_running_deployment_does_not_claim_internal_actual_is_final(tmp_path):
+    """Runningで後external化し得るとき、現在internalでも確定としない。"""
+    fake, log = _fake_external_state_az_script(
+        tmp_path, initial="false", deployment_state="Running"
+    )
+    result = _run_external_deployment_resolution(fake)
+    assert result.returncode != 0
+    assert "no terminal provisioning state" in result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len([call for call in calls if "deployment sub show" in call]) == 1
+    assert not [call for call in calls if "containerapp show" in call]
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")
+def test_unreadable_deployment_state_stops_before_ingress_actual(tmp_path):
+    """deployment stateを読めない場合はingressを確定値に使わない。"""
+    fake, log = _fake_external_state_az_script(
+        tmp_path,
+        initial="false",
+        deployment_read_exit_code=1,
+    )
+    result = _run_external_deployment_resolution(fake)
+    assert result.returncode != 0
+    assert "no terminal provisioning state" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1
 

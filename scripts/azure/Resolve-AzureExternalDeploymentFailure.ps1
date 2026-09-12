@@ -2,10 +2,20 @@
 param(
   [Parameter(Mandatory)] [string] $ResourceGroupName,
   [Parameter(Mandatory)] [string] $AppName,
+  [Parameter(Mandatory)] [string] $DeploymentName,
   [string] $AzureCli = 'az'
 )
 
 $ErrorActionPreference = 'Stop'
+$provisioningState = & $AzureCli deployment sub show `
+  --only-show-errors `
+  --name $DeploymentName `
+  --query 'properties.provisioningState' `
+  --output tsv
+if ($LASTEXITCODE -ne 0 -or $provisioningState -notin @('Succeeded', 'Failed', 'Canceled')) {
+  throw 'EXTERNAL DEPLOYMENT UNKNOWN: deployment was not retried and no terminal provisioning state was verified.'
+}
+
 $external = & $AzureCli containerapp show `
   --only-show-errors `
   --resource-group $ResourceGroupName `

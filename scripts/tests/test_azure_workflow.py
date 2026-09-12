@@ -68,4 +68,6 @@ def test_external_auth_failure_triggers_single_containment_path():
     """公開直後のauth smoke失敗でexternal ingressを残す回帰を防ぐ。"""
     assert DEPLOY_SCRIPT.count("Disable-AzureExternalIngress.ps1") == 1
     assert DEPLOY_SCRIPT.count("Resolve-AzureExternalDeploymentFailure.ps1") == 1
+    assert "az deployment sub create @common --name $deploymentName" in DEPLOY_SCRIPT
+    assert "-DeploymentName $deploymentName" in DEPLOY_SCRIPT
     assert "POST-APPLY AUTH FAILURE" in DEPLOY_SCRIPT
