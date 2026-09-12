@@ -1,6 +1,7 @@
 """新しいlocal event snapshotをAzure管理statusへ一度だけ送る。"""
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -85,6 +86,12 @@ def send_once(url: str, token: str, payload: bytes) -> int:
         return response.status
 
 
+def snapshot_digest(snapshot: Any) -> str:
+    payload = snapshot.model_dump(mode="json", exclude={"received_at"})
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def publish_if_new(
     args: argparse.Namespace,
     token_provider: Callable[[str, str], str] = azure_cli_token,
@@ -100,8 +107,11 @@ def publish_if_new(
     if snapshot.source != "local-event-record":
         raise ValueError("only local-event-record snapshots can be published")
     observed_at = snapshot.observed_at.isoformat()
+    digest = snapshot_digest(snapshot)
+    if state.get("last_confirmed_digest") == digest:
+        return False
     previous_observation = state.get("last_attempted_observed_at")
-    if previous_observation:
+    if previous_observation and "last_confirmed_digest" not in state:
         previous_time = datetime.fromisoformat(previous_observation.replace("Z", "+00:00"))
         if snapshot.observed_at <= previous_time:
             return False
@@ -111,6 +121,7 @@ def publish_if_new(
         "last_attempted_observed_at": observed_at,
         "attempted_at": datetime.now(UTC).isoformat(),
         "outcome": "attempting",
+        "attempted_digest": digest,
     }
     write_state(args.state, attempt)
     try:
@@ -124,7 +135,10 @@ def publish_if_new(
     except Exception:
         write_state(args.state, {**attempt, "outcome": "unknown"})
         raise
-    write_state(args.state, {**attempt, "outcome": "confirmed"})
+    write_state(
+        args.state,
+        {**attempt, "outcome": "confirmed", "last_confirmed_digest": digest},
+    )
     return True
 
 

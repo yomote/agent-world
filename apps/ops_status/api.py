@@ -68,8 +68,17 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 current = None
             except (OSError, ValueError, ValidationError, SnapshotStoreError) as error:
                 raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
-            if current and snapshot.observed_at <= current.observed_at:
-                return Response(status_code=status.HTTP_204_NO_CONTENT)
+            if current:
+                same_content = current.model_dump(exclude={"received_at"}) == snapshot.model_dump(
+                    exclude={"received_at"}
+                )
+                if snapshot.observed_at < current.observed_at or same_content:
+                    return Response(status_code=status.HTTP_204_NO_CONTENT)
+                if (
+                    snapshot.observed_at == current.observed_at
+                    and snapshot.received_at <= current.received_at
+                ):
+                    return Response(status_code=status.HTTP_204_NO_CONTENT)
             try:
                 snapshots.write(snapshot)
             except (OSError, SnapshotStoreError) as error:

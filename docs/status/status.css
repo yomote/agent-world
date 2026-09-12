@@ -191,8 +191,19 @@ summary:focus-visible {
 .card[data-status="blocked"] {
   border-left: 4px solid var(--danger);
 }
+.card[data-status="human-wait"] {
+  border-left: 4px solid #d9a7ff;
+}
 .card[data-status="running"] {
   border-left: 4px solid #64b5ff;
+}
+.card[data-status="not-started"],
+.card[data-status="stopped"] {
+  border-left: 4px solid #8f98a7;
+}
+.card[data-status="completed"] {
+  border-left: 4px solid var(--accent);
+  opacity: 0.78;
 }
 .card[data-status="idle"] {
   border-left: 4px solid var(--accent);

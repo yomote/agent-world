@@ -16,13 +16,21 @@ spec.loader.exec_module(publish_status_snapshot)
 publish_if_new = publish_status_snapshot.publish_if_new
 
 
-def snapshot(observed_at: datetime) -> dict:
+def snapshot(observed_at: datetime, status: str = "running") -> dict:
     return {
         "schema_version": 1,
         "source": "local-event-record",
         "observed_at": observed_at.isoformat(),
         "received_at": observed_at.isoformat(),
-        "items": [],
+        "items": [
+            {
+                "agent": "status owner",
+                "role": "Implementation",
+                "task": "Live status delivery",
+                "status": status,
+                "observed_at": observed_at.isoformat(),
+            }
+        ],
     }
 
 
@@ -70,6 +78,21 @@ def test_publisher_does_not_send_older_snapshot(tmp_path):
     settings.snapshot.write_text(json.dumps(snapshot(older)), encoding="utf-8")
 
     assert publish_if_new(settings, lambda *_: "token", lambda *_: 204) is False
+
+
+def test_publisher_sends_stale_transition_for_the_same_source_observation(tmp_path):
+    """同じtask event時刻のrunning→unknown遷移を重複扱いして落とす回帰を防ぐ。"""
+    observed_at = datetime.now(UTC)
+    settings = args(tmp_path, observed_at)
+    sends = []
+
+    assert publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 204)
+    settings.snapshot.write_text(
+        json.dumps(snapshot(observed_at, status="unknown")), encoding="utf-8"
+    )
+
+    assert publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 204)
+    assert len(sends) == 2
 
 
 @pytest.mark.parametrize("next_observation_delay", [0, 1])
