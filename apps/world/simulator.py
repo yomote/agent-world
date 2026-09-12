@@ -1,10 +1,11 @@
 """唯一の状態更新者。HTTPやActorを知らず、観測とAction受付だけを公開する。"""
 
+from collections import deque
 from threading import Lock
 from typing import Literal
 from uuid import uuid4
 
-from .models import Action, ActionResult, Entity, Event, Position, WorldState
+from .models import Action, ActionResult, Entity, Event, EventHistory, Position, WorldState
 
 
 def resolve_move(
@@ -24,6 +25,7 @@ class WorldSimulator:
         if width < 1 or height < 1:
             raise ValueError("Worldの幅と高さは1以上が必要です")
         self._lock = Lock()
+        self._events: deque[Event] = deque(maxlen=80)
         self._state = WorldState(
             world_id=uuid4(),
             revision=0,
@@ -35,6 +37,10 @@ class WorldSimulator:
     def observe(self) -> WorldState:
         with self._lock:
             return self._state.model_copy(deep=True)
+
+    def observe_events(self) -> EventHistory:
+        with self._lock:
+            return EventHistory(world=self._state, events=tuple(self._events)).model_copy(deep=True)
 
     def apply(self, action: Action) -> ActionResult:
         with self._lock:
@@ -61,16 +67,19 @@ class WorldSimulator:
                         ),
                     }
                 )
+            event = Event(
+                event_id=uuid4(),
+                action=action,
+                status="success" if success else "failure",
+                reason=reason,
+                before=before,
+                after=after,
+                world_id=self._state.world_id,
+                world_revision=self._state.revision,
+            )
+            self._events.append(event)
             return ActionResult(
-                event=Event(
-                    event_id=uuid4(),
-                    action=action,
-                    status="success" if success else "failure",
-                    reason=reason,
-                    before=before,
-                    after=after,
-                    world_id=self._state.world_id,
-                    world_revision=self._state.revision,
-                ),
+                event=event,
                 world=self._state.model_copy(deep=True),
+                events=tuple(self._events),
             )

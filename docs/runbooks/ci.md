@@ -1,6 +1,6 @@
 # CIと外部アクセスの運用
 
-CIはローカル検証を終えた変更を確認するために使う。Agentによる小刻みなpush、CI結果の頻繁な取得、失敗時の再実行が重なって過剰なアクセスにならないよう、実行条件と確認回数を制限する。
+CIはローカル検証を終えた変更を確認するために使う。Agentによる小刻みなpush、CI結果の頻繁な取得、失敗時の再実行が重なって過剰なアクセスにならないよう、実行条件と確認回数を制限する。GitHub API、Webhook、集約状態の経路と停止規約は[外部APIのレート予算](api-rate-budget.md)を正本とする。
 
 ## ワークフローで制御する範囲
 
@@ -26,11 +26,11 @@ lychee本体は固定バージョン・OS・CPUアーキテクチャをキーに
 
 PRの検証とmain / masterの検証は、マージ前後の異なる内容を確認するため両方残す。ドキュメントも整形チェックの対象なのでpath filterは設けない。workflow単位のスキップによって必須チェックがPendingのままになる運用も避ける。Draftのskipは検証成功を意味しない。Ready for review後の最新の結果を確認する。
 
-merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。GitHub clientは直列で、使用数・最終成功・defer時刻だけをjob logへ残す。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
 
 ## 開発エージェントの確認予算
 
-以下は [AGENTS.md](../../AGENTS.md) で開発エージェントに適用する運用上限。GitHub側で強制するAPIレート制限や、実装済みの監視プログラムではない。
+以下は [AGENTS.md](../../AGENTS.md) で開発エージェントに適用する運用上限。GitHub側で強制するAPIレート制限や、実装済みの監視プログラムではない。画面やagent stateからGitHubを読ませず、eventの欠落を補う照合だけをactive 30分、idle 60分の頻度で1 ownerが行う。ETag、共有budget、停止時の表示は[外部APIのレート予算](api-rate-budget.md)に従う。
 
 1. 編集中はローカルで確認し、意味のある変更単位でpushする。作業途中のPRはDraftを使う。
 2. CIの完了通知やChecks画面を優先する。自動照会が必要なときは対象PR/runだけを直列に確認する。短い間隔のwatchコマンドは使わない。
@@ -47,7 +47,7 @@ merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔�
 - 認証・権限・アカウント拒否、レート制限と判断できない403は再試行しない。別アカウントやトークンへ切り替えて続行しない。
 - 結果不明の書き込みは自動再送しない。取得できなかったCI結果をPASSと扱わない。
 
-GitHubは短時間の集中アクセスに対する二次制限を設けており、公開されていない条件や変更される条件もある。上限内に収めてもブロック回避を保証するものではない。基準は [REST APIの推奨運用](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) と [レート制限](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)。
+GitHubは短時間の集中アクセスに対する二次制限を設けており、公開されていない条件や変更される条件もある。上限内に収めてもブロック回避を保証するものではない。基準は[外部APIのレート予算](api-rate-budget.md)に集約する。
 
 将来、外部取得やCDが必要になった時点で、対象サービスに合わせた共有キュー、キャッシュ、有界な再試行を設計する。今の段階で常駐監視や取得用の仕組みは増やさない。
 

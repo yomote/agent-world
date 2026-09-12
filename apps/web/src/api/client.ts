@@ -1,4 +1,4 @@
-import type { Action, ActionResult, WorldState } from "./types";
+import type { Action, ActionResult, EventHistory } from "./types";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...options, signal: AbortSignal.timeout(5000) });
@@ -7,7 +7,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const worldApi = {
-  observe: () => request<WorldState>("/api/world", { cache: "no-store" }),
+  observe: () => request<EventHistory>("/api/events", { cache: "no-store" }),
   act: (action: Action) =>
     request<ActionResult>("/api/actions", {
       method: "POST",

@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 
-from .models import Action, ActionResult, WorldState
+from .models import Action, ActionResult, EventHistory, WorldState
 from .simulator import WorldSimulator
 
 
@@ -27,6 +27,11 @@ def create_app(static_dir: Path | None = None) -> FastAPI:
     @app.post("/api/actions", response_model=ActionResult)
     def act(action: Action) -> ActionResult:
         return simulator.apply(action)
+
+    @app.get("/api/events", response_model=EventHistory)
+    def events(response: Response) -> EventHistory:
+        response.headers["Cache-Control"] = "no-store"
+        return simulator.observe_events()
 
     if configured_static_dir is not None:
         static_root = configured_static_dir.resolve(strict=True)

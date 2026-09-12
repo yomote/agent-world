@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>Agent World — 開発状況</title>
+    <link rel="stylesheet" href="./status.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">AGENT WORLD / MANAGEMENT STATUS</p>
+        <h1>エージェント状況</h1>
+        <p class="lede">PMが受信した最新snapshotを表示します。</p>
+      </div>
+      <button id="refresh" type="button">更新する</button>
+    </header>
+
+    <main>
+      <section class="notice" aria-labelledby="health-title">
+        <div>
+          <h2 id="health-title">取得状態</h2>
+          <p id="health" aria-live="polite">管理backendから読み込み中…</p>
+        </div>
+        <dl class="timestamps">
+          <div>
+            <dt>最終受信</dt>
+            <dd id="fetched-at">—</dd>
+          </div>
+          <div>
+            <dt>元の観測</dt>
+            <dd id="next-refresh">—</dd>
+          </div>
+        </dl>
+      </section>
+
+      <p class="scope-note">
+        <strong id="source-kind">入力種別を確認中</strong><br />
+        <span id="source-note">snapshotの出所を確認しています。</span>
+      </p>
+
+      <section aria-labelledby="work-title">
+        <div class="section-heading">
+          <h2 id="work-title">現在の担当</h2>
+        </div>
+        <div id="work-items" class="work-grid" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>ブラウザは同一originの管理backendだけを読みます。GitHub APIへ接続しません。</p>
+    </footer>
+    <script type="module" src="./status.js"></script>
+  </body>
+</html>
