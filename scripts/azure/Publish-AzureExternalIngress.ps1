@@ -7,7 +7,7 @@ param(
   [Parameter(Mandatory)] [string] $TenantId,
   [Parameter(Mandatory)] [string] $EntraClientId,
   [Parameter(Mandatory)] [string] $AllowedUserObjectId,
-  [Parameter(Mandatory)] [string] $Image,
+  [Parameter(Mandatory)] [ValidatePattern('^ghcr\.io/.+@sha256:[0-9a-f]{64}$')] [string] $Image,
   [Parameter(Mandatory)] [string] $EvidenceDirectory,
   [string] $AzureCli = 'az',
   [string] $SmokeScript = "$PSScriptRoot/Test-AzureSmoke.ps1"
@@ -21,6 +21,14 @@ function Invoke-AzJson([string[]] $Arguments, [string] $Label) {
 }
 function Test-ExactCallback($Application, [string] $Expected) {
   return @($Application.web.redirectUris).Count -eq 1 -and $Application.web.redirectUris[0] -ceq $Expected
+}
+function Get-CanonicalJson($Value) {
+  return $Value | ConvertTo-Json -Depth 100 -Compress
+}
+function Get-ApplicationWithoutCallbacks($Application) {
+  $copy = (Get-CanonicalJson $Application) | ConvertFrom-Json
+  $copy.web.redirectUris = @()
+  return Get-CanonicalJson $copy
 }
 function Test-TerminalProvisioningState($Container) {
   return $Container.properties.provisioningState -in @('Succeeded', 'Failed', 'Canceled')
@@ -88,6 +96,49 @@ function Assert-AuthActual($Auth) {
     }
   }
 }
+function Assert-ApprovedContainerBaseline($Container, [string] $ExpectedIdentity, [string] $ExpectedEnvironment) {
+  $containers = @($Container.properties.template.containers)
+  $probes = if ($containers.Count -eq 1) { @($containers[0].probes) } else { @() }
+  $scale = $Container.properties.template.scale
+  $rules = @($scale.rules)
+  $identityProperties = @($Container.identity.userAssignedIdentities.PSObject.Properties)
+  if ($Container.properties.provisioningState -cne 'Succeeded' `
+      -or $Container.tags.application -cne 'agent-world' -or $Container.tags.managedBy -cne 'bicep' `
+      -or $Container.identity.type -cne 'UserAssigned' `
+      -or $identityProperties.Count -ne 1 -or $identityProperties[0].Name -ine $ExpectedIdentity `
+      -or $Container.properties.environmentId -ine $ExpectedEnvironment `
+      -or $Container.properties.workloadProfileName -cne 'Consumption' `
+      -or $Container.properties.configuration.activeRevisionsMode -cne 'Single' `
+      -or $Container.properties.configuration.maxInactiveRevisions -ne 1 `
+      -or $containers.Count -ne 1 -or $containers[0].name -cne 'agent-world' `
+      -or [decimal]$containers[0].resources.cpu -ne [decimal]0.25 `
+      -or $containers[0].resources.memory -cne '0.5Gi' `
+      -or $probes.Count -ne 3 `
+      -or $scale.minReplicas -ne 0 -or $scale.maxReplicas -ne 1 `
+      -or $rules.Count -ne 1 -or $rules[0].name -cne 'http' `
+      -or $rules[0].http.metadata.concurrentRequests -cne '10') {
+    throw '公開前Container App baselineが承認済みsingle-worker構成と一致しません。'
+  }
+  $expectedProbes = @(
+    @{ type = 'Startup'; period = 2; timeout = 2; failure = 30; delay = 1 },
+    @{ type = 'Liveness'; period = 30; timeout = 3; failure = 3; delay = $null },
+    @{ type = 'Readiness'; period = 10; timeout = 3; failure = 3; delay = $null }
+  )
+  foreach ($expected in $expectedProbes) {
+    $matches = @($probes | Where-Object { $_.type -ceq $expected.type })
+    if ($matches.Count -ne 1) { throw '公開前Container App probeが承認済み構成と一致しません。' }
+    $actual = $matches[0]
+    if ($actual.type -cne $expected.type `
+        -or $actual.httpGet.path -cne '/healthz' -or $actual.httpGet.port -ne 8000 `
+        -or $actual.httpGet.scheme -cne 'HTTP' `
+        -or $actual.periodSeconds -ne $expected.period `
+        -or $actual.timeoutSeconds -ne $expected.timeout `
+        -or $actual.failureThreshold -ne $expected.failure `
+        -or ($null -ne $expected.delay -and $actual.initialDelaySeconds -ne $expected.delay)) {
+      throw '公開前Container App probeが承認済み構成と一致しません。'
+    }
+  }
+}
 function Set-RedirectUri([string] $Callback) {
   & $AzureCli ad app update --only-show-errors --id $EntraClientId --web-redirect-uris $Callback --output none
   $writeExit = $LASTEXITCODE
@@ -114,7 +165,15 @@ function Restore-Internal([string] $InternalFqdn, [string] $InternalCallback, [s
   throw "PUBLICATION FAILURE: $Reason; internal ingress and callback were restored."
 }
 
-New-Item -ItemType Directory -Force -Path $EvidenceDirectory | Out-Null
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$allowedEvidenceRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'artifacts'))
+$evidenceFullPath = [IO.Path]::GetFullPath($EvidenceDirectory)
+$allowedPrefix = $allowedEvidenceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $evidenceFullPath.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'EvidenceDirectoryはrepositoryのprivate/ignored artifacts配下に限定してください。'
+}
+New-Item -ItemType Directory -Force -Path $evidenceFullPath | Out-Null
+$EvidenceDirectory = $evidenceFullPath
 & "$PSScriptRoot/Assert-AzureContext.ps1" -SubscriptionId $SubscriptionId
 & "$PSScriptRoot/Test-EntraDirectory.ps1" `
   -SubscriptionId $SubscriptionId `
@@ -129,11 +188,12 @@ $beforeApp = Invoke-AzJson @('ad', 'app', 'show', '--id', $EntraClientId) 'Entra
 $beforeAuth = Invoke-AzJson @('containerapp', 'auth', 'show', '--resource-group', $ResourceGroupName, '--name', $AppName) 'Easy Auth'
 $beforeContainer = Invoke-AzJson @('containerapp', 'show', '--resource-group', $ResourceGroupName, '--name', $AppName) 'Container App'
 Assert-AuthActual $beforeAuth
+$beforeAuthCanonical = Get-CanonicalJson $beforeAuth
+$beforeApplicationCanonical = Get-ApplicationWithoutCallbacks $beforeApp
 $ingress = $beforeContainer.properties.configuration.ingress
 if ($ingress.external -isnot [bool] -or $ingress.external `
     -or $ingress.targetPort -ne 8000 -or $ingress.transport -ine 'auto' `
-    -or $ingress.allowInsecure -isnot [bool] -or $ingress.allowInsecure `
-    -or -not (Test-TerminalProvisioningState $beforeContainer)) {
+    -or $ingress.allowInsecure -isnot [bool] -or $ingress.allowInsecure) {
   throw '公開前ingress actualがinternal/8000/auto/HTTPSの期待値と一致しません。'
 }
 $internalFqdn = [string]$ingress.fqdn
@@ -153,6 +213,7 @@ $identityProperties = @($beforeContainer.identity.userAssignedIdentities.PSObjec
 $secrets = @($beforeContainer.properties.configuration.secrets)
 $expectedIdentity = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$AppName-identity"
 $expectedEnvironment = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.App/managedEnvironments/$AppName-env"
+Assert-ApprovedContainerBaseline $beforeContainer $expectedIdentity $expectedEnvironment
 $secretUri = if ($secrets.Count -eq 1) { $secrets[0].keyVaultUrl -as [Uri] } else { $null }
 if ($containers.Count -ne 1 -or $containers[0].image -cne $Image `
     -or $beforeContainer.properties.environmentId -ine $expectedEnvironment `
@@ -164,6 +225,22 @@ if ($containers.Count -ne 1 -or $containers[0].image -cne $Image `
     -or $secretUri.AbsolutePath -cne '/secrets/easy-auth-client-secret' `
     -or $secretUri.Query) {
   throw '公開前Container Appのimage/UAMI/secret referenceが承認済みactualと一致しません。'
+}
+$vaultName = $secretUri.Host -replace '\.vault\.azure\.net$', ''
+$vaultsJson = & $AzureCli keyvault list --only-show-errors --resource-group $ResourceGroupName --output json
+if ($LASTEXITCODE -ne 0 -or -not $vaultsJson) { throw '公開前Key Vault actualを読み取れません。' }
+try {
+  $vaultDocument = [System.Text.Json.JsonDocument]::Parse($vaultsJson)
+  if ($vaultDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
+    throw '公開前Key Vault JSON root must be an array.'
+  }
+} finally {
+  if ($vaultDocument) { $vaultDocument.Dispose() }
+}
+$vaults = @($vaultsJson | ConvertFrom-Json | Where-Object { $_.tags.application -ceq 'agent-world' })
+$expectedVaultId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.KeyVault/vaults/$vaultName"
+if ($vaults.Count -ne 1 -or $vaults[0].name -cne $vaultName -or $vaults[0].id -ine $expectedVaultId) {
+  throw '公開前secret URLは対象RGのagent-world Key Vault exact 1件と一致しません。'
 }
 $beforeComparable = Get-ImmutableContainerState $beforeContainer
 @{ application = $beforeApp; auth = $beforeAuth; container = $beforeContainer; expectedPublicFqdn = $publicFqdn } |
@@ -192,11 +269,24 @@ if ($afterIngress.external -isnot [bool] -or -not $afterIngress.external -or $af
   }
   Restore-Internal $internalFqdn $internalCallback "external ingress actual mismatch (writeExit=$enableExit)"
 }
+if ($provisioningState -cne 'Succeeded') {
+  Restore-Internal $internalFqdn $internalCallback "external ingress provisioning ended in $provisioningState (writeExit=$enableExit)"
+}
 try {
   $afterAuth = Invoke-AzJson @('containerapp', 'auth', 'show', '--resource-group', $ResourceGroupName, '--name', $AppName) 'Published Easy Auth'
   $afterApp = Invoke-AzJson @('ad', 'app', 'show', '--id', $EntraClientId) 'Published Entra application'
   Assert-AuthActual $afterAuth
   if (-not (Test-ExactCallback $afterApp $publicCallback)) { throw 'public callback actual mismatch' }
+  if ((Get-CanonicalJson $afterAuth) -cne $beforeAuthCanonical) { throw 'Easy Auth actual drift' }
+  if ((Get-ApplicationWithoutCallbacks $afterApp) -cne $beforeApplicationCanonical) { throw 'Entra application actual drift' }
+  & "$PSScriptRoot/Test-EntraDirectory.ps1" `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroupName $ResourceGroupName `
+    -AppName $AppName `
+    -TenantId $TenantId `
+    -EntraClientId $EntraClientId `
+    -AllowedPrincipalObjectIds @($AllowedUserObjectId) `
+    -AzureCli $AzureCli
   if ((Get-ImmutableContainerState $afterContainer) -cne $beforeComparable) { throw 'Container App immutable state drift' }
   & $SmokeScript -BaseUrl "https://$publicFqdn" -AuthMode entra
 } catch {

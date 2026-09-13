@@ -102,11 +102,17 @@ def _run_publish_external(
     callback_actual_read_failure=False,
     container_actual_read_failure=False,
     invalid_internal_fqdn=False,
+    initial_provisioning_state="Succeeded",
     external_provisioning_state="Succeeded",
+    baseline_drift="",
+    auth_drift_after=False,
+    app_drift_after=False,
+    directory_drift_after=False,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     """Run the two-write publication packet against a stateful fake Azure CLI."""
     log = tmp_path / "publish-calls.log"
-    evidence = tmp_path / "evidence"
+    evidence = ROOT / "artifacts" / "test-publish" / tmp_path.name
+    shutil.rmtree(evidence, ignore_errors=True)
     smoke = tmp_path / "smoke.ps1"
     smoke.write_text(
         "param($BaseUrl,$AuthMode)\n"
@@ -129,8 +135,9 @@ $global:external = $false
 $global:internalFqdn = '{internal_fqdn}'
 $global:callback = "https://$global:internalFqdn/.auth/login/aad/callback"
 $global:image = 'ghcr.io/yomote/agent-world@sha256:{"1" * 64}'
-$global:provisioning = 'Succeeded'
+$global:provisioning = '{initial_provisioning_state}'
 $global:callbackWrites = 0
+$global:baselineDrift = '{baseline_drift}'
 function Get-ContainerJson {{
   $fqdn = if ($global:external) {{
     'agent-world-yomote-jpe.env123.japaneast.azurecontainerapps.io'
@@ -138,15 +145,27 @@ function Get-ContainerJson {{
     $global:internalFqdn
   }}
   @{{
-    tags = @{{ application = 'agent-world' }}
-    identity = @{{ userAssignedIdentities = @{{ '{expected_identity}' = @{{}} }} }}
+    tags = @{{ application = 'agent-world'; managedBy = 'bicep' }}
+    identity = @{{
+      type = $(if ($global:baselineDrift -eq 'identity') {{
+        'SystemAssigned'
+      }} else {{
+        'UserAssigned'
+      }})
+      userAssignedIdentities = @{{ '{expected_identity}' = @{{}} }}
+    }}
     properties = @{{
       provisioningState = $global:provisioning
       environmentId = '/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/' +
         'Microsoft.App/managedEnvironments/agent-world-yomote-jpe-env'
       workloadProfileName = 'Consumption'
       configuration = @{{
-        activeRevisionsMode = 'Single'; maxInactiveRevisions = 1
+        activeRevisionsMode = $(if ($global:baselineDrift -eq 'revision') {{
+          'Multiple'
+        }} else {{
+          'Single'
+        }})
+        maxInactiveRevisions = 1
         secrets = @(@{{
           name = 'microsoft-provider-authentication-secret'
           keyVaultUrl = 'https://test-vault.vault.azure.net/secrets/easy-auth-client-secret'
@@ -159,8 +178,34 @@ function Get-ContainerJson {{
         }}
       }}
       template = @{{
-        containers = @(@{{ name = 'agent-world'; image = $global:image; probes = @() }})
-        scale = @{{ minReplicas = 0; maxReplicas = 1 }}
+        containers = @(@{{
+          name = $(if ($global:baselineDrift -eq 'name') {{ 'foreign' }} else {{ 'agent-world' }})
+          image = $global:image
+          resources = @{{
+            cpu = $(if ($global:baselineDrift -eq 'cpu') {{ 0.5 }} else {{ 0.25 }})
+            memory = $(if ($global:baselineDrift -eq 'memory') {{ '1Gi' }} else {{ '0.5Gi' }})
+          }}
+          probes = @(
+            @{{
+              type=$(if ($global:baselineDrift -eq 'probe') {{'Liveness'}} else {{'Startup'}})
+              httpGet=@{{path='/healthz';port=8000;scheme='HTTP'}}
+              initialDelaySeconds=1;periodSeconds=2;timeoutSeconds=2;failureThreshold=30
+            }},
+            @{{
+              type='Liveness';httpGet=@{{path='/healthz';port=8000;scheme='HTTP'}}
+              periodSeconds=30;timeoutSeconds=3;failureThreshold=3
+            }},
+            @{{
+              type='Readiness';httpGet=@{{path='/healthz';port=8000;scheme='HTTP'}}
+              periodSeconds=10;timeoutSeconds=3;failureThreshold=3
+            }}
+          )
+        }})
+        scale = @{{
+          minReplicas = 0
+          maxReplicas = $(if ($global:baselineDrift -eq 'scale') {{ 2 }} else {{ 1 }})
+          rules = @(@{{ name='http';http=@{{metadata=@{{concurrentRequests='10'}}}} }})
+        }}
       }}
     }}
   }} | ConvertTo-Json -Depth 20 -Compress
@@ -181,7 +226,11 @@ function global:az {{
       return
     }}
     return (@{{
-      signInAudience = 'AzureADMyOrg'
+      signInAudience = $(if ($global:external -and ${str(app_drift_after).lower()}) {{
+        'AzureADMultipleOrgs'
+      }} else {{
+        'AzureADMyOrg'
+      }})
       web = @{{
         redirectUris = @($global:callback)
         implicitGrantSettings = @{{ enableIdTokenIssuance = $true }}
@@ -202,10 +251,20 @@ function global:az {{
     return '{{"id":"{RESUME_SP_ID}","appRoleAssignmentRequired":true}}'
   }}
   if ($joined -match '^rest ') {{
+    if ($global:external -and ${str(directory_drift_after).lower()}) {{ return '[]' }}
     return '[{{"resourceId":"{RESUME_SP_ID}","principalId":"{RESUME_USER_ID}"}}]'
   }}
   if ($joined -match '^containerapp auth show') {{
+    if ($global:external -and ${str(auth_drift_after).lower()}) {{
+      return '{{"platform":{{"enabled":true}}}}'
+    }}
     return '{{"platform":{{"enabled":true}},"globalValidation":{{"unauthenticatedClientAction":"RedirectToLoginPage","redirectToProvider":"azureactivedirectory","excludedPaths":["/healthz"]}},"httpSettings":{{"requireHttps":true}},"login":{{"tokenStore":{{"enabled":false}}}},"identityProviders":{{"azureActiveDirectory":{{"enabled":true,"registration":{{"clientId":"{RESUME_CLIENT_ID}","openIdIssuer":"https://login.microsoftonline.com/{RESUME_USER_ID}/v2.0","clientSecretSettingName":"microsoft-provider-authentication-secret"}},"validation":{{"defaultAuthorizationPolicy":{{"allowedPrincipals":{{"identities":["{RESUME_USER_ID}"]}}}}}}}}}}}}'
+  }}
+  if ($joined -match '^keyvault list') {{
+    if ($global:baselineDrift -eq 'vault') {{ return '[]' }}
+    return '[{{"name":"test-vault","id":"/subscriptions/sub-1/resourceGroups/' +
+      'rg-agent-world-jpe/providers/Microsoft.KeyVault/vaults/test-vault",' +
+      '"tags":{{"application":"agent-world"}}}}]'
   }}
   if ($joined -match '^containerapp show .*--query properties.configuration.ingress.fqdn') {{
     if ($global:external) {{
@@ -267,6 +326,7 @@ try {{
         check=False,
     )
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    shutil.rmtree(evidence, ignore_errors=True)
     return result, calls
 
 
@@ -407,6 +467,124 @@ def test_publish_external_rejects_unapproved_internal_fqdn_shape_before_writes(t
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("initial_state", ["Failed", "Canceled", "InProgress"])
+def test_publish_external_requires_succeeded_baseline_before_writes(tmp_path, initial_state):
+    """terminal失敗を含む非Succeeded baselineから公開writeを始めない。"""
+    result, calls = _run_publish_external(
+        tmp_path,
+        initial_provisioning_state=initial_state,
+    )
+    assert result.returncode != 0
+    assert "baseline" in result.stderr
+    assert "ad app update" not in calls
+    assert "containerapp ingress enable" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "baseline_drift",
+    ["identity", "revision", "name", "cpu", "memory", "probe", "scale", "vault"],
+)
+def test_publish_external_rejects_baseline_drift_before_writes(tmp_path, baseline_drift):
+    """承認済みsingle-worker baselineの各driftを既存状態として公開しない。"""
+    result, calls = _run_publish_external(tmp_path, baseline_drift=baseline_drift)
+    assert result.returncode != 0
+    assert "ad app update" not in calls
+    assert "containerapp ingress enable" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_publish_external_rejects_evidence_path_outside_private_artifacts(tmp_path):
+    """snapshotをdocs等のtracked領域やrepository外へ保存させない。"""
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(PUBLISH_EXTERNAL_INGRESS),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+            "-Location",
+            "japaneast",
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-TenantId",
+            RESUME_USER_ID,
+            "-EntraClientId",
+            RESUME_CLIENT_ID,
+            "-AllowedUserObjectId",
+            RESUME_USER_ID,
+            "-Image",
+            f"ghcr.io/yomote/agent-world@sha256:{'1' * 64}",
+            "-EvidenceDirectory",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "artifacts" in result.stderr
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_publish_external_rejects_mutable_image_reference_before_execution(tmp_path):
+    """tagや不正digestを公開対象として受理しない。"""
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(PUBLISH_EXTERNAL_INGRESS),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+            "-Location",
+            "japaneast",
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-TenantId",
+            RESUME_USER_ID,
+            "-EntraClientId",
+            RESUME_CLIENT_ID,
+            "-AllowedUserObjectId",
+            RESUME_USER_ID,
+            "-Image",
+            "ghcr.io/yomote/agent-world:latest",
+            "-EvidenceDirectory",
+            str(ROOT / "artifacts" / "test-publish-invalid-image"),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "ValidatePattern" in result.stderr
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("post_drift", ["auth", "app", "directory"])
+def test_publish_external_contains_postcondition_drift(tmp_path, post_drift):
+    """公開後のauth/app/directory driftを成功扱いせずexternalを閉じる。"""
+    result, calls = _run_publish_external(
+        tmp_path,
+        auth_drift_after=post_drift == "auth",
+        app_drift_after=post_drift == "app",
+        directory_drift_after=post_drift == "directory",
+    )
+    assert result.returncode != 0
+    assert calls.count("containerapp ingress enable") == 2
+    assert calls.count("ad app update") == 2
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
 def test_publish_external_stops_unknown_nonterminal_without_competing_writes(tmp_path):
     """nonterminal ingressは後から公開へ変わり得るためcontainmentやcallbackを競合送信しない。"""
     result, calls = _run_publish_external(
@@ -419,6 +597,21 @@ def test_publish_external_stops_unknown_nonterminal_without_competing_writes(tmp
     assert "EXTERNAL PUBLICATION UNKNOWN" in result.stderr
     assert calls.count("containerapp ingress enable") == 1
     assert calls.count("ad app update") == 1
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("terminal_state", ["Failed", "Canceled"])
+def test_publish_external_contains_external_after_terminal_failure(tmp_path, terminal_state):
+    """terminal失敗でexternalなら成功扱いせずinternal化後にcallbackを復旧する。"""
+    result, calls = _run_publish_external(
+        tmp_path,
+        external_provisioning_state=terminal_state,
+    )
+    assert result.returncode != 0
+    assert "PUBLICATION FAILURE" in result.stderr
+    assert "callback" in result.stderr
+    assert calls.count("containerapp ingress enable") == 2
+    assert calls.count("ad app update") == 2
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
