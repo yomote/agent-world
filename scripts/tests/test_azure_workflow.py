@@ -97,3 +97,4 @@ def test_entra_resume_validates_partial_state_before_any_followup_write():
     update = CONFIGURE_ENTRA_SCRIPT.index("az ad sp update", create_branch)
 
     assert resume_branch < guard < create_branch < update
+    assert "value[].{resourceId:resourceId,principalId:principalId}" in CONFIGURE_ENTRA_SCRIPT

@@ -45,7 +45,7 @@ if ($resumeValues.Count -eq 3) {
   if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalJson) { throw 'Resume service principal actualを読み取れません。' }
   $credentialsJson = & az ad app credential list --only-show-errors --id $ResumeClientId --output json
   if ($LASTEXITCODE -ne 0 -or -not $credentialsJson) { throw 'Resume credential actualを読み取れません。' }
-  $assignmentsJson = & az rest --only-show-errors --method get --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --output json
+  $assignmentsJson = & az rest --only-show-errors --method get --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --query 'value[].{resourceId:resourceId,principalId:principalId}' --output json
   if ($LASTEXITCODE -ne 0 -or -not $assignmentsJson) { throw 'Resume assignment actualを読み取れません。' }
   $authJson = & az containerapp auth show --only-show-errors --resource-group $ResourceGroupName --name $AppName --output json
   if ($LASTEXITCODE -ne 0 -or -not $authJson) { throw 'Resume auth actualを読み取れません。' }
@@ -56,7 +56,7 @@ if ($resumeValues.Count -eq 3) {
       application = $applicationJson | ConvertFrom-Json
       servicePrincipal = $servicePrincipalJson | ConvertFrom-Json
       credentials = @($credentialsJson | ConvertFrom-Json)
-      assignments = @(($assignmentsJson | ConvertFrom-Json).value)
+      assignments = @($assignmentsJson | ConvertFrom-Json)
       auth = $authJson | ConvertFrom-Json
     } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resumeActualFile -Encoding utf8NoBOM
     & "$PSScriptRoot/Assert-EntraResumeState.ps1" `

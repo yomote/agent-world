@@ -12,6 +12,19 @@ $ErrorActionPreference = 'Stop'
 $actual = Get-Content -Raw -LiteralPath $ActualPath | ConvertFrom-Json
 $redirects = @($actual.application.web.redirectUris)
 $credentials = @($actual.credentials)
+$assignmentsHaveValidShape = $actual.PSObject.Properties.Name -contains 'assignments' -and $actual.assignments -is [System.Array]
+if ($assignmentsHaveValidShape) {
+  foreach ($assignment in $actual.assignments) {
+    $resourceId = [Guid]::Empty
+    $principalId = [Guid]::Empty
+    if ($assignment -isnot [pscustomobject] `
+        -or -not [Guid]::TryParse([string]$assignment.resourceId, [ref]$resourceId) `
+        -or -not [Guid]::TryParse([string]$assignment.principalId, [ref]$principalId)) {
+      $assignmentsHaveValidShape = $false
+      break
+    }
+  }
+}
 $assignments = @($actual.assignments | Where-Object {
     $_.resourceId -ieq $ServicePrincipalObjectId -and $_.principalId -ieq $AllowedUserObjectId
   })
@@ -28,6 +41,7 @@ if (($actual.application.appId -ine $ClientId) `
     -or ($actual.servicePrincipal.servicePrincipalType -cne 'Application') `
     -or $actual.servicePrincipal.appRoleAssignmentRequired `
     -or $credentials.Count -ne 0 `
+    -or -not $assignmentsHaveValidShape `
     -or $assignments.Count -ne 0 `
     -or $actual.auth.platform.enabled `
     -or $actual.auth.identityProviders.azureActiveDirectory.enabled) {
