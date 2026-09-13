@@ -141,11 +141,6 @@ def test_sync_automatically_binds_status_to_successful_claim_marker(tmp_path):
             "source": "ingest-upsert",
             "observed_at": "2026-09-06T12:00:00Z",
             "received_at": "2026-09-06T12:00:00Z",
-            "items": [],
-            "runtime_capacity": None,
-            "focus_summary": None,
-            "session_tree": None,
-            "known_history": None,
         }
     )
     registry = server_data["request_registry"]
@@ -193,6 +188,8 @@ def test_sync_automatically_binds_status_to_successful_claim_marker(tmp_path):
         store.read().runtime_binding.runtime_session_digest
         == payload["runtime_binding"]["runtime_session_digest"]
     )
+    assert [item.agent for item in store.read().items] == ["status owner"]
+    assert store.read().session_tree is None
 
 
 def test_sync_emits_only_sanitized_idle_state_and_does_not_refresh_old_record(tmp_path):
