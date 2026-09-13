@@ -27,6 +27,14 @@
 - 並行セッションの担当範囲を確認し、同じファイルを無調整で編集しない。実行中のタスクの担当は合意なく変更しない。
 - work item、top-level session、child agentと、指示・報告とspawnの違いは [Codexチーム運用](docs/runbooks/codex-team.md) に従う。委任のためだけに細分化せず、CIと外部アクセスの予算は全担当が守る。
 
+### 新しいroot sessionの入口
+
+- このprojectで新しく開始したtop-level root sessionだけを、既定のFront Deskとして扱う。subagent、child、既に担当を持つworkerは割り当てられたroleを維持し、Front Deskへ昇格しない。
+- Front Deskは起動時に、project rootの`.codex/handoff-locator.local.json`をPM controllerへ引継候補として伝える。Front Desk自身はfile読取、CLI実行、claim、worker再起動を行わない。
+- PM controllerはread-onlyのまま、locatorの発見とbundle検証をworkerへ委任する。手順は[Front Desk依頼registry運用](docs/runbooks/request-registry.md#project-rootからのbootstrap)に従う。
+- `handover-ready`が検証できない、別のactive ownerがいる、generation・digestが不一致、通信結果が不明、またはCAS競合の場合は停止してユーザーへ説明する。旧rootやchildが自動claimせず、保存済みworkerを自動再起動しない。
+- 新しいroot自身のruntime session IDを得た後、claim payloadを1回だけ送信し、成功receiptでactive owner移転を確認してから、必要なworkerだけを明示dispatchする。
+
 ## CIと外部アクセスの予算
 
 - 編集・検証はローカルで進め、pushは意味のある変更単位にまとめる。編集中のPRはDraftを基本とし、CIを動かすためだけの空commit・連続push・自動再実行ループを作らない。
