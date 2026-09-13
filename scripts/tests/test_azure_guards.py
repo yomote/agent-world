@@ -134,7 +134,10 @@ def _run_entra_resume_guard(tmp_path: Path, **overrides):
         "assignments": [],
         "auth": {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
     }
+    omit_assignments = overrides.pop("_omit_assignments", False)
     actual.update(overrides)
+    if omit_assignments:
+        del actual["assignments"]
     path = tmp_path / "entra-resume-actual.json"
     path.write_text(json.dumps(actual), encoding="utf-8")
     return subprocess.run(
@@ -181,6 +184,8 @@ def _run_configure_entra_resume(tmp_path: Path, external):
         {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
         separators=(",", ":"),
     )
+    assignment_projection = "--query value[].{resourceId:resourceId,principalId:principalId}"
+    unprojected_assignment = r'{"value":[{"principalDisplayName":"tenant\user"}]}'
     wrapper = tmp_path / "run-configure-resume.ps1"
     wrapper.write_text(
         f"""
@@ -205,7 +210,11 @@ function global:az {{
     return '{service_principal_json}'
   }}
   if ($joined -match '^ad app credential list') {{ return '[]' }}
-  if ($joined -match '^rest .*appRoleAssignments') {{ return '{{"value":[]}}' }}
+  if ($joined -match '^rest .*appRoleAssignments' -and
+      $joined.Contains('{assignment_projection}')) {{
+    return '[]'
+  }}
+  if ($joined -match '^rest .*appRoleAssignments') {{ return '{unprojected_assignment}' }}
   if ($joined -match '^containerapp auth show') {{ return '{auth_json}' }}
   if ($joined -match '^ad sp update') {{ $global:LASTEXITCODE = 1; return }}
   throw "Unexpected az call: $joined"
@@ -448,6 +457,44 @@ def test_entra_resume_guard_rejects_target_drift_or_unknown_side_effect(tmp_path
         }
     result = _run_entra_resume_guard(tmp_path, **overrides)
     assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "assignments",
+    [
+        None,
+        {},
+        [{"resourceId": RESUME_SP_ID}],
+        [{"resourceId": "not-a-guid", "principalId": RESUME_USER_ID}],
+    ],
+)
+def test_entra_resume_guard_rejects_unknown_assignment_shape(tmp_path, assignments):
+    """null・object・必要ID欠損をassignmentなしと解釈しない。"""
+    result = _run_entra_resume_guard(tmp_path, assignments=assignments)
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_resume_guard_rejects_missing_assignments_property(tmp_path):
+    """projection結果property欠損を空arrayとして補わない。"""
+    result = _run_entra_resume_guard(tmp_path, _omit_assignments=True)
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_resume_guard_allows_well_formed_foreign_assignment(tmp_path):
+    """本人の別enterprise app assignmentは対象SPへの割当てと混同しない。"""
+    result = _run_entra_resume_guard(
+        tmp_path,
+        assignments=[
+            {
+                "resourceId": "44444444-4444-4444-4444-444444444444",
+                "principalId": RESUME_USER_ID,
+            }
+        ],
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
