@@ -18,6 +18,14 @@ $orphanStage = $OrphanCredentialKeyId -or $OrphanCredentialDisplayName
 if ([bool]$OrphanCredentialKeyId -ne [bool]$OrphanCredentialDisplayName) {
   throw 'Orphan credential key IDとdisplay nameは両方必要です。'
 }
+$assignmentRequiredProperty = $actual.servicePrincipal.PSObject.Properties['appRoleAssignmentRequired']
+$assignmentRequiredIsKnown = $null -ne $assignmentRequiredProperty `
+  -and $assignmentRequiredProperty.Value -is [bool]
+$assignmentRequired = if ($assignmentRequiredIsKnown) {
+  [bool]$assignmentRequiredProperty.Value
+} else {
+  $false
+}
 $assignmentsHaveValidShape = $actual.PSObject.Properties.Name -contains 'assignments' -and $actual.assignments -is [System.Array]
 if ($assignmentsHaveValidShape) {
   foreach ($assignment in $actual.assignments) {
@@ -45,8 +53,8 @@ if (($actual.application.appId -ine $ClientId) `
     -or ($actual.servicePrincipal.appId -ine $ClientId) `
     -or ($actual.servicePrincipal.displayName -cne "$AppName-login") `
     -or ($actual.servicePrincipal.servicePrincipalType -cne 'Application') `
-    -or ($orphanStage -and -not $actual.servicePrincipal.appRoleAssignmentRequired) `
-    -or (-not $orphanStage -and $actual.servicePrincipal.appRoleAssignmentRequired) `
+    -or -not $assignmentRequiredIsKnown `
+    -or ($orphanStage -and -not $assignmentRequired) `
     -or ($orphanStage -and ($credentials.Count -ne 1 `
         -or $credentials[0].keyId -ine $OrphanCredentialKeyId `
         -or $credentials[0].displayName -cne $OrphanCredentialDisplayName `

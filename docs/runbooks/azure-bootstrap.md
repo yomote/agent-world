@@ -83,7 +83,7 @@ Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraC
 
 途中失敗時は自動再送しない。scriptが出す`clientId`、一意なcredential `displayName`、取得済みなら`keyId`と期限を使い、app registration、enterprise app、Key Vault secret、authConfigのactualを確認してから復旧する。secret値は再取得できない。Key Vault格納前に止まったcredentialはmetadataを確認し、`az ad app credential delete --id <client-id> --key-id <key-id>`で回収する。
 
-app registrationとservice principalの作成直後、`appRoleAssignmentRequired`更新だけがGraphの`Resource does not exist`で失敗した場合はConfigure全体を再実行しない。app/SPが各1件、同じtenant/client ID/SP object ID、single-tenant、正確なcallback、ID token有効であり、credential・本人assignment・Easy Authがまだ存在しないことをread-only actualで確認する。その既知stateに限り、同じコマンドへ`-ResumeTenantId`、`-ResumeClientId`、`-ResumeServicePrincipalObjectId`を追加して一度だけ再開する。対象違いまたは想定外の副作用があれば停止する。
+app registrationとservice principalの作成後に途中失敗した場合はConfigure全体を再実行しない。app/SPが各1件、同じtenant/client ID/SP object ID、single-tenant、正確なcallback、ID token有効であり、`appRoleAssignmentRequired`が明示的なboolean、credential 0件、本人assignment・Easy Authがまだ存在しないことをread-only actualで確認する。その既知stateに限り、同じコマンドへ`-ResumeTenantId`、`-ResumeClientId`、`-ResumeServicePrincipalObjectId`を追加して一度だけ再開する。`appRoleAssignmentRequired`がfalseなら更新し、trueなら重複更新を省いて次のstageへ進む。対象違いまたは想定外の副作用があれば停止する。
 
 Configureの引数は、resume引数なしのnew create、上記3 IDsだけのpartial resume、3 IDsに`-ResumeOrphanCredentialKeyId`と`-ResumeOrphanCredentialDisplayName`を加えるcredential recoveryの3形だけを許可する。後者はmetadata特定失敗で今回作成された未使用credentialがexact 1件、SPのassignment必須が有効、本人assignment・Key Vault secret・Container App secret参照・Easy Authが未作成、ingressがinternalである場合に限る。exact credentialを1回削除し、actual 0件を確認してから新credentialを1件発行する。削除結果またはactualが不明なら再送せず、新credentialを発行しない。
 

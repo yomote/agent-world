@@ -170,17 +170,25 @@ def _run_entra_resume_guard(tmp_path: Path, **overrides):
 
 
 def _run_configure_entra_resume(
-    tmp_path: Path, external, *, recover_credential=False, metadata_count=1
+    tmp_path: Path,
+    external,
+    *,
+    recover_credential=False,
+    service_principal_assignment_required=None,
+    metadata_count=1,
+    foreign_metadata=False,
 ):
     log = tmp_path / "az-calls.log"
     ingress_external = "null" if external is None else str(external).lower()
+    if service_principal_assignment_required is None:
+        service_principal_assignment_required = recover_credential
     service_principal_json = json.dumps(
         {
             "id": RESUME_SP_ID,
             "appId": RESUME_CLIENT_ID,
             "displayName": "agent-world-yomote-jpe-login",
             "servicePrincipalType": "Application",
-            "appRoleAssignmentRequired": recover_credential,
+            "appRoleAssignmentRequired": service_principal_assignment_required,
         },
         separators=(",", ":"),
     )
@@ -218,6 +226,13 @@ def _run_configure_entra_resume(
         ]
         * metadata_count
     )
+    if foreign_metadata:
+        foreign = (
+            '{`"keyId`":`"77777777-7777-7777-7777-777777777777`",'
+            '`"displayName`":`"foreign`",'
+            '`"endDateTime`":`"2027-09-13T09:00:00Z`"}'
+        )
+        metadata_entries = f"{metadata_entries},{foreign}"
     wrapper = tmp_path / "run-configure-resume.ps1"
     wrapper.write_text(
         f"""
@@ -590,6 +605,41 @@ def test_configure_entra_resume_accepts_single_scalar_app_and_reaches_update(tmp
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_configure_entra_resume_continues_from_required_sp_without_redundant_update(tmp_path):
+    """SP更新済み・credential 0の実partial stateは重複更新せず残stageを完了する。"""
+    result, calls = _run_configure_entra_resume(
+        tmp_path,
+        external=False,
+        service_principal_assignment_required=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ad sp update" not in calls
+    assert calls.count("ad app credential reset") == 1
+    assert "containerapp secret set" in calls
+    assert "--method post" in calls
+    assert "deployment group create" in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("assignment_required", [None, "true"])
+def test_entra_resume_guard_rejects_unknown_assignment_required_shape(
+    tmp_path, assignment_required
+):
+    """SP更新状態がnull・文字列なら既知partial stateとみなさず全write前に停止する。"""
+    result = _run_entra_resume_guard(
+        tmp_path,
+        servicePrincipal={
+            "id": RESUME_SP_ID,
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "servicePrincipalType": "Application",
+            "appRoleAssignmentRequired": assignment_required,
+        },
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
 @pytest.mark.parametrize("external", [True, None])
 def test_configure_entra_resume_requires_known_internal_ingress(tmp_path, external):
     """externalまたは未知ingressのままEntra writeを再開しない。"""
@@ -621,6 +671,21 @@ def test_configure_entra_stops_when_new_credential_metadata_is_not_unique(tmp_pa
         external=False,
         recover_credential=True,
         metadata_count=metadata_count,
+    )
+    assert result.returncode != 0
+    assert "Credential metadataを一意に特定できません" in result.stderr
+    assert "containerapp secret set" not in calls
+    assert "--method post" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_configure_entra_stops_when_new_and_foreign_credentials_remain(tmp_path):
+    """post-resetがnew1件とforeign1件なら事前0/事後1契約に反するため停止する。"""
+    result, calls = _run_configure_entra_resume(
+        tmp_path,
+        external=False,
+        recover_credential=True,
+        foreign_metadata=True,
     )
     assert result.returncode != 0
     assert "Credential metadataを一意に特定できません" in result.stderr
