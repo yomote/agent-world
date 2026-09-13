@@ -237,6 +237,170 @@ class KnownHistorySnapshot(BaseModel):
         return self
 
 
+class RequestEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["issue", "pull-request", "review", "deployment"]
+    url: HttpUrl
+    observed_at: AwareDatetime
+
+
+class RequestRecord(BaseModel):
+    """Issue/PRを正本として参照する、公開可能な依頼運用索引。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    scope_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    issue_url: HttpUrl
+    issue_state: Literal["open", "closed", "unknown"]
+    issue_observation: Literal["confirmed", "unavailable"]
+    issue_observed_at: AwareDatetime
+    public_title: str = Field(min_length=1, max_length=240)
+    public_purpose: str = Field(min_length=1, max_length=500)
+    acceptance_summary: str = Field(min_length=1, max_length=500)
+    authority_source: Literal["github-issue-observation"]
+    lifecycle: Literal[
+        "registered",
+        "delegated",
+        "running",
+        "blocked",
+        "handover-waiting",
+        "reconnectable",
+        "completed",
+    ]
+    owner_agent: str | None = Field(default=None, min_length=1, max_length=80)
+    member_agents: list[str] = Field(default_factory=list, max_length=32)
+    progress_summary: str | None = Field(default=None, max_length=500)
+    blocker: str | None = Field(default=None, max_length=500)
+    next_action: str | None = Field(default=None, max_length=500)
+    report_updated_at: AwareDatetime
+    report_source: Literal["manual-public-summary"]
+    runtime_connection: Literal["connected", "record-only", "unknown"]
+    runtime_observed_at: AwareDatetime | None = None
+    evidence: list[RequestEvidence] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def check_connection_and_identity(self) -> "RequestRecord":
+        if len(self.member_agents) != len(set(self.member_agents)):
+            raise ValueError("request member agents must be unique")
+        if (self.runtime_connection == "unknown") != (self.runtime_observed_at is None):
+            raise ValueError("known runtime connection needs its own observation time")
+        if self.lifecycle == "completed" and self.issue_state != "closed":
+            raise ValueError("completed request needs a closed Issue observation")
+        if (self.issue_state == "unknown") != (self.issue_observation == "unavailable"):
+            raise ValueError("unknown Issue state needs an unavailable observation marker")
+        return self
+
+
+class FrontDeskClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    claimed_at: AwareDatetime
+    runtime_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    runtime_observed_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def check_runtime_identity(self) -> "FrontDeskClaim":
+        if (self.runtime_session_id is None) != (self.runtime_observed_at is None):
+            raise ValueError("runtime session identity needs its own observation time")
+        return self
+
+
+class RegistryHandover(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["ready", "accepted"]
+    from_front_desk: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    to_front_desk: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    bundle_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    prepared_at: AwareDatetime
+    accepted_at: AwareDatetime | None = None
+    resume_policy: Literal["explicit-dispatch-required"]
+
+    @model_validator(mode="after")
+    def check_state(self) -> "RegistryHandover":
+        if self.from_front_desk == self.to_front_desk:
+            raise ValueError("handover needs a different successor")
+        if (self.state == "accepted") != (self.accepted_at is not None):
+            raise ValueError("accepted handover needs accepted_at only after claim")
+        return self
+
+
+class RequestRegistrySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation: int = Field(ge=1)
+    active_front_desk: FrontDeskClaim
+    updated_at: AwareDatetime
+    source: Literal["manual-public-registry"]
+    requests: list[RequestRecord] = Field(min_length=1, max_length=32)
+    handover: RegistryHandover | None = None
+
+    @model_validator(mode="after")
+    def check_requests(self) -> "RequestRegistrySnapshot":
+        ids = [request.request_id for request in self.requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("registry request identifiers must be unique")
+        scopes = [request.scope_id for request in self.requests]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("registry request scope identifiers must be unique")
+        return self
+
+
+class RequestRegistryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["manual-public-registry"]
+    action: Literal["initialize", "update", "prepare-handover", "claim-handover"]
+    expected_generation: int = Field(ge=0)
+    actor_front_desk: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    actor_runtime_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    observed_at: AwareDatetime
+    requests: list[RequestRecord] = Field(default_factory=list, max_length=32)
+    successor_front_desk: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    bundle_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def check_action(self) -> "RequestRegistryUpdate":
+        ids = [request.request_id for request in self.requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("registry update request identifiers must be unique")
+        scopes = [request.scope_id for request in self.requests]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("registry update scope identifiers must be unique")
+        needs_handover = self.action in {"prepare-handover", "claim-handover"}
+        if needs_handover != (
+            self.successor_front_desk is not None and self.bundle_digest is not None
+        ):
+            raise ValueError("handover action needs successor and bundle digest")
+        if self.action == "initialize" and (self.expected_generation != 0 or not self.requests):
+            raise ValueError("initialize needs generation zero and at least one request")
+        if self.action == "update" and not self.requests:
+            raise ValueError("update needs at least one request")
+        if needs_handover and self.requests:
+            raise ValueError("handover actions cannot update requests")
+        if self.action == "claim-handover" and self.actor_runtime_session_id is None:
+            raise ValueError("handover claim needs the new runtime session identity")
+        if self.action in {"update", "prepare-handover"} and (
+            self.actor_runtime_session_id is not None
+        ):
+            raise ValueError("runtime session identity is not accepted for this action")
+        return self
+
+
+class RequestRegistryReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changed: bool
+    revision: str = Field(min_length=1, max_length=256)
+    generation: int = Field(ge=1)
+    active_front_desk: FrontDeskClaim | None = None
+    requests: list[RequestRecord]
+    handover: RegistryHandover | None = None
+
+
 class StatusSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -249,6 +413,7 @@ class StatusSnapshot(BaseModel):
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    request_registry: RequestRegistrySnapshot | None = None
 
     @model_validator(mode="after")
     def check_parent_cycles(self) -> "StatusSnapshot":

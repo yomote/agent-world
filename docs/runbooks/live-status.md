@@ -84,3 +84,9 @@ Azure公開の構成、停止条件、credential境界、rollbackは[Azure管理
 `runtime_capacity.available`は`availability_source=derived-running-limit`、`availability_definition=max-concurrent-minus-running`と一緒にだけ受け付け、`max_concurrent_agents - running`との一致を検証する。画面では「空き（実行中差引）」と表示する。予約・queue・idle slotは観測していないため、agentを新たに起動できる数の保証には使わない。
 
 `session_tree`と`known_history`は独立clockで保持する。部分更新で省略した場合は保持し、full PUTによる暗黙消去、時刻退行、同一clockの異内容は409にする。receiptはrequestで指定したmanifestまたは履歴だけを返し、保持中の他scope rowを漏らさない。
+
+## 依頼registry
+
+`request_registry`はIssueとPRを正本参照する公開用の運用索引である。専用の`PUT /api/status/requests/upsert`は既存Status.Ingestだけを認可し、operator GET権限を広げない。generationとBlob ETagの両方で競合を止め、指定依頼以外を保持する。通常のstatus部分更新もregistryを保持する。registry初期化後のfull PUTはregistryの省略・置換を409にし、古いpublisherによる暗黙消去を防ぐ。
+
+依頼選択時、`runtime_connection=connected`かつ現在treeとのmember交差がある依頼だけを現在接続として扱う。`record-only`や`unknown`の過去依頼へ同じagent aliasの最新treeを流用しない。capacityはroot runtime全体の観測であり、依頼別へ合算・再ラベルしない。handoverと復元の手順は[Front Desk依頼registry運用](request-registry.md)に従う。

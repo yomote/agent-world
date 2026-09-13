@@ -9,7 +9,7 @@
     />
     <meta name="color-scheme" content="dark" />
     <title>Agent World — 開発状況</title>
-    <link rel="stylesheet" href="./status.css?v=5" />
+    <link rel="stylesheet" href="./status.css?v=6" />
   </head>
   <body>
     <header class="site-header">
@@ -39,6 +39,27 @@
         </dl>
       </section>
 
+      <section
+        id="request-registry"
+        class="request-registry"
+        aria-labelledby="request-registry-title"
+        hidden
+      >
+        <div class="section-heading">
+          <h2 id="request-registry-title">依頼一覧</h2>
+          <p id="request-registry-updated" class="task-total">registry更新 —</p>
+        </div>
+        <dl id="request-registry-meta" class="registry-meta" aria-live="polite"></dl>
+        <p id="request-handover" class="handover-note" hidden></p>
+        <div
+          id="request-list"
+          class="request-list"
+          role="list"
+          aria-label="登録済み依頼"
+          aria-live="polite"
+        ></div>
+      </section>
+
       <p class="scope-note">
         <strong id="source-kind">入力種別を確認中</strong><br />
         <span id="source-note">snapshotの出所を確認しています。</span>
@@ -55,7 +76,7 @@
 
       <section class="capacity capacity-top" aria-labelledby="capacity-title">
         <div class="section-heading">
-          <h2 id="capacity-title">このセッション</h2>
+          <h2 id="capacity-title">観測中root session全体</h2>
           <p id="capacity-observed" class="task-total">容量観測 —</p>
         </div>
         <div id="capacity-metrics" class="capacity-metrics" aria-live="polite"></div>
@@ -68,7 +89,7 @@
           <h2 id="work-title">依頼と担当のツリー</h2>
           <p id="tree-coverage" class="task-total">current coverage —</p>
         </div>
-        <p class="summary-note">
+        <p id="tree-note" class="summary-note">
           current
           sessionの全nodeです。履歴は破線で接続し、現在の人数には数えません。図だけ横へ動かせます。
         </p>
@@ -114,6 +135,6 @@
     <footer>
       <p>ブラウザは同一originの管理backendだけを読みます。GitHub APIへ接続しません。</p>
     </footer>
-    <script type="module" src="./status.js?v=5"></script>
+    <script type="module" src="./status.js?v=6"></script>
   </body>
 </html>

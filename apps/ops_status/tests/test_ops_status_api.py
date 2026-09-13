@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,6 +89,31 @@ def known_history(at: datetime) -> dict:
     }
 
 
+def request_record(request_id: str, at: datetime, *, lifecycle: str = "running") -> dict:
+    return {
+        "request_id": request_id,
+        "scope_id": f"scope-{request_id}",
+        "issue_url": f"https://github.com/yomote/agent-world/issues/{request_id.removeprefix('request-')}",
+        "issue_state": "closed" if lifecycle == "completed" else "open",
+        "issue_observation": "confirmed",
+        "issue_observed_at": at.isoformat(),
+        "public_title": f"依頼 {request_id}",
+        "public_purpose": "公開目的",
+        "acceptance_summary": "受入条件",
+        "authority_source": "github-issue-observation",
+        "lifecycle": lifecycle,
+        "owner_agent": "status-owner",
+        "member_agents": ["status-owner"],
+        "progress_summary": "確認済み進捗",
+        "next_action": None if lifecycle == "completed" else "次の作業",
+        "report_updated_at": at.isoformat(),
+        "report_source": "manual-public-summary",
+        "runtime_connection": "record-only",
+        "runtime_observed_at": at.isoformat(),
+        "evidence": [],
+    }
+
+
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):
     """更新が止まったsnapshotを現在稼働中に見せ続ける回帰を防ぐ。"""
     old = datetime.now(UTC) - timedelta(minutes=3)
@@ -134,6 +160,211 @@ def test_status_assets_do_not_keep_an_old_dashboard_after_deploy(path):
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_request_registry_initializes_and_returns_only_submitted_requests():
+    """部分更新receiptが保持済み依頼をGETするoracleになる回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    payload = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [request_record("request-59", now), request_record("request-64", now)],
+    }
+
+    response = client.put("/api/status/requests/upsert", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["generation"] == 1
+    assert [item["request_id"] for item in response.json()["requests"]] == [
+        "request-59",
+        "request-64",
+    ]
+    assert store.value.request_registry.active_front_desk.alias == "front-desk-1"
+
+
+def test_request_registry_update_preserves_other_requests_and_rejects_stale_generation():
+    """指定外依頼の消去と、古いFront Deskによるlost updateを防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    base = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [request_record("request-59", now), request_record("request-64", now)],
+    }
+    assert client.put("/api/status/requests/upsert", json=base).status_code == 200
+    later = now + timedelta(minutes=1)
+    changed = request_record("request-64", later)
+    changed["progress_summary"] = "公開済み"
+    update = {
+        **base,
+        "action": "update",
+        "expected_generation": 1,
+        "observed_at": later.isoformat(),
+        "requests": [changed],
+    }
+
+    response = client.put("/api/status/requests/upsert", json=update)
+
+    assert response.status_code == 200
+    assert response.json()["generation"] == 2
+    assert "active_front_desk" not in response.json()
+    assert "handover" not in response.json()
+    assert [item["request_id"] for item in response.json()["requests"]] == ["request-64"]
+    assert {item.request_id for item in store.value.request_registry.requests} == {
+        "request-59",
+        "request-64",
+    }
+    assert client.put("/api/status/requests/upsert", json=update).status_code == 409
+
+
+def test_request_registry_rejects_independent_clock_conflicts_and_keeps_noop_generation():
+    """新しい受信時刻で古いIssue/runtime内容を上書きする回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    record = request_record("request-64", now)
+    initialize = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [record],
+    }
+    client.put("/api/status/requests/upsert", json=initialize)
+    noop = {**initialize, "action": "update", "expected_generation": 1}
+    response = client.put("/api/status/requests/upsert", json=noop)
+    assert response.status_code == 200
+    assert response.json()["changed"] is False
+    assert response.json()["generation"] == 1
+
+    conflict = request_record("request-64", now + timedelta(minutes=1))
+    conflict["public_title"] = "同じIssue時計の異なるcache"
+    conflict["issue_observed_at"] = now.isoformat()
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            **noop,
+            "observed_at": (now + timedelta(minutes=1)).isoformat(),
+            "requests": [conflict],
+        },
+    )
+    assert response.status_code == 409
+    clock_regression = record.copy()
+    clock_regression["report_updated_at"] = (now - timedelta(seconds=1)).isoformat()
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            **noop,
+            "observed_at": (now + timedelta(minutes=2)).isoformat(),
+            "requests": [clock_regression],
+        },
+    )
+    assert response.status_code == 409
+
+
+def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
+    """二重claim、別successor、暗黙worker再開を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    record = request_record("request-64", now)
+    initialize = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [record],
+    }
+    client.put("/api/status/requests/upsert", json=initialize)
+    digest = "sha256:" + "a" * 64
+    prepared_at = now + timedelta(minutes=1)
+    prepare = {
+        "source": "manual-public-registry",
+        "action": "prepare-handover",
+        "expected_generation": 1,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": prepared_at.isoformat(),
+        "successor_front_desk": "front-desk-2",
+        "bundle_digest": digest,
+    }
+    assert (
+        client.put(
+            "/api/status/requests/upsert", json={**prepare, "requests": [record]}
+        ).status_code
+        == 422
+    )
+    assert client.put("/api/status/requests/upsert", json=prepare).json()["generation"] == 2
+    claim = {
+        **prepare,
+        "action": "claim-handover",
+        "expected_generation": 2,
+        "actor_front_desk": "front-desk-2",
+        "actor_runtime_session_id": "runtime-session-new",
+        "observed_at": (prepared_at + timedelta(minutes=1)).isoformat(),
+    }
+
+    missing_runtime = claim.copy()
+    missing_runtime.pop("actor_runtime_session_id")
+    assert client.put("/api/status/requests/upsert", json=missing_runtime).status_code == 422
+
+    response = client.put("/api/status/requests/upsert", json=claim)
+
+    assert response.status_code == 200
+    assert response.json()["active_front_desk"]["alias"] == "front-desk-2"
+    assert response.json()["active_front_desk"]["runtime_session_id"] == "runtime-session-new"
+    stored = store.value.request_registry.requests[0]
+    assert stored.runtime_connection == "record-only"
+    assert stored.lifecycle == "handover-waiting"
+    assert client.put("/api/status/requests/upsert", json=claim).status_code == 409
+
+
+def test_full_and_status_upsert_preserve_request_registry():
+    """既存publisherがregistryを暗黙消去する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    initialize = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [request_record("request-64", now)],
+    }
+    client.put("/api/status/requests/upsert", json=initialize)
+    full = snapshot(now + timedelta(minutes=1))
+    full["source"] = "local-event-record"
+    assert client.put("/api/status", json=full).status_code == 409
+    partial_item = snapshot(now + timedelta(minutes=2))["items"][0]
+    partial = {"source": "local-event-record", "items": [partial_item]}
+    assert client.put("/api/status/upsert", json=partial).status_code == 200
+    assert store.value.request_registry.requests[0].request_id == "request-64"
+
+
+@pytest.mark.parametrize(
+    "store",
+    [MemoryStore(), MemoryStore(StatusSnapshot.model_validate(snapshot(datetime.now(UTC))))],
+)
+def test_full_put_cannot_initialize_request_registry(store):
+    """full publisherが専用registry CASとactive owner規則を迂回する回帰を防ぐ。"""
+    fixture = Path(__file__).parents[3] / "scripts/tests/fixtures/request_registry_status.json"
+    incoming = json.loads(fixture.read_text(encoding="utf-8"))
+    incoming["source"] = "local-event-record"
+
+    response = TestClient(create_app(store)).put("/api/status", json=incoming)
+
+    assert response.status_code == 409
 
 
 @pytest.mark.parametrize("expected_upper", [False, True])
@@ -191,6 +422,30 @@ def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch, exp
             json={"source": "local-event-record", "items": data["items"]},
         ).status_code
         == 403
+    )
+    registry_update = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": current.isoformat(),
+        "requests": [request_record("request-64", current)],
+    }
+    assert (
+        client.put(
+            "/api/status/requests/upsert",
+            headers={"x-ms-client-principal-id": actual_operator},
+            json=registry_update,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.put(
+            "/api/status/requests/upsert",
+            headers={"x-ms-client-principal-id": actual_ingest},
+            json=registry_update,
+        ).status_code
+        == 200
     )
 
 
