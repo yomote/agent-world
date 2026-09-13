@@ -43,12 +43,13 @@ python scripts/python_env.py scripts/sync_status_from_local_events.py `
 
 ## snapshot契約
 
-sourceは次の4種類だけを受け付け、画面にも表示する。
+sourceは次の5種類だけを受け付け、画面にも表示する。
 
 | source               | 意味                                                                               |
 | -------------------- | ---------------------------------------------------------------------------------- |
 | `codex-event`        | Codex App Server eventをadapterが正規化した入力                                    |
 | `local-event-record` | このPCの構造化task event記録をadapterが正規化した入力。App Server live接続ではない |
+| `ingest-upsert`      | serverが既存rowを保持し、認可済みingestの指定項目だけを反映した入力                |
 | `pm-confirmed`       | PMが確認した時点の手動snapshot。runtimeのlive状態とは表示しない                    |
 | `fixture`            | 表示・test用。実際のagent稼働とは表示しない                                        |
 
@@ -57,6 +58,8 @@ work itemは従来のagent / role / taskに加え、owner / session / task label
 `runtime_capacity`はtask件数・担当人数と別のoptional snapshotである。画面は「このセッション：実行中 X / 同時実行上限 Y」を表示するが、runtimeのturn状態であり、進捗率・実作業人数・空き枠を示さない。scope、二つのsource、観測時刻と経過時間を併記し、capacity未取得と古い観測を区別する。存在総数は実行中に換算せず、`completed`を`idle` / `running`へ換算しない。会話本文、reasoning、tool引数・結果、local path、raw session ID、secret、token usageは受け付けない。未知fieldと未知sourceはbackendが拒否する。
 
 writerは検証済みsnapshotを一時fileからrenameして置き換える。履歴は保存せず`artifacts/status/current.json`だけを読む。ブラウザcacheとAPI response cacheは使わない。
+
+Azure版の`PUT /api/status/upsert`は`local-event-record`のrequestを受け、`agent`が一致する完全なwork itemだけを置換し、新しい`agent`は末尾へ追加する。未指定rowと、省略した`runtime_capacity`はserver側で保持する。capacityは非null値を明示した場合だけ置換する。保存snapshotのsourceは`ingest-upsert`となり、保持した手動rowまで新しいeventから自動取得したとは表示しない。古いrow/capacity観測、重複agent、未初期化snapshot、Blob ETag競合は409で停止する。receiptは今回指定した保存済みrow、指定したcapacity、変更有無、opaque revisionだけで、保持した他rowやsnapshot全体をingestへ返さない。同内容は保存時刻を更新せずno-opにする。
 
 現在の手動writerは`pm-confirmed`と`fixture`だけを許可する。`codex-event`と`local-event-record`を拒否し、手動入力をevent観測として保存できない。
 
