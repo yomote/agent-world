@@ -83,6 +83,8 @@ Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraC
 
 途中失敗時は自動再送しない。scriptが出す`clientId`、一意なcredential `displayName`、取得済みなら`keyId`と期限を使い、app registration、enterprise app、Key Vault secret、authConfigのactualを確認してから復旧する。secret値は再取得できない。Key Vault格納前に止まったcredentialはmetadataを確認し、`az ad app credential delete --id <client-id> --key-id <key-id>`で回収する。
 
+app registrationとservice principalの作成直後、`appRoleAssignmentRequired`更新だけがGraphの`Resource does not exist`で失敗した場合はConfigure全体を再実行しない。app/SPが各1件、同じtenant/client ID/SP object ID、single-tenant、正確なcallback、ID token有効であり、credential・本人assignment・Easy Authがまだ存在しないことをread-only actualで確認する。その既知stateに限り、同じコマンドへ`-ResumeTenantId`、`-ResumeClientId`、`-ResumeServicePrincipalObjectId`を追加して一度だけ再開する。対象違いまたは想定外の副作用があれば停止する。
+
 期限前のrotationでは、一意なdisplay nameで新しいcredentialを`--append`作成し、metadataのkey IDと期限を控え、同じKey Vault secret名を更新する。versionless Key Vault参照の更新反映には最大30分かかり得るため、旧credentialを最低35分は併存させる。その後、新credentialがKey Vaultのlatest versionであるactualと本人loginを確認してから、古いcredentialをkey ID指定で削除する。初回構成時とrotation後は本人user contextでDirectory側も確認する。
 
 ```powershell

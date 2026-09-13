@@ -3,7 +3,10 @@ param(
   [Parameter(Mandatory)] [string] $SubscriptionId,
   [Parameter(Mandatory)] [string] $ResourceGroupName,
   [Parameter(Mandatory)] [string] $AppName,
-  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $AllowedUserObjectId
+  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $AllowedUserObjectId,
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeTenantId = '',
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeClientId = '',
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeServicePrincipalObjectId = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,18 +16,68 @@ $signedInUserId = & az ad signed-in-user show --only-show-errors --query id --ou
 if ($accountType -ne 'user' -or $signedInUserId -ne $AllowedUserObjectId) {
   throw "AllowedUserObjectIdは現在login中の本人object IDと一致させてください。"
 }
-$fqdn = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'properties.configuration.ingress.fqdn' --output tsv
-if ($LASTEXITCODE -ne 0 -or -not $fqdn) { throw "Container App が見つかりません。core deploymentを先に実行してください。" }
+$ingressJson = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'properties.configuration.ingress' --output json
+if ($LASTEXITCODE -ne 0 -or -not $ingressJson) { throw "Container App が見つかりません。core deploymentを先に実行してください。" }
+$ingress = $ingressJson | ConvertFrom-Json
+$fqdn = $ingress.fqdn
+if (-not $fqdn) { throw "Container App ingress FQDNを確認できません。" }
 $displayName = "$AppName-login"
-$existing = & az ad app list --display-name $displayName --query '[].appId' --output tsv --only-show-errors
+$existing = @(& az ad app list --display-name $displayName --query '[].appId' --output tsv --only-show-errors)
 if ($LASTEXITCODE -ne 0) { throw "Entra app registration lookup failed." }
-if ($existing) { throw "同名のapp registrationが既にあります。重複作成せずactualを確認してください: $displayName" }
 
 $redirectUri = "https://$fqdn/.auth/login/aad/callback"
-$clientId = & az ad app create --only-show-errors --display-name $displayName --sign-in-audience AzureADMyOrg --enable-id-token-issuance true --web-redirect-uris $redirectUri --query appId --output tsv
-if ($LASTEXITCODE -ne 0 -or -not $clientId) { throw "Entra app registration creation failed." }
-$servicePrincipalId = & az ad sp create --only-show-errors --id $clientId --query id --output tsv
-if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalId) { throw "Entra service principal creation failed." }
+$resumeValues = @($ResumeTenantId, $ResumeClientId, $ResumeServicePrincipalObjectId) | Where-Object { $_ }
+if ($resumeValues.Count -ne 0 -and $resumeValues.Count -ne 3) {
+  throw 'ResumeTenantId、ResumeClientId、ResumeServicePrincipalObjectIdは3つとも必要です。'
+}
+if ($resumeValues.Count -eq 3) {
+  if ($null -eq $ingress.external -or [bool]$ingress.external) {
+    throw 'Resume前のContainer App ingressはinternalのactualが必須です。'
+  }
+  if ($existing.Count -ne 1 -or $existing[0] -ine $ResumeClientId) {
+    throw 'Resume対象以外のapp registrationまたは重複appがあります。'
+  }
+  $actualTenantId = & az account show --only-show-errors --query tenantId --output tsv
+  if ($LASTEXITCODE -ne 0 -or -not $actualTenantId) { throw 'Resume tenant actualを読み取れません。' }
+  $applicationJson = & az ad app show --only-show-errors --id $ResumeClientId --output json
+  if ($LASTEXITCODE -ne 0 -or -not $applicationJson) { throw 'Resume app actualを読み取れません。' }
+  $servicePrincipalJson = & az ad sp show --only-show-errors --id $ResumeClientId --output json
+  if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalJson) { throw 'Resume service principal actualを読み取れません。' }
+  $credentialsJson = & az ad app credential list --only-show-errors --id $ResumeClientId --output json
+  if ($LASTEXITCODE -ne 0 -or -not $credentialsJson) { throw 'Resume credential actualを読み取れません。' }
+  $assignmentsJson = & az rest --only-show-errors --method get --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --output json
+  if ($LASTEXITCODE -ne 0 -or -not $assignmentsJson) { throw 'Resume assignment actualを読み取れません。' }
+  $authJson = & az containerapp auth show --only-show-errors --resource-group $ResourceGroupName --name $AppName --output json
+  if ($LASTEXITCODE -ne 0 -or -not $authJson) { throw 'Resume auth actualを読み取れません。' }
+  if ($actualTenantId -ine $ResumeTenantId) { throw 'Resume tenantが現在のsubscription contextと一致しません。' }
+  $resumeActualFile = [System.IO.Path]::GetTempFileName()
+  try {
+    @{
+      application = $applicationJson | ConvertFrom-Json
+      servicePrincipal = $servicePrincipalJson | ConvertFrom-Json
+      credentials = @($credentialsJson | ConvertFrom-Json)
+      assignments = @(($assignmentsJson | ConvertFrom-Json).value)
+      auth = $authJson | ConvertFrom-Json
+    } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resumeActualFile -Encoding utf8NoBOM
+    & "$PSScriptRoot/Assert-EntraResumeState.ps1" `
+      -ActualPath $resumeActualFile `
+      -AppName $AppName `
+      -ExpectedRedirectUri $redirectUri `
+      -ClientId $ResumeClientId `
+      -ServicePrincipalObjectId $ResumeServicePrincipalObjectId `
+      -AllowedUserObjectId $AllowedUserObjectId
+  } finally {
+    Remove-Item -LiteralPath $resumeActualFile -Force -ErrorAction SilentlyContinue
+  }
+  $clientId = $ResumeClientId
+  $servicePrincipalId = $ResumeServicePrincipalObjectId
+} else {
+  if ($existing) { throw "同名のapp registrationが既にあります。重複作成せずactualを確認してください: $displayName" }
+  $clientId = & az ad app create --only-show-errors --display-name $displayName --sign-in-audience AzureADMyOrg --enable-id-token-issuance true --web-redirect-uris $redirectUri --query appId --output tsv
+  if ($LASTEXITCODE -ne 0 -or -not $clientId) { throw "Entra app registration creation failed." }
+  $servicePrincipalId = & az ad sp create --only-show-errors --id $clientId --query id --output tsv
+  if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalId) { throw "Entra service principal creation failed." }
+}
 & az ad sp update --only-show-errors --id $servicePrincipalId --set appRoleAssignmentRequired=true --output none
 if ($LASTEXITCODE -ne 0) { throw "Entra assignment requirement update failed." }
 

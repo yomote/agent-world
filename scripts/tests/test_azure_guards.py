@@ -11,11 +11,17 @@ AUTH_PLAN_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureAuthPlan.ps1"
 CONTAINMENT = ROOT / "scripts" / "azure" / "Disable-AzureExternalIngress.ps1"
 APPLY_INPUT_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureApplyInputs.ps1"
 BILLING_CONFIRMATION = ROOT / "scripts" / "azure" / "Assert-AzureBillingCurrencyConfirmation.ps1"
+ENTRA_RESUME = ROOT / "scripts" / "azure" / "Assert-EntraResumeState.ps1"
+CONFIGURE_ENTRA = ROOT / "scripts" / "azure" / "Configure-Entra.ps1"
 BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
 EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
 )
 PWSH = shutil.which("pwsh")
+
+RESUME_CLIENT_ID = "11111111-1111-1111-1111-111111111111"
+RESUME_SP_ID = "22222222-2222-2222-2222-222222222222"
+RESUME_USER_ID = "33333333-3333-3333-3333-333333333333"
 
 
 def _resource_ids(subscription: str, group: str, app: str) -> list[str]:
@@ -104,6 +110,132 @@ def _write_billing_confirmation(
         encoding="utf-8",
     )
     return confirmation
+
+
+def _run_entra_resume_guard(tmp_path: Path, **overrides):
+    actual = {
+        "application": {
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "signInAudience": "AzureADMyOrg",
+            "web": {
+                "redirectUris": ["https://internal.example/.auth/login/aad/callback"],
+                "implicitGrantSettings": {"enableIdTokenIssuance": True},
+            },
+        },
+        "servicePrincipal": {
+            "id": RESUME_SP_ID,
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "servicePrincipalType": "Application",
+            "appRoleAssignmentRequired": False,
+        },
+        "credentials": [],
+        "assignments": [],
+        "auth": {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
+    }
+    actual.update(overrides)
+    path = tmp_path / "entra-resume-actual.json"
+    path.write_text(json.dumps(actual), encoding="utf-8")
+    return subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(ENTRA_RESUME),
+            "-ActualPath",
+            str(path),
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-ExpectedRedirectUri",
+            "https://internal.example/.auth/login/aad/callback",
+            "-ClientId",
+            RESUME_CLIENT_ID,
+            "-ServicePrincipalObjectId",
+            RESUME_SP_ID,
+            "-AllowedUserObjectId",
+            RESUME_USER_ID,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def _run_configure_entra_resume(tmp_path: Path, external):
+    log = tmp_path / "az-calls.log"
+    ingress_external = "null" if external is None else str(external).lower()
+    service_principal_json = json.dumps(
+        {
+            "id": RESUME_SP_ID,
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "servicePrincipalType": "Application",
+            "appRoleAssignmentRequired": False,
+        },
+        separators=(",", ":"),
+    )
+    auth_json = json.dumps(
+        {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
+        separators=(",", ":"),
+    )
+    wrapper = tmp_path / "run-configure-resume.ps1"
+    wrapper.write_text(
+        f"""
+function global:az {{
+  $joined = [string]::Join(' ', $args)
+  Add-Content -LiteralPath '{log.as_posix()}' -Value $joined
+  $global:LASTEXITCODE = 0
+  if ($joined -match '^account show .*--output json$') {{
+    return '{{"id":"sub-1","state":"Enabled","tenantId":"{RESUME_USER_ID}"}}'
+  }}
+  if ($joined -match '^account show .*--query user.type') {{ return 'user' }}
+  if ($joined -match '^account show .*--query tenantId') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^ad signed-in-user show') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^containerapp show .*properties.configuration.ingress') {{
+    return '{{"fqdn":"internal.example","external":{ingress_external}}}'
+  }}
+  if ($joined -match '^ad app list') {{ return '{RESUME_CLIENT_ID}' }}
+  if ($joined -match '^ad app show') {{
+    return '{{"appId":"{RESUME_CLIENT_ID}","displayName":"agent-world-yomote-jpe-login","signInAudience":"AzureADMyOrg","web":{{"redirectUris":["https://internal.example/.auth/login/aad/callback"],"implicitGrantSettings":{{"enableIdTokenIssuance":true}}}}}}'
+  }}
+  if ($joined -match '^ad sp show') {{
+    return '{service_principal_json}'
+  }}
+  if ($joined -match '^ad app credential list') {{ return '[]' }}
+  if ($joined -match '^rest .*appRoleAssignments') {{ return '{{"value":[]}}' }}
+  if ($joined -match '^containerapp auth show') {{ return '{auth_json}' }}
+  if ($joined -match '^ad sp update') {{ $global:LASTEXITCODE = 1; return }}
+  throw "Unexpected az call: $joined"
+}}
+try {{
+  & '{CONFIGURE_ENTRA.as_posix()}' `
+    -SubscriptionId sub-1 `
+    -ResourceGroupName rg-agent-world-jpe `
+    -AppName agent-world-yomote-jpe `
+    -AllowedUserObjectId {RESUME_USER_ID} `
+    -ResumeTenantId {RESUME_USER_ID} `
+    -ResumeClientId {RESUME_CLIENT_ID} `
+    -ResumeServicePrincipalObjectId {RESUME_SP_ID}
+}} catch {{
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [PWSH, "-NoProfile", "-File", str(wrapper)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    return result, calls
 
 
 def _run_budget_email_guard(*addresses: str) -> subprocess.CompletedProcess[str]:
@@ -284,6 +416,59 @@ def test_billing_confirmation_rejects_missing_method_or_time(tmp_path, field):
         check=False,
     )
     assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_resume_guard_accepts_only_known_partial_state(tmp_path):
+    """Graph伝播失敗後のapp/SPだけが残る既知stateからだけ再開する。"""
+    result = _run_entra_resume_guard(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("unexpected", ["app", "credential", "assignment", "auth"])
+def test_entra_resume_guard_rejects_target_drift_or_unknown_side_effect(tmp_path, unexpected):
+    """対象違いと既credential・assignment・authを新規発行で上書きしない。"""
+    overrides = {}
+    if unexpected == "app":
+        overrides["application"] = {
+            "appId": "44444444-4444-4444-4444-444444444444",
+            "displayName": "other",
+            "signInAudience": "AzureADMultipleOrgs",
+            "web": {"redirectUris": [], "implicitGrantSettings": {}},
+        }
+    elif unexpected == "credential":
+        overrides["credentials"] = [{"keyId": "unknown"}]
+    elif unexpected == "assignment":
+        overrides["assignments"] = [{"resourceId": RESUME_SP_ID, "principalId": RESUME_USER_ID}]
+    else:
+        overrides["auth"] = {
+            "platform": {"enabled": True},
+            "identityProviders": {"azureActiveDirectory": {"enabled": True}},
+        }
+    result = _run_entra_resume_guard(tmp_path, **overrides)
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_configure_entra_resume_accepts_single_scalar_app_and_reaches_update(tmp_path):
+    """1件だけのTSV appIdをUUID先頭文字に崩さず、検証後の同SP更新へ進む。"""
+    result, calls = _run_configure_entra_resume(tmp_path, external=False)
+    assert result.returncode != 0
+    assert "Entra assignment requirement update failed" in result.stderr
+    assert "ad sp update" in calls
+    assert "ad app create" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("external", [True, None])
+def test_configure_entra_resume_requires_known_internal_ingress(tmp_path, external):
+    """externalまたは未知ingressのままEntra writeを再開しない。"""
+    result, calls = _run_configure_entra_resume(tmp_path, external=external)
+    assert result.returncode != 0
+    assert "ingressはinternalのactualが必須" in result.stderr
+    assert "ad sp update" not in calls
+    assert "ad app credential reset" not in calls
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
