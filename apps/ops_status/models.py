@@ -205,6 +205,12 @@ class HistoryEntry(BaseModel):
     last_observed_at: AwareDatetime | None = None
     source: Literal["runtime-list-agents-metadata", "pm-recorded-completed-work-unit"]
 
+    @model_validator(mode="after")
+    def check_self_parent(self) -> "HistoryEntry":
+        if self.agent == self.parent_agent:
+            raise ValueError("known history entry cannot parent itself")
+        return self
+
 
 class KnownHistorySnapshot(BaseModel):
     """current inventoryとは分離した、明示済みの過去work unit。"""
@@ -219,6 +225,15 @@ class KnownHistorySnapshot(BaseModel):
         agents = [entry.agent for entry in self.entries]
         if len(agents) != len(set(agents)):
             raise ValueError("known history agents must be unique")
+        parents = {entry.agent: entry.parent_agent for entry in self.entries}
+        for start in parents:
+            seen: set[str] = set()
+            current: str | None = start
+            while current in parents:
+                if current in seen:
+                    raise ValueError("known history cannot contain a cycle")
+                seen.add(current)
+                current = parents[current]
         return self
 
 

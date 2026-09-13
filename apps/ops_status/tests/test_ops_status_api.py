@@ -943,3 +943,39 @@ def test_runtime_capacity_rejects_incorrect_derived_available(available):
     }
     with pytest.raises(ValueError):
         StatusSnapshot.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [
+            {
+                "agent": "old",
+                "parent_agent": "old",
+                "status": "completed",
+                "source": "pm-recorded-completed-work-unit",
+            }
+        ],
+        [
+            {
+                "agent": "old-a",
+                "parent_agent": "old-b",
+                "status": "completed",
+                "source": "pm-recorded-completed-work-unit",
+            },
+            {
+                "agent": "old-b",
+                "parent_agent": "old-a",
+                "status": "completed",
+                "source": "pm-recorded-completed-work-unit",
+            },
+        ],
+    ],
+)
+def test_known_history_rejects_self_parent_and_cycle(entries):
+    """破損した履歴関係でtree rendererが再帰停止しない回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["known_history"] = {"recorded_at": now.isoformat(), "entries": entries}
+    with pytest.raises(ValueError):
+        StatusSnapshot.model_validate(data)
