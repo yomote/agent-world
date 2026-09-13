@@ -6,13 +6,13 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 2026-09-13の再開時点で、PR #14はcurrent main `1b245335cee6b9298dd165cb5166fddb85457783`から19 commits遅れ、GitHubで`CONFLICTING`だった。Azure公開対象をcurrent mainへ合わせるため同SHAをbranchへ統合した。競合は`apps/world/api.py`と`apps/world/tests/test_api.py`の2ファイルだけで、mainの共有Event historyとPR #14のhealth / production static配信を両方保持した。mainから入った管理status層は変更していない。
 
-最初の固定後にmainへ入った非機能の文書・構成図と管理status更新も競合なしで統合し、今回のpreflight基点を`04a4bc2078e705c556f44e8b2a94d006665aa184`、統合commitを`6ab5b9804d9ebca94a962d9cc3bdf38c21d9f95e`に固定した。管理statusの10 filesはmainの内容をそのまま保持し、Azure / World / infra差分は変更していない。以後のmain更新はPR #14のmergeabilityまたはdeploy対象へ影響する場合だけ追加統合する。
+最初の固定後にmainへ入った非機能の文書・構成図と管理status更新も競合なしで統合した。merge直前の確認時点baseは`94808540c60fbd024e41d1be00f17419b2ff7bdd`、その統合commitは`1c72b0a57b3e65422c3e3c12345c395c1797d7f7`である。#56の管理status 9 filesはmainの内容をそのまま保持し、承認済みheadからAzure / World / deploy inputの差分は変更していない。以後のmain更新はPR #14のmergeabilityまたはdeploy対象へ影響する場合だけ追加統合する。
 
 必須check `container-check`が無関係なPRで生成されない問題は、`Deploy Azure` workflowをmain向けの全PRで起動し、production containerへの入力が変わった場合だけbuildする方式へ修正した。無関係なReady PRでも同じcheck名が軽量に成功する。Draftのskipは受入証跡にしない。
 
 ## 独立レビュー依頼packet
 
-- base: `origin/main` (`04a4bc2078e705c556f44e8b2a94d006665aa184`、今回のpreflight固定基点)
+- base: 確認時点の`origin/main` (`94808540c60fbd024e41d1be00f17419b2ff7bdd`、merge直前の統合基点)
 - review対象: PR #14のcurrent head。過去review SHAは履歴であり、修正後SHAへ再reviewする
 - 重点観点:
   - main向けの全Ready PRで`container-check`が生成されるか
