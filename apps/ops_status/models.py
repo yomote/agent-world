@@ -82,7 +82,7 @@ class StatusSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1] = 1
-    source: Literal["codex-event", "local-event-record", "pm-confirmed", "fixture"]
+    source: Literal["codex-event", "local-event-record", "ingest-upsert", "pm-confirmed", "fixture"]
     observed_at: AwareDatetime
     received_at: AwareDatetime
     items: list[WorkItem] = Field(max_length=32)
@@ -92,3 +92,42 @@ class StatusSnapshot(BaseModel):
 class StatusResponse(StatusSnapshot):
     stale: bool
     age_seconds: int
+
+
+class StatusUpsertRequest(BaseModel):
+    """ingestが明示した行とcapacityだけを既存snapshotへ反映する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["local-event-record"]
+    items: list[WorkItem] = Field(default_factory=list, max_length=32)
+    runtime_capacity: RuntimeCapacitySnapshot | None = None
+
+    @model_validator(mode="after")
+    def check_targets(self) -> "StatusUpsertRequest":
+        agents = [item.agent for item in self.items]
+        if len(agents) != len(set(agents)):
+            raise ValueError("upsert items must have unique agent identifiers")
+        capacity_supplied = "runtime_capacity" in self.model_fields_set
+        if capacity_supplied and self.runtime_capacity is None:
+            raise ValueError("runtime_capacity cannot be null when supplied")
+        if not self.items and not capacity_supplied:
+            raise ValueError("upsert needs an item or runtime_capacity")
+        for item in self.items:
+            if (item.latest_activity is None) != (item.latest_activity_at is None):
+                raise ValueError("upsert activity and its timestamp must be supplied together")
+            has_summary = item.current_action is not None or item.progress_summary is not None
+            if has_summary != (item.summary_updated_at is not None):
+                raise ValueError("upsert summary and its timestamp must be supplied together")
+        return self
+
+
+class StatusUpsertReceipt(BaseModel):
+    """更新対象だけを返し、保持した他行をingestへ漏らさない。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    changed: bool
+    revision: str = Field(min_length=1, max_length=256)
+    items: list[WorkItem]
+    runtime_capacity: RuntimeCapacitySnapshot | None = None

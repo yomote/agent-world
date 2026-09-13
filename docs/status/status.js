@@ -24,6 +24,10 @@ const SOURCE_LABELS = {
     "local event記録",
     "このPCの構造化task event由来です。Codex App Serverへのlive接続ではありません。",
   ],
+  "ingest-upsert": [
+    "保持付き部分更新",
+    "サーバーが既存行を保持し、認可済みingestの指定項目だけを反映したsnapshotです。",
+  ],
   "pm-confirmed": [
     "PM確認snapshot",
     "PMが確認した時点の報告です。Codex App Serverとは未接続です。",

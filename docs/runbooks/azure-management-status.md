@@ -63,18 +63,24 @@ workflowのpush結果が不明なら同じheadを自動または手動で再disp
 
 ## identity・credential・permission manifest
 
-| identity                             | credential                                      | 許可                                                                    |
-| ------------------------------------ | ----------------------------------------------- | ----------------------------------------------------------------------- |
-| deploy operator本人user OID 1件      | 既存Entra login                                 | UIとGET `/api/status`。Key Vault secret rotation                        |
-| status API app / service principal   | 1年client secretを承認後に作りKey Vaultへ直送   | Easy Authのsingle-tenant resource app                                   |
-| ingest app / service principal       | 承認後にlocal保管のcertificate public keyを登録 | `Status.Ingest` app roleとPUT `/api/status`だけ。UI/GET、Azure RBACなし |
-| Container App user-assigned identity | credentialなし                                  | Blob container `status`のData Contributor、Key Vault Secrets User       |
+| identity                             | credential                                      | 許可                                                                                          |
+| ------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| deploy operator本人user OID 1件      | 既存Entra login                                 | UIとGET `/api/status`。Key Vault secret rotation                                              |
+| status API app / service principal   | 1年client secretを承認後に作りKey Vaultへ直送   | Easy Authのsingle-tenant resource app                                                         |
+| ingest app / service principal       | 承認後にlocal保管のcertificate public keyを登録 | `Status.Ingest` app roleとPUT `/api/status`・`/api/status/upsert`だけ。UI/GET、Azure RBACなし |
+| Container App user-assigned identity | credentialなし                                  | Blob container `status`のData Contributor、Key Vault Secrets User                             |
 
 API app roleの正本は`infra/azure-status/api-app-roles.json`。Easy Authのallowed principalsは本人OIDとingest service principal OIDだけ。platformが認証済みrequestへ付与する`X-MS-CLIENT-PRINCIPAL-ID`をbackendでroute別に照合する。App Server、session log、local mappingを公開しない。
 
 deploymentのGUID入力は小文字の標準表記へ正規化してparameterとconfirmation recordに使う。backendもOIDをGUIDとして比較するため、同じOIDの大文字・小文字の差では拒否しない。空欄・不正GUID・別identityは拒否する。
 
 local publisherはAzure CLIが承認済みingest service principalでlogin中であることを確認してtokenを得る。新しい`local-event-record`だけを一度PUTし、応答不明では`artifacts/status/publish-state.json`を`unknown`にして停止する。同じpayloadも後続payloadも自動送信しない。本人が管理画面またはBlob actualを確認し、明示的な回収判断をするまでstateを消さない。
+
+既存snapshot全体をingestへ読ませず一部だけ更新する場合は`PUT /api/status/upsert`を使う。serverはmanaged identityで現在Blobを読み、requestで指定した`agent` rowだけを置換または追加し、未指定rowを保持する。`runtime_capacity`もrequestに非null値がある場合だけ置換する。full PUTと部分更新の双方は同じBlob ETagを条件に1回だけ書き、競合は409で停止する。receiptは今回の保存対象とopaque revisionだけに限定する。ingestのUI/GET拒否、本人のPUT拒否、Easy Authの公開境界は変えない。
+
+部分更新後のfull PUTは既存agentを省略できない。暗黙削除、itemの状態・activity・公開メモまたはcapacityについて同一clockの異なる内容、clockの退行やnonnullからnullへの消去は409にする。received_atやsnapshot全体のobserved_atだけを進めても、この競合を新しい内容とは扱わない。明示削除は別の契約が必要で、このendpointには追加しない。
+
+部分更新の通信失敗や503では保存結果を判別できないため、receiptが得られなければcallerは`unknown`として同じrequestも後続requestも再送しない。409は未初期化、古い対象観測、またはCAS競合として明示的に停止する。全snapshotのGET権限をingestへ追加して回収せず、operator確認または別の承認済み回収手順を待つ。
 
 送信前に保存した`attempting`がprocess/PC停止後に残った場合も未解決writeとして扱う。再起動後はtoken取得・同じsnapshotの再送・新しいsnapshotの送信をすべて停止し、本人のactual確認と回収判断を待つ。
 

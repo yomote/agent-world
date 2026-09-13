@@ -87,6 +87,13 @@ test("local event記録をApp Server live接続と表示しない", () => {
   assert.match(note, /live接続ではありません/);
 });
 
+test("保持付き部分更新を全行の自動取得と表示しない", () => {
+  // 保持した手動rowまで新しいruntime eventから取得したように見せる回帰を防ぐ。
+  const [label, note] = sourceDescription("ingest-upsert");
+  assert.equal(label, "保持付き部分更新");
+  assert.match(note, /指定項目だけ/);
+});
+
 test("経過時間を未来日時でも負数にしない", () => {
   assert.equal(elapsed("2026-09-06T00:01:00Z", Date.parse("2026-09-06T00:00:00Z")), "0秒前");
 });

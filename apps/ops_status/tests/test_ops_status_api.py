@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from ops_status.api import create_app
 from ops_status.models import StatusSnapshot
+from ops_status.store import SnapshotConflictError, SnapshotStoreError, VersionedSnapshot
 
 
 class MemoryStore:
@@ -17,9 +18,29 @@ class MemoryStore:
             raise FileNotFoundError
         return self.value
 
+    def read_versioned(self) -> VersionedSnapshot:
+        return VersionedSnapshot(self.read(), str(self.write_count))
+
     def write(self, value: StatusSnapshot) -> None:
         self.value = value
         self.write_count += 1
+
+    def write_if_revision(self, value: StatusSnapshot, expected_revision: str | None) -> str:
+        actual_revision = None if self.value is None else str(self.write_count)
+        if actual_revision != expected_revision:
+            raise SnapshotConflictError("changed")
+        self.write(value)
+        return str(self.write_count)
+
+
+class ConflictingStore(MemoryStore):
+    def write_if_revision(self, value: StatusSnapshot, expected_revision: str | None) -> str:
+        raise SnapshotConflictError("changed")
+
+
+class FailingReadStore(MemoryStore):
+    def read_versioned(self) -> VersionedSnapshot:
+        raise SnapshotStoreError("unavailable")
 
 
 def snapshot(received_at: datetime) -> dict:
@@ -129,6 +150,22 @@ def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch, exp
         ).status_code
         == 204
     )
+    assert (
+        client.put(
+            "/api/status/upsert",
+            headers={"x-ms-client-principal-id": actual_ingest},
+            json={"source": "local-event-record", "items": data["items"]},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            "/api/status/upsert",
+            headers={"x-ms-client-principal-id": actual_operator},
+            json={"source": "local-event-record", "items": data["items"]},
+        ).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize(
@@ -190,6 +227,369 @@ def test_ingest_rejects_manual_snapshot():
     )
 
     assert response.status_code == 422
+
+
+def test_ingest_upsert_preserves_other_rows_and_omitted_capacity():
+    """部分更新が未指定rowやcapacityを全snapshot置換で消す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 2,
+        "total": 2,
+    }
+    data["items"].append(
+        {
+            "agent": "preserved-owner",
+            "role": "運用担当",
+            "task": "保持対象",
+            "status": "running",
+            "observed_at": (current - timedelta(days=1)).isoformat(),
+            "note": "ingestへ返してはいけない既存情報",
+        }
+    )
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    updated = snapshot(current)["items"][0]
+    updated["current_action"] = "部分更新を検証"
+    updated["summary_updated_at"] = current.isoformat()
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [updated]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["changed"] is True
+    assert response.json()["revision"] == "1"
+    assert [item["agent"] for item in response.json()["items"]] == ["management-status-owner"]
+    assert "runtime_capacity" not in response.json()
+    assert "preserved-owner" not in response.text
+    assert store.value.source == "ingest-upsert"
+    assert [item.agent for item in store.value.items] == [
+        "management-status-owner",
+        "preserved-owner",
+    ]
+    assert store.value.items[1].note == "ingestへ返してはいけない既存情報"
+    assert store.value.items[1].observed_at == current - timedelta(days=1)
+    assert store.value.received_at > store.value.items[1].observed_at
+    assert store.value.runtime_capacity == StatusSnapshot.model_validate(data).runtime_capacity
+
+
+def test_ingest_upsert_replaces_capacity_only_when_supplied():
+    """capacity指定時だけ保存値と安全なreceiptを更新する。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    capacity = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "limit_source": "runtime-instructions",
+        "running": 4,
+        "idle": 0,
+        "completed": 0,
+        "total": 4,
+        "max_concurrent_agents": 8,
+    }
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "runtime_capacity": capacity},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.json()["runtime_capacity"]["running"] == 4
+    assert store.value.runtime_capacity.running == 4
+
+
+def test_ingest_upsert_same_content_is_idempotent():
+    """同内容の確認済み再送がreceived_atやBlobを刷新する回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    client = TestClient(create_app(store))
+
+    first = client.put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": data["items"]},
+    )
+    first_received_at = store.value.received_at
+    response = client.put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": data["items"]},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["changed"] is True
+    assert response.status_code == 200
+    assert response.json()["changed"] is False
+    assert response.json()["revision"] == "1"
+    assert store.write_count == 1
+    assert store.value.received_at == first_received_at
+
+
+@pytest.mark.parametrize("target", ["item", "capacity"])
+def test_ingest_upsert_rejects_older_target_observation(target):
+    """遅延した部分更新が新しい対象rowやcapacityを巻き戻す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 1,
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    older = current - timedelta(seconds=1)
+    payload = {"source": "local-event-record"}
+    if target == "item":
+        item = snapshot(older)["items"][0]
+        payload["items"] = [item]
+    else:
+        payload["runtime_capacity"] = {
+            "scope": "root session tree",
+            "observed_at": older.isoformat(),
+            "state_source": "runtime-list-agents-metadata",
+            "running": 1,
+        }
+
+    response = TestClient(create_app(store)).put("/api/status/upsert", json=payload)
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+@pytest.mark.parametrize("clock", ["latest_activity_at", "summary_updated_at"])
+@pytest.mark.parametrize("incoming_value", [None, "older"])
+def test_ingest_upsert_does_not_clear_or_rewind_independent_item_clocks(clock, incoming_value):
+    """新しいitem observed_atで古いactivityや公開メモ時刻を隠す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "ingest-upsert"
+    data["items"][0][clock] = current.isoformat()
+    if clock == "latest_activity_at":
+        data["items"][0]["latest_activity"] = "structured-item"
+    else:
+        data["items"][0]["current_action"] = "新しい公開メモ"
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    incoming = snapshot(current + timedelta(seconds=1))["items"][0]
+    if incoming_value == "older":
+        incoming[clock] = (current - timedelta(seconds=1)).isoformat()
+        if clock == "latest_activity_at":
+            incoming["latest_activity"] = "structured-item"
+        else:
+            incoming["current_action"] = "古い公開メモ"
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [incoming]},
+    )
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+@pytest.mark.parametrize("target", ["item", "activity", "summary", "capacity"])
+def test_ingest_upsert_rejects_different_content_at_the_same_target_clock(target):
+    """同一clockの異なる観測を到着順だけで上書きする回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    item = data["items"][0]
+    item.update(
+        {
+            "latest_activity": "task-started",
+            "latest_activity_at": current.isoformat(),
+            "current_action": "現行メモ",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 4,
+        "total": 4,
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    payload = {"source": "local-event-record"}
+    if target == "capacity":
+        changed_capacity = data["runtime_capacity"].copy()
+        changed_capacity["running"] = 3
+        payload["runtime_capacity"] = changed_capacity
+    else:
+        changed_item = item.copy()
+        if target == "item":
+            changed_item["status"] = "completed"
+        elif target == "activity":
+            changed_item["latest_activity"] = "task-complete"
+        else:
+            changed_item["current_action"] = "同時刻の別メモ"
+        payload["items"] = [changed_item]
+
+    response = TestClient(create_app(store)).put("/api/status/upsert", json=payload)
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+def test_full_ingest_cannot_sequentially_erase_upsert_summary_at_same_observation():
+    """新しいreceived_atだけの旧full payloadがupsertメモを消す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "ingest-upsert"
+    data["items"][0].update(
+        {
+            "current_action": "server部分更新を実装",
+            "progress_summary": "CAS検証済み",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    delayed = snapshot(current)
+    delayed["source"] = "local-event-record"
+    delayed["received_at"] = (current + timedelta(seconds=30)).isoformat()
+
+    response = TestClient(create_app(store)).put("/api/status", json=delayed)
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+    assert store.value.items[0].current_action == "server部分更新を実装"
+
+
+def test_newer_full_ingest_cannot_implicitly_delete_an_upsert_row():
+    """global観測時刻だけ新しいfull PUTが部分更新済みrowを消す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "ingest-upsert"
+    data["items"].append(
+        {
+            "agent": "upsert-only-owner",
+            "role": "実装担当",
+            "task": "保持が必要な公開メモ",
+            "status": "running",
+            "observed_at": current.isoformat(),
+            "current_action": "実データを供給",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    delayed = snapshot(current + timedelta(seconds=1))
+    delayed["source"] = "local-event-record"
+
+    response = TestClient(create_app(store)).put("/api/status", json=delayed)
+
+    assert response.status_code == 409
+    assert [item.agent for item in store.value.items] == [
+        "management-status-owner",
+        "upsert-only-owner",
+    ]
+
+
+def test_full_ingest_cannot_clear_or_rewind_capacity():
+    """full PUTが独立したcapacity観測を欠損または古い値へ戻す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "ingest-upsert"
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 4,
+    }
+    for capacity in (
+        None,
+        {
+            "scope": "root session tree",
+            "observed_at": (current - timedelta(seconds=1)).isoformat(),
+            "state_source": "runtime-list-agents-metadata",
+            "running": 3,
+        },
+    ):
+        store = MemoryStore(StatusSnapshot.model_validate(data))
+        delayed = snapshot(current + timedelta(seconds=1))
+        delayed["source"] = "local-event-record"
+        if capacity is not None:
+            delayed["runtime_capacity"] = capacity
+
+        response = TestClient(create_app(store)).put("/api/status", json=delayed)
+
+        assert response.status_code == 409
+        assert store.write_count == 0
+
+
+def test_ingest_upsert_reports_store_conflict_without_retrying():
+    """Blob CAS競合を成功扱いしたり自動再送する回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    updated = snapshot(current)["items"][0]
+    updated["current_action"] = "競合する更新"
+    updated["summary_updated_at"] = current.isoformat()
+    store = ConflictingStore(StatusSnapshot.model_validate(data))
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [updated]},
+    )
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+def test_ingest_upsert_distinguishes_missing_snapshot_from_read_failure():
+    """未初期化409とstorage障害503を同じ成功可能な状態へ潰す回帰を防ぐ。"""
+    request = {
+        "source": "local-event-record",
+        "items": snapshot(datetime.now(UTC))["items"],
+    }
+
+    missing = TestClient(create_app(MemoryStore())).put("/api/status/upsert", json=request)
+    failed = TestClient(create_app(FailingReadStore())).put("/api/status/upsert", json=request)
+
+    assert missing.status_code == 409
+    assert missing.json()["detail"] == "status snapshot is required before partial update"
+    assert failed.status_code == 503
+    assert failed.json()["detail"] == "status snapshot is invalid"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"source": "local-event-record"},
+        {"source": "local-event-record", "runtime_capacity": None},
+        {
+            "source": "local-event-record",
+            "items": [
+                snapshot(datetime.now(UTC))["items"][0],
+                snapshot(datetime.now(UTC))["items"][0],
+            ],
+        },
+    ],
+)
+def test_ingest_upsert_rejects_invalid_targets(payload):
+    """空更新・null capacity・重複agentを曖昧なno-opとして受け付けない。"""
+    response = TestClient(
+        create_app(MemoryStore(StatusSnapshot.model_validate(snapshot(datetime.now(UTC)))))
+    ).put("/api/status/upsert", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_full_ingest_uses_store_revision_and_reports_conflict():
+    """既存full PUTが部分更新と競合してlost updateを起こす回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "local-event-record"
+    changed = snapshot(current + timedelta(seconds=1))
+    changed["source"] = "local-event-record"
+    store = ConflictingStore(StatusSnapshot.model_validate(data))
+
+    response = TestClient(create_app(store)).put("/api/status", json=changed)
+
+    assert response.status_code == 409
+    assert store.write_count == 0
 
 
 def test_runtime_capacity_keeps_turn_counts_and_limit_sources_separate():
