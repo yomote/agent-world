@@ -76,3 +76,11 @@ itemの状態観測、activity、公開メモ、親関係、capacity、`focus_su
 Azure公開、認証、credential、外部ingest endpointはこのローカル版に含めない。公開時は管理用Resource Group、本人Entra認証、sanitized eventだけを送るcredential境界について別のHITL承認を得る。
 
 Azure公開の構成、停止条件、credential境界、rollbackは[Azure管理status 初回公開packet](azure-management-status.md)を正本とする。packetが承認されるまでlocal collectorとこの画面を維持し、Azure公開済みとは扱わない。
+
+## Current session tree と実行中差引
+
+`session_tree`はcurrent sessionのscope、観測時刻、root、全node、公開rowでcoveredなnodeを明示するmanifestである。UIはこのmanifestだけからroot分岐を描き、role名や古いrowから関係を推測しない。self-parent、循環、manifest外parent、重複node、公開rowのないcovered nodeを拒否する。`known_history`は現在のinventoryから返らないことが確認済みの完了work unitを別clock・別sourceで記録し、current coverageやcapacityへ加算しない。同じagentがcurrentへ戻った場合はcurrent nodeを優先する。
+
+`runtime_capacity.available`は`availability_source=derived-running-limit`、`availability_definition=max-concurrent-minus-running`と一緒にだけ受け付け、`max_concurrent_agents - running`との一致を検証する。画面では「空き（実行中差引）」と表示する。予約・queue・idle slotは観測していないため、agentを新たに起動できる数の保証には使わない。
+
+`session_tree`と`known_history`は独立clockで保持する。部分更新で省略した場合は保持し、full PUTによる暗黙消去、時刻退行、同一clockの異内容は409にする。receiptはrequestで指定したmanifestまたは履歴だけを返し、保持中の他scope rowを漏らさない。

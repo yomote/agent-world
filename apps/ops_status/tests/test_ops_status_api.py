@@ -62,6 +62,32 @@ def snapshot(received_at: datetime) -> dict:
     }
 
 
+def session_tree(at: datetime) -> dict:
+    return {
+        "scope": "root session tree",
+        "observed_at": at.isoformat(),
+        "source": "runtime-list-agents-metadata",
+        "root_agent": "management-status-owner",
+        "nodes": [{"agent": "management-status-owner", "parent_agent": None}],
+        "covered_agents": ["management-status-owner"],
+    }
+
+
+def known_history(at: datetime) -> dict:
+    return {
+        "recorded_at": at.isoformat(),
+        "entries": [
+            {
+                "agent": "old-worker",
+                "parent_agent": "management-status-owner",
+                "status": "completed",
+                "last_observed_at": None,
+                "source": "pm-recorded-completed-work-unit",
+            }
+        ],
+    }
+
+
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):
     """更新が止まったsnapshotを現在稼働中に見せ続ける回帰を防ぐ。"""
     old = datetime.now(UTC) - timedelta(minutes=3)
@@ -812,5 +838,108 @@ def test_runtime_capacity_rejects_unattributed_or_inconsistent_counts(capacity):
     data = snapshot(datetime.now(UTC))
     data["runtime_capacity"] = capacity
 
+    with pytest.raises(ValueError):
+        StatusSnapshot.model_validate(data)
+
+
+def test_session_tree_and_history_upsert_preserve_rows_and_return_only_supplied_fields():
+    """current inventoryと履歴を全体GETなしで保存し、限定receiptだけ返す。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    response = client.put(
+        "/api/status/upsert",
+        json={
+            "source": "local-event-record",
+            "session_tree": session_tree(now),
+            "known_history": known_history(now),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["session_tree"]["covered_agents"] == ["management-status-owner"]
+    assert response.json()["known_history"]["entries"][0]["agent"] == "old-worker"
+    assert response.json()["items"] == []
+    assert store.value.session_tree is not None
+    assert store.value.known_history is not None
+
+
+def test_session_tree_clock_rejects_regression_and_same_clock_conflict():
+    """遅延manifestや同時刻の異なるinventoryがcurrent treeを巻き戻す回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["source"] = "ingest-upsert"
+    data["session_tree"] = session_tree(now)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    client = TestClient(create_app(store))
+    older = session_tree(now - timedelta(seconds=1))
+    assert (
+        client.put(
+            "/api/status/upsert", json={"source": "local-event-record", "session_tree": older}
+        ).status_code
+        == 409
+    )
+    different = session_tree(now)
+    different["scope"] = "different"
+    assert (
+        client.put(
+            "/api/status/upsert", json={"source": "local-event-record", "session_tree": different}
+        ).status_code
+        == 409
+    )
+
+
+def test_full_put_cannot_clear_session_tree_or_history():
+    """旧full publisherが新しいmanifest/historyを暗黙削除する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["source"] = "ingest-upsert"
+    data["session_tree"] = session_tree(now)
+    data["known_history"] = known_history(now)
+    client = TestClient(create_app(MemoryStore(StatusSnapshot.model_validate(data))))
+    incoming = snapshot(now + timedelta(seconds=1))
+    incoming["source"] = "local-event-record"
+    assert client.put("/api/status", json=incoming).status_code == 409
+
+
+def test_session_tree_rejects_cycle_and_uncovered_public_row():
+    """循環treeや公開rowのないcoverageでUIが壊れる回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    bad = session_tree(now)
+    bad["nodes"] = [
+        {"agent": "management-status-owner", "parent_agent": None},
+        {"agent": "a", "parent_agent": "b"},
+        {"agent": "b", "parent_agent": "a"},
+    ]
+    data["session_tree"] = bad
+    with pytest.raises(ValueError):
+        StatusSnapshot.model_validate(data)
+    bad = session_tree(now)
+    bad["nodes"].append({"agent": "missing", "parent_agent": "management-status-owner"})
+    bad["covered_agents"].append("missing")
+    data["session_tree"] = bad
+    with pytest.raises(ValueError):
+        StatusSnapshot.model_validate(data)
+
+
+@pytest.mark.parametrize("available", [3, 5])
+def test_runtime_capacity_rejects_incorrect_derived_available(available):
+    """根拠のない空き値を上限とrunningから独立に公開する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": now.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "limit_source": "runtime-instructions",
+        "running": 4,
+        "idle": 0,
+        "completed": 1,
+        "total": 5,
+        "max_concurrent_agents": 8,
+        "available": available,
+        "availability_source": "derived-running-limit",
+        "availability_definition": "max-concurrent-minus-running",
+    }
     with pytest.raises(ValueError):
         StatusSnapshot.model_validate(data)

@@ -12,7 +12,14 @@ from typing import Any
 ACTIVE_WINDOW_SECONDS = 120
 TASK_EVENTS = {"task_started", "task_complete"}
 ACTIVITY_EVENTS = {"item_completed"}
-CONFIG_KEYS = {"root_thread_id", "agents", "runtime_capacity", "focus_summary"}
+CONFIG_KEYS = {
+    "root_thread_id",
+    "agents",
+    "runtime_capacity",
+    "focus_summary",
+    "session_tree",
+    "known_history",
+}
 AGENT_KEYS = {
     "agent_path",
     "session_id",
@@ -134,6 +141,9 @@ def validate_config(data: Any) -> dict[str, Any]:
         raise ValueError("runtime_capacity must be an object when supplied")
     if "focus_summary" in data and not isinstance(data["focus_summary"], dict):
         raise ValueError("focus_summary must be an object when supplied")
+    for field in ("session_tree", "known_history"):
+        if field in data and not isinstance(data[field], dict):
+            raise ValueError(f"{field} must be an object when supplied")
     paths = set()
     required = REQUIRED_AGENT_KEYS
     for agent in data["agents"]:
@@ -264,6 +274,8 @@ def snapshot_payload(snapshot: Any, compat_v1: bool) -> dict[str, Any]:
     ]
     payload.pop("runtime_capacity", None)
     payload.pop("focus_summary", None)
+    payload.pop("session_tree", None)
+    payload.pop("known_history", None)
     return payload
 
 
@@ -300,6 +312,8 @@ def sync_once(args: argparse.Namespace, config: dict[str, Any], reader: EventRea
             "items": items,
             "runtime_capacity": config.get("runtime_capacity"),
             "focus_summary": config.get("focus_summary"),
+            "session_tree": config.get("session_tree"),
+            "known_history": config.get("known_history"),
         }
     )
     payload = snapshot_payload(snapshot, args.compat_v1)

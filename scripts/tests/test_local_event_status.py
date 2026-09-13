@@ -296,3 +296,34 @@ def test_sync_keeps_explicit_runtime_capacity_observation_without_retimestamping
     assert capacity["observed_at"] == "2026-09-12T16:55:23.947649Z"
     assert capacity["running"] == 4
     assert capacity["max_concurrent_agents"] == 8
+
+
+def test_sync_keeps_session_manifest_and_history_but_compat_v1_omits_them(tmp_path):
+    """current manifest/historyを正規payloadへ通し、旧endpointへ新fieldを送る回帰を防ぐ。"""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    record(sessions / "session.jsonl", "/root/worker", [("2026-09-06T12:00:01Z", "task_started")])
+    config_path = tmp_path / "config.json"
+    config(config_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["session_tree"] = {
+        "scope": "root session tree",
+        "observed_at": "2026-09-06T12:00:01Z",
+        "source": "runtime-list-agents-metadata",
+        "root_agent": "status owner",
+        "nodes": [{"agent": "status owner", "parent_agent": None}],
+        "covered_agents": ["status owner"],
+    }
+    payload["known_history"] = {"recorded_at": "2026-09-06T12:00:01Z", "entries": []}
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    output = tmp_path / "status.json"
+    result = run(config_path, sessions, output)
+    assert result.returncode == 0, result.stderr
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["session_tree"]["root_agent"] == "status owner"
+    assert saved["known_history"]["entries"] == []
+    result = run(config_path, sessions, output, compat_v1=True)
+    assert result.returncode == 0, result.stderr
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert "session_tree" not in saved
+    assert "known_history" not in saved

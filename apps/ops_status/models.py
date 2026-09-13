@@ -105,6 +105,9 @@ class RuntimeCapacitySnapshot(BaseModel):
     completed: int | None = Field(default=None, ge=0)
     total: int | None = Field(default=None, ge=0)
     max_concurrent_agents: int | None = Field(default=None, ge=1)
+    available: int | None = Field(default=None, ge=0)
+    availability_source: Literal["derived-running-limit"] | None = None
+    availability_definition: Literal["max-concurrent-minus-running"] | None = None
 
     @model_validator(mode="after")
     def check_sources_and_counts(self) -> "RuntimeCapacitySnapshot":
@@ -126,6 +129,96 @@ class RuntimeCapacitySnapshot(BaseModel):
             and self.running > self.max_concurrent_agents
         ):
             raise ValueError("running cannot exceed max_concurrent_agents")
+        availability_fields = (
+            self.available,
+            self.availability_source,
+            self.availability_definition,
+        )
+        if any(value is not None for value in availability_fields):
+            if any(value is None for value in availability_fields):
+                raise ValueError(
+                    "availability value, source, and definition must be supplied together"
+                )
+            if self.running is None or self.max_concurrent_agents is None:
+                raise ValueError("availability needs running and max_concurrent_agents")
+            if self.available != self.max_concurrent_agents - self.running:
+                raise ValueError("available must equal max_concurrent_agents minus running")
+        return self
+
+
+class SessionTreeNode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str = Field(min_length=1, max_length=80)
+    parent_agent: str | None = Field(default=None, min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def check_self_parent(self) -> "SessionTreeNode":
+        if self.agent == self.parent_agent:
+            raise ValueError("session tree node cannot parent itself")
+        return self
+
+
+class SessionTreeSnapshot(BaseModel):
+    """current sessionの全nodeと公開row coverageを明示する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str = Field(min_length=1, max_length=240)
+    observed_at: AwareDatetime
+    source: Literal["runtime-list-agents-metadata"]
+    root_agent: str = Field(min_length=1, max_length=80)
+    nodes: list[SessionTreeNode] = Field(min_length=1, max_length=32)
+    covered_agents: list[str] = Field(max_length=32)
+
+    @model_validator(mode="after")
+    def check_tree(self) -> "SessionTreeSnapshot":
+        by_agent = {node.agent: node for node in self.nodes}
+        if len(by_agent) != len(self.nodes):
+            raise ValueError("session tree nodes must be unique")
+        if len(set(self.covered_agents)) != len(self.covered_agents):
+            raise ValueError("covered agents must be unique")
+        root = by_agent.get(self.root_agent)
+        if root is None or root.parent_agent is not None:
+            raise ValueError("session tree root must exist without a parent")
+        if any(agent not in by_agent for agent in self.covered_agents):
+            raise ValueError("covered agents must belong to the session tree")
+        for node in self.nodes:
+            if node.agent != self.root_agent and node.parent_agent not in by_agent:
+                raise ValueError("every non-root node needs a parent in the session tree")
+            seen: set[str] = set()
+            current: str | None = node.agent
+            while current is not None:
+                if current in seen:
+                    raise ValueError("session tree cannot contain a cycle")
+                seen.add(current)
+                current = by_agent[current].parent_agent
+        return self
+
+
+class HistoryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str = Field(min_length=1, max_length=80)
+    parent_agent: str | None = Field(default=None, min_length=1, max_length=80)
+    status: Literal["completed"]
+    last_observed_at: AwareDatetime | None = None
+    source: Literal["runtime-list-agents-metadata", "pm-recorded-completed-work-unit"]
+
+
+class KnownHistorySnapshot(BaseModel):
+    """current inventoryとは分離した、明示済みの過去work unit。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recorded_at: AwareDatetime
+    entries: list[HistoryEntry] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def check_unique_agents(self) -> "KnownHistorySnapshot":
+        agents = [entry.agent for entry in self.entries]
+        if len(agents) != len(set(agents)):
+            raise ValueError("known history agents must be unique")
         return self
 
 
@@ -139,6 +232,8 @@ class StatusSnapshot(BaseModel):
     items: list[WorkItem] = Field(max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
     focus_summary: FocusSummary | None = None
+    session_tree: SessionTreeSnapshot | None = None
+    known_history: KnownHistorySnapshot | None = None
 
     @model_validator(mode="after")
     def check_parent_cycles(self) -> "StatusSnapshot":
@@ -155,6 +250,10 @@ class StatusSnapshot(BaseModel):
                     raise ValueError("parent relation cannot contain a cycle")
                 seen.add(current)
                 current = parents[current]
+        if self.session_tree is not None:
+            item_agents = {item.agent for item in self.items}
+            if any(agent not in item_agents for agent in self.session_tree.covered_agents):
+                raise ValueError("covered session tree agents need public work items")
         return self
 
 
@@ -172,6 +271,8 @@ class StatusUpsertRequest(BaseModel):
     items: list[WorkItem] = Field(default_factory=list, max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
     focus_summary: FocusSummary | None = None
+    session_tree: SessionTreeSnapshot | None = None
+    known_history: KnownHistorySnapshot | None = None
 
     @model_validator(mode="after")
     def check_targets(self) -> "StatusUpsertRequest":
@@ -184,8 +285,22 @@ class StatusUpsertRequest(BaseModel):
         focus_supplied = "focus_summary" in self.model_fields_set
         if focus_supplied and self.focus_summary is None:
             raise ValueError("focus_summary cannot be null when supplied")
-        if not self.items and not capacity_supplied and not focus_supplied:
-            raise ValueError("upsert needs an item, runtime_capacity, or focus_summary")
+        tree_supplied = "session_tree" in self.model_fields_set
+        if tree_supplied and self.session_tree is None:
+            raise ValueError("session_tree cannot be null when supplied")
+        history_supplied = "known_history" in self.model_fields_set
+        if history_supplied and self.known_history is None:
+            raise ValueError("known_history cannot be null when supplied")
+        if (
+            not self.items
+            and not capacity_supplied
+            and not focus_supplied
+            and not tree_supplied
+            and not history_supplied
+        ):
+            raise ValueError(
+                "upsert needs an item, runtime_capacity, focus_summary, or session_tree"
+            )
         for item in self.items:
             if (item.latest_activity is None) != (item.latest_activity_at is None):
                 raise ValueError("upsert activity and its timestamp must be supplied together")
@@ -212,3 +327,5 @@ class StatusUpsertReceipt(BaseModel):
     items: list[WorkItem]
     runtime_capacity: RuntimeCapacitySnapshot | None = None
     focus_summary: FocusSummary | None = None
+    session_tree: SessionTreeSnapshot | None = None
+    known_history: KnownHistorySnapshot | None = None
