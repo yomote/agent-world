@@ -12,6 +12,12 @@ from pydantic import ValidationError
 
 from .models import (
     FocusSummary,
+    FrontDeskClaim,
+    RegistryHandover,
+    RequestRecord,
+    RequestRegistryReceipt,
+    RequestRegistrySnapshot,
+    RequestRegistryUpdate,
     RuntimeCapacitySnapshot,
     StatusResponse,
     StatusSnapshot,
@@ -178,6 +184,202 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
             if replacement is None:
                 raise HTTPException(status_code=409, detail=f"full snapshot cannot clear {label}")
             reject_clocked_snapshot(previous, replacement, clock=clock, label=label)
+    if (
+        current.request_registry is not None
+        and incoming.request_registry != current.request_registry
+    ):
+        raise HTTPException(status_code=409, detail="full snapshot cannot replace request registry")
+
+
+def reject_older_request(previous: RequestRecord, incoming: RequestRecord) -> None:
+    """依頼の正本観測、公開報告、runtime観測を別々の時計で単調に保つ。"""
+    comparisons = (
+        (
+            previous.issue_observed_at,
+            incoming.issue_observed_at,
+            (
+                previous.issue_url,
+                previous.issue_state,
+                previous.issue_observation,
+                previous.public_title,
+                previous.public_purpose,
+                previous.acceptance_summary,
+            ),
+            (
+                incoming.issue_url,
+                incoming.issue_state,
+                incoming.issue_observation,
+                incoming.public_title,
+                incoming.public_purpose,
+                incoming.acceptance_summary,
+            ),
+            "Issue observation",
+        ),
+        (
+            previous.report_updated_at,
+            incoming.report_updated_at,
+            (
+                previous.lifecycle,
+                previous.owner_agent,
+                previous.member_agents,
+                previous.progress_summary,
+                previous.blocker,
+                previous.next_action,
+                previous.evidence,
+            ),
+            (
+                incoming.lifecycle,
+                incoming.owner_agent,
+                incoming.member_agents,
+                incoming.progress_summary,
+                incoming.blocker,
+                incoming.next_action,
+                incoming.evidence,
+            ),
+            "request report",
+        ),
+        (
+            previous.runtime_observed_at,
+            incoming.runtime_observed_at,
+            previous.runtime_connection,
+            incoming.runtime_connection,
+            "runtime connection",
+        ),
+    )
+    for previous_time, incoming_time, previous_value, incoming_value, label in comparisons:
+        if previous_value == incoming_value:
+            continue
+        if incoming_time is None or (previous_time is not None and incoming_time <= previous_time):
+            raise HTTPException(status_code=409, detail=f"older or ambiguous {label}")
+
+
+def apply_registry_update(
+    current: RequestRegistrySnapshot | None, update: RequestRegistryUpdate
+) -> tuple[RequestRegistrySnapshot, bool]:
+    if current is None:
+        if update.action != "initialize":
+            raise HTTPException(status_code=409, detail="request registry is not initialized")
+        registry = RequestRegistrySnapshot(
+            generation=1,
+            active_front_desk=FrontDeskClaim(
+                alias=update.actor_front_desk,
+                claimed_at=update.observed_at,
+                runtime_session_id=update.actor_runtime_session_id,
+                runtime_observed_at=(
+                    update.observed_at if update.actor_runtime_session_id is not None else None
+                ),
+            ),
+            updated_at=update.observed_at,
+            source=update.source,
+            requests=update.requests,
+        )
+        return registry, True
+    if update.action == "initialize":
+        raise HTTPException(status_code=409, detail="request registry is already initialized")
+    if update.expected_generation != current.generation:
+        raise HTTPException(status_code=409, detail="request registry generation changed")
+
+    if update.action == "claim-handover":
+        handover = current.handover
+        if (
+            handover is None
+            or handover.state != "ready"
+            or update.actor_front_desk != handover.to_front_desk
+            or update.successor_front_desk != handover.to_front_desk
+            or update.bundle_digest != handover.bundle_digest
+        ):
+            raise HTTPException(
+                status_code=409, detail="handover claim does not match prepared bundle"
+            )
+    elif update.actor_front_desk != current.active_front_desk.alias:
+        raise HTTPException(
+            status_code=409, detail="request registry has a different active Front Desk"
+        )
+
+    requests = {request.request_id: request for request in current.requests}
+    occupied_scopes = {request.scope_id: request.request_id for request in current.requests}
+    changed = False
+    for incoming in update.requests:
+        previous = requests.get(incoming.request_id)
+        if previous is not None:
+            if incoming.scope_id != previous.scope_id:
+                raise HTTPException(status_code=409, detail="request scope identity cannot change")
+            reject_older_request(previous, incoming)
+        elif incoming.scope_id in occupied_scopes:
+            raise HTTPException(status_code=409, detail="request scope identity is already used")
+        if incoming != previous:
+            requests[incoming.request_id] = incoming
+            changed = True
+
+    active = current.active_front_desk
+    handover = current.handover
+    if update.action == "prepare-handover":
+        if update.successor_front_desk == active.alias:
+            raise HTTPException(status_code=409, detail="handover needs a different successor")
+        handover = RegistryHandover(
+            state="ready",
+            from_front_desk=active.alias,
+            to_front_desk=update.successor_front_desk,
+            bundle_digest=update.bundle_digest,
+            prepared_at=update.observed_at,
+            resume_policy="explicit-dispatch-required",
+        )
+        changed = True
+    elif update.action == "claim-handover":
+        if update.observed_at <= handover.prepared_at:
+            raise HTTPException(status_code=409, detail="handover claim clock is not newer")
+        active = FrontDeskClaim(
+            alias=update.actor_front_desk,
+            claimed_at=update.observed_at,
+            runtime_session_id=update.actor_runtime_session_id,
+            runtime_observed_at=(
+                update.observed_at if update.actor_runtime_session_id is not None else None
+            ),
+        )
+        handover = handover.model_copy(
+            update={"state": "accepted", "accepted_at": update.observed_at}
+        )
+        requests = {
+            request_id: request.model_copy(
+                update={
+                    "lifecycle": (
+                        request.lifecycle
+                        if request.lifecycle == "completed"
+                        else "handover-waiting"
+                    ),
+                    "report_updated_at": (
+                        request.report_updated_at
+                        if request.lifecycle == "completed"
+                        else update.observed_at
+                    ),
+                    "runtime_connection": (
+                        request.runtime_connection
+                        if request.lifecycle == "completed"
+                        else "record-only"
+                    ),
+                    "runtime_observed_at": (
+                        request.runtime_observed_at
+                        if request.lifecycle == "completed"
+                        else update.observed_at
+                    ),
+                }
+            )
+            for request_id, request in requests.items()
+        }
+        changed = True
+
+    if not changed:
+        return current, False
+    if update.observed_at <= current.updated_at:
+        raise HTTPException(status_code=409, detail="request registry clock is not newer")
+    return RequestRegistrySnapshot(
+        generation=current.generation + 1,
+        active_front_desk=active,
+        updated_at=update.observed_at,
+        source=current.source,
+        requests=list(requests.values()),
+        handover=handover,
+    ), True
 
 
 def principal_allowed(request: Request, expected_environment_key: str) -> bool:
@@ -192,7 +394,7 @@ def principal_allowed(request: Request, expected_environment_key: str) -> bool:
 
 
 def create_app(store: SnapshotStore | None = None) -> FastAPI:
-    app = FastAPI(title="Agent World Management Status", version="0.5.0")
+    app = FastAPI(title="Agent World Management Status", version="0.6.0")
     snapshots = store or configured_store()
     ingest_lock = Lock()
 
@@ -202,7 +404,12 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             principal_key = (
                 "AGENT_WORLD_STATUS_INGEST_OBJECT_ID"
                 if request.method == "PUT"
-                and request.url.path in {"/api/status", "/api/status/upsert"}
+                and request.url.path
+                in {
+                    "/api/status",
+                    "/api/status/upsert",
+                    "/api/status/requests/upsert",
+                }
                 else "AGENT_WORLD_STATUS_OPERATOR_OBJECT_ID"
             )
             if not principal_allowed(request, principal_key):
@@ -369,6 +576,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     focus_summary=merged_focus,
                     session_tree=merged_tree,
                     known_history=merged_history,
+                    request_registry=current.request_registry,
                 )
             except ValidationError as error:
                 raise HTTPException(status_code=422, detail="merged snapshot is invalid") from error
@@ -402,6 +610,54 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             session_tree=stored.session_tree if tree_supplied else None,
             known_history=stored.known_history if history_supplied else None,
         )
+
+    @app.put(
+        "/api/status/requests/upsert",
+        response_model=RequestRegistryReceipt,
+        response_model_exclude_none=True,
+    )
+    def upsert_request_registry(update: RequestRegistryUpdate) -> RequestRegistryReceipt:
+        with ingest_lock:
+            try:
+                current_version = snapshots.read_versioned()
+            except FileNotFoundError as error:
+                raise HTTPException(
+                    status_code=409, detail="status snapshot is required"
+                ) from error
+            except (OSError, ValueError, ValidationError, SnapshotStoreError) as error:
+                raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
+            current = current_version.snapshot
+            registry, changed = apply_registry_update(current.request_registry, update)
+            if changed:
+                try:
+                    merged = current.model_copy(
+                        update={
+                            "source": "ingest-upsert",
+                            "observed_at": max(current.observed_at, update.observed_at),
+                            "received_at": datetime.now(UTC),
+                            "request_registry": registry,
+                        }
+                    )
+                    revision = snapshots.write_if_revision(merged, current_version.revision)
+                except SnapshotConflictError as error:
+                    raise HTTPException(
+                        status_code=409, detail="status snapshot changed before write"
+                    ) from error
+                except (OSError, SnapshotStoreError) as error:
+                    raise HTTPException(
+                        status_code=503, detail="status snapshot write failed"
+                    ) from error
+            else:
+                revision = current_version.revision
+            by_id = {request.request_id: request for request in registry.requests}
+            return RequestRegistryReceipt(
+                changed=changed,
+                revision=revision,
+                generation=registry.generation,
+                active_front_desk=registry.active_front_desk,
+                requests=[by_id[request.request_id] for request in update.requests],
+                handover=registry.handover,
+            )
 
     static_root = Path(__file__).parents[2] / "docs" / "status"
     app.mount("/", StaticFiles(directory=static_root, html=True), name="status-ui")

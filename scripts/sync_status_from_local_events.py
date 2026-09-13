@@ -276,6 +276,7 @@ def snapshot_payload(snapshot: Any, compat_v1: bool) -> dict[str, Any]:
     payload.pop("focus_summary", None)
     payload.pop("session_tree", None)
     payload.pop("known_history", None)
+    payload.pop("request_registry", None)
     return payload
 
 
