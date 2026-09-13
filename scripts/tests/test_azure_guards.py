@@ -424,7 +424,8 @@ def test_publish_external_restores_internal_before_callback_on_failure(tmp_path,
         smoke_fail=failure == "smoke",
     )
     assert result.returncode != 0
-    assert "internal ingress and callback were restored" in result.stderr
+    assert "PUBLICATION FAILURE" in result.stderr
+    assert "callback" in result.stderr
     assert calls.count("containerapp ingress enable") == 2
     assert calls.count("ad app update") == 2
     assert calls.index("--type internal") < calls.rindex("ad app update")
