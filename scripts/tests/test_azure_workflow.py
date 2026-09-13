@@ -53,6 +53,17 @@ def test_image_only_bootstrap_does_not_attempt_azure_mutation():
     assert "Azure deployment: not attempted" in WORKFLOW
 
 
+def test_image_preparation_uses_the_reviewed_fail_closed_helper():
+    """初回packageの匿名token拒否を回避する処理がworkflow外へ逸脱する回帰を防ぐ。"""
+    image_step = WORKFLOW.split("      - name: Build and push immutable image", 1)[1].split(
+        "      - name: Require anonymous GHCR pull", 1
+    )[0]
+
+    assert "packages: write" in WORKFLOW
+    assert "run: python scripts/azure/prepare_ghcr_image.py" in image_step
+    assert "ghcr.io/token" not in image_step
+
+
 def test_core_apply_requires_budget_plan_and_billing_guards():
     """Budgetや承認済みwhat-ifなしにAzure Applyへ進む回帰を防ぐ。"""
     assert "Assert-AzureApplyInputs.ps1" in DEPLOY_SCRIPT

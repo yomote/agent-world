@@ -8,7 +8,7 @@
 
 source eventのread-only照合後、image mutationより先にmodeを検査する。通常deployは承認済みbootstrapが設定した`AZURE_DEPLOY_ENABLED=true`、Azure ID / RG / app、Entra auth、実測JPY、1件以上のBudget通知先を必須にする。初回image準備だけは手動dispatchの`image_only=true`と確認文字列`publish-ghcr-image`を必須にし、Azure login / deployをskipする。これによりPR mergeやmain pushだけではGHCR packageを作成・更新しない。
 
-通常pushとdispatchは同じconcurrencyへ直列化する。desired sourceの公開GHCR SHA tagが既にあればそのdigestを再利用し、なければ1回だけbuild/pushする。manifest取得の404だけを未作成と扱い、認証・通信エラーではtagを上書きしない。現在Container Appのimageが同じdigestならrevision更新を省略してsmokeだけを行う。
+通常pushとdispatchは同じconcurrencyへ直列化する。desired sourceの公開GHCR SHA tagが既にあればそのdigestを再利用し、なければ1回だけbuild/pushする。既存`GITHUB_TOKEN`で認証したpublish用tokenによるmanifest取得の404だけを未作成と扱い、token取得失敗、認証拒否、通信エラー、digest欠損ではtagを上書きしない。現在Container Appのimageが同じdigestならrevision更新を省略してsmokeだけを行う。
 
 工場が`GITHUB_TOKEN`でmergeすると通常push workflowが抑止されるため、merge成功応答を得た同じtrusted `workflow_dispatch`からrepository dispatchを1回だけ送る。dispatch結果不明時は再送せず、merge済み・deploy不明として失敗を残す。Azure workflowがdefault branchへ入る前のmergeは受信できないため、初回はAzure変更がmainへ入ったpushまたは手動実行で開始する。
 
