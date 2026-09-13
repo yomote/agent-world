@@ -22,7 +22,7 @@ CIはローカル検証を終えた変更を確認するために使う。Agent�
 
 工場runnerは全検査を合わせて180秒までとし、残り時間を各コマンドの期限として渡す。使い切ったら後続をnot_runで記録して終了する。これにより複数のハングを順番に待ってレポート保存前にjob期限へ達することを防ぐ。依存の取得やrunner自体の停止でGitHub側の期限が切れた場合、artifact保存は保証できないため、GitHubのtimed_out/cancelledを結果として扱う。
 
-lychee本体は固定バージョン・OS・CPUアーキテクチャをキーにGitHub Actionsのキャッシュで再利用する。キャッシュがない場合だけ公式Actionから取得し、リンク検査そのものは毎回実行する。取得は最大2分、検査は最大1分。対象は直下・docs・.github・infraのMarkdownに限り、providerの依存文書は除外する。offlineで外部URLへの要求は0件、並列上限2・再試行0。結果は `artifacts/factory/links.log` に保存する。キャッシュの利用可否は未検証であり、GitHub初回実行時にhit/missの双方を確認する。
+lychee本体は固定バージョン・OS・CPUアーキテクチャをキーにGitHub Actionsのキャッシュで再利用する。キャッシュがない場合だけ公式Actionから取得し、リンク検査そのものは毎回実行する。取得は最大2分、検査は最大1分。対象は直下・docs・demos・.github・infraのMarkdownに限り、providerの依存文書は除外する。offlineで外部URLへの要求は0件、並列上限2・再試行0。結果は `artifacts/factory/links.log` に保存する。キャッシュの利用可否は未検証であり、GitHub初回実行時にhit/missの双方を確認する。
 
 PRの検証とmain / masterの検証は、マージ前後の異なる内容を確認するため両方残す。ドキュメントも整形チェックの対象なのでpath filterは設けない。workflow単位のスキップによって必須チェックがPendingのままになる運用も避ける。Draftのskipは検証成功を意味しない。Ready for review後の最新の結果を確認する。
 
