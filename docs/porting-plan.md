@@ -1,5 +1,7 @@
 # Mind Inbox からの移植計画
 
+追補 (2026-09-13): この文書は最初のVertical Sliceを作った時点の移植判断として保持する。現行デモの配置は [ADR 0011](adr/0011-demo-directory-layout.md) と [resident-move README](../demos/resident-move/README.md) を参照する。
+
 追補 (2026-09-05): 工場機能とGitHub設定のIaCを取り込むという追加指示により、CI・依存更新・契約検査・GitHub設定管理の採否を[工場機能の棚卸し](factory-adoption.md)で更新した。下表は最初のVertical Slice時点の判断を残す。
 
 確認日: 2026-09-05。参照: [yomote/mind-inbox](https://github.com/yomote/mind-inbox/tree/d3c15275b50d3686dba226fd98a1bdffc581a8dd)。実装前に実ファイルを確認し、この分類を提示した。

@@ -1,6 +1,6 @@
 # 重要設計レビュー
 
-技術的に重要な判断を、詳細文書を読み込む前に確認するための入口です。ここでは**製品内の非同期Action**を主題にし、開発を動かすCodex taskとは分けます。詳細な契約の正本は[ADR 0002](../adr/0002-async-agent-world.md)、現在の実装は[architecture](../architecture.md)です。
+技術的に重要な判断を、詳細文書を読み込む前に確認するための入口です。ここでは**製品内の非同期Action**を主題にし、開発を動かすCodex taskとは分けます。詳細な契約の正本は[ADR 0002](../adr/0002-async-agent-world.md)、現在の実装は[resident-moveの設計](../../demos/resident-move/docs/architecture.md)です。
 
 ## いま動いているもの
 

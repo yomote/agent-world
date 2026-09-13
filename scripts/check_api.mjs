@@ -17,15 +17,18 @@ const schema = JSON.parse(
     python,
     [
       "-c",
-      "import json,sys; sys.path.insert(0,'apps'); from world.api import create_app; print(json.dumps(create_app().openapi()))",
+      "import json,sys; sys.path.insert(0,'demos/resident-move'); from world.api import create_app; print(json.dumps(create_app().openapi()))",
     ],
     { cwd: root, encoding: "utf8" },
   ),
 );
 const outputs = [
   // 生成コマンドと同じ改行・CLIヘッダーを使い、書式だけの差を検出しない。
-  ["docs/api/openapi.json", JSON.stringify(schema, null, 2) + "\n"],
-  ["apps/web/src/api/schema.d.ts", COMMENT_HEADER + astToString(await openapiTS(schema))],
+  ["demos/resident-move/docs/api/openapi.json", JSON.stringify(schema, null, 2) + "\n"],
+  [
+    "demos/resident-move/web/src/api/schema.d.ts",
+    COMMENT_HEADER + astToString(await openapiTS(schema)),
+  ],
 ];
 let failed = false;
 for (const [relative, source] of outputs) {

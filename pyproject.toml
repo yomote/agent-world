@@ -4,8 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
-testpaths = ["apps/world/tests", "apps/ops_status/tests", "scripts/tests"]
-pythonpath = ["apps"]
+testpaths = ["demos/resident-move/world/tests", "apps/ops_status/tests", "scripts/tests"]
+pythonpath = ["demos/resident-move", "apps"]
 addopts = "-q"
 
 [tool.ruff]

@@ -3,7 +3,7 @@ FROM node:22.23.0-bookworm-slim@sha256:d9f850096136edbc402debdd8729579a288aac645
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY apps/web ./apps/web
+COPY demos/resident-move/web ./demos/resident-move/web
 RUN npm run build
 
 FROM python:3.11.13-slim-bookworm@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1 AS runtime
@@ -15,8 +15,8 @@ COPY requirements-prod.txt ./
 RUN python -m pip install --no-cache-dir -r requirements-prod.txt \
     && addgroup --system --gid 10001 app \
     && adduser --system --uid 10001 --ingroup app --no-create-home app
-COPY apps/world ./world
-COPY --from=web-build /src/apps/web/dist ./static
+COPY demos/resident-move/world ./world
+COPY --from=web-build /src/demos/resident-move/web/dist ./static
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

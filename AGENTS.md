@@ -4,9 +4,9 @@
 
 ## 不変条件
 
-- World Simulator is authoritative。`apps/world/simulator.py` のみが内部WorldStateを更新する。
+- World Simulator is authoritative。`demos/resident-move/world/simulator.py` のみが内部WorldStateを更新する。
 - UIとActorは観測とActionの発行だけ。Phaserで移動を計算・先行確定しない。
-- `apps/world` はActor、React、Phaser、LLM SDKに依存しない。Actorは独立した提案モジュールに置く。
+- `demos/resident-move/world` はActor、React、Phaser、LLM SDKに依存しない。Actorは独立した提案モジュールに置く。
 - 初期scopeはAとmoveのみ。文明・経済・戦闘・God Agent・複数Agent・LLMを要求なしに足さない。
 - ドキュメントと説明は日本語、識別子は英語。
 - 通信失敗・未検証・Worldのfailureを区別する。未実行のチェックをPASSと書かない。
@@ -17,7 +17,7 @@
 2. 変更対象の仕様と影響範囲を確認する。設計判断は `docs/adr/` に理由とトレードオフを記録する。
 3. 必要最小限の変更を行い、静かに壊れる性質をテストする。各テストには防ぐ回帰をコメントで説明する。
 4. `npm run check` でlint・format・unit・buildを実行する。単体だけで画面の動作確認済みとしない。
-5. API変更時は `npm run api:generate`。`docs/api/openapi.json` と `apps/web/src/api/schema.d.ts` は生成物で手編集しない。
+5. API変更時は `npm run api:generate`。`demos/resident-move/docs/api/openapi.json` と `demos/resident-move/web/src/api/schema.d.ts` は生成物で手編集しない。
 6. 動作・起動方法・制約が変わったら関連ドキュメントを同時に更新する。
 
 ## 開発のPMとワーカー
