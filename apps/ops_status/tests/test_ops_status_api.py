@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -256,6 +257,17 @@ def test_request_registry_rejects_independent_clock_conflicts_and_keeps_noop_gen
         },
     )
     assert response.status_code == 409
+    clock_regression = record.copy()
+    clock_regression["report_updated_at"] = (now - timedelta(seconds=1)).isoformat()
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            **noop,
+            "observed_at": (now + timedelta(minutes=2)).isoformat(),
+            "requests": [clock_regression],
+        },
+    )
+    assert response.status_code == 409
 
 
 def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
@@ -284,6 +296,12 @@ def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
         "successor_front_desk": "front-desk-2",
         "bundle_digest": digest,
     }
+    assert (
+        client.put(
+            "/api/status/requests/upsert", json={**prepare, "requests": [record]}
+        ).status_code
+        == 422
+    )
     assert client.put("/api/status/requests/upsert", json=prepare).json()["generation"] == 2
     claim = {
         **prepare,
@@ -293,6 +311,10 @@ def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
         "actor_runtime_session_id": "runtime-session-new",
         "observed_at": (prepared_at + timedelta(minutes=1)).isoformat(),
     }
+
+    missing_runtime = claim.copy()
+    missing_runtime.pop("actor_runtime_session_id")
+    assert client.put("/api/status/requests/upsert", json=missing_runtime).status_code == 422
 
     response = client.put("/api/status/requests/upsert", json=claim)
 
@@ -326,6 +348,21 @@ def test_full_and_status_upsert_preserve_request_registry():
     partial = {"source": "local-event-record", "items": [partial_item]}
     assert client.put("/api/status/upsert", json=partial).status_code == 200
     assert store.value.request_registry.requests[0].request_id == "request-64"
+
+
+@pytest.mark.parametrize(
+    "store",
+    [MemoryStore(), MemoryStore(StatusSnapshot.model_validate(snapshot(datetime.now(UTC))))],
+)
+def test_full_put_cannot_initialize_request_registry(store):
+    """full publisherが専用registry CASとactive owner規則を迂回する回帰を防ぐ。"""
+    fixture = Path(__file__).parents[3] / "scripts/tests/fixtures/request_registry_status.json"
+    incoming = json.loads(fixture.read_text(encoding="utf-8"))
+    incoming["source"] = "local-event-record"
+
+    response = TestClient(create_app(store)).put("/api/status", json=incoming)
+
+    assert response.status_code == 409
 
 
 @pytest.mark.parametrize("expected_upper", [False, True])

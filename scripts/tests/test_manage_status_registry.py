@@ -73,11 +73,17 @@ def test_claim_rejects_tampered_or_wrong_successor(tmp_path):
     artifact_path = tmp_path / "bundle.json"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
     with pytest.raises(ValueError, match="different successor"):
-        claim(artifact_path, "front-desk-3", at.isoformat())
+        claim(artifact_path, "front-desk-3", at.isoformat(), "runtime-new")
     artifact["bundle"]["requests"][0]["next_action"] = "改変"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
     with pytest.raises(ValueError, match="digest"):
-        claim(artifact_path, "front-desk-2", at.isoformat())
+        claim(artifact_path, "front-desk-2", at.isoformat(), "runtime-new")
+
+    artifact = prepare(registry_path, "front-desk-2", at.isoformat())
+    artifact["update"]["expected_generation"] = 99
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    with pytest.raises(ValueError, match="prepare update"):
+        boot(artifact_path)
 
 
 def test_compat_v1_omits_request_registry():

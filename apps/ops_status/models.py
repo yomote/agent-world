@@ -379,6 +379,14 @@ class RequestRegistryUpdate(BaseModel):
             raise ValueError("initialize needs generation zero and at least one request")
         if self.action == "update" and not self.requests:
             raise ValueError("update needs at least one request")
+        if needs_handover and self.requests:
+            raise ValueError("handover actions cannot update requests")
+        if self.action == "claim-handover" and self.actor_runtime_session_id is None:
+            raise ValueError("handover claim needs the new runtime session identity")
+        if self.action in {"update", "prepare-handover"} and (
+            self.actor_runtime_session_id is not None
+        ):
+            raise ValueError("runtime session identity is not accepted for this action")
         return self
 
 

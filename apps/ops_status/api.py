@@ -247,9 +247,11 @@ def reject_older_request(previous: RequestRecord, incoming: RequestRecord) -> No
         ),
     )
     for previous_time, incoming_time, previous_value, incoming_value, label in comparisons:
-        if previous_value == incoming_value:
-            continue
-        if incoming_time is None or (previous_time is not None and incoming_time <= previous_time):
+        if previous_time is not None and (incoming_time is None or incoming_time < previous_time):
+            raise HTTPException(status_code=409, detail=f"older or ambiguous {label}")
+        if previous_value != incoming_value and (
+            incoming_time is None or incoming_time == previous_time
+        ):
             raise HTTPException(status_code=409, detail=f"older or ambiguous {label}")
 
 
@@ -455,6 +457,13 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
             else:
                 current_revision = current_version.revision
+            if snapshot.request_registry is not None and (
+                current is None or current.request_registry is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="full snapshot cannot initialize request registry",
+                )
             if current:
                 same_content = current.model_dump(exclude={"received_at"}) == snapshot.model_dump(
                     exclude={"received_at"}
@@ -656,7 +665,11 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 generation=registry.generation,
                 active_front_desk=registry.active_front_desk,
                 requests=[by_id[request.request_id] for request in update.requests],
-                handover=registry.handover,
+                handover=(
+                    registry.handover
+                    if update.action in {"prepare-handover", "claim-handover"}
+                    else None
+                ),
             )
 
     static_root = Path(__file__).parents[2] / "docs" / "status"

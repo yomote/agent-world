@@ -2,6 +2,8 @@
 
 ## 更新境界
 
+bundle用CLIはPython 3.11の標準libraryだけで動き、専用venvや追加installを必要としない。リポジトリrootから`python scripts/manage_status_registry.py ...`を実行する。APIをTestClientで隔離検証する場合だけ、[ローカル開発](local-dev.md#依存の再現)の既存declared dependenciesを使う。
+
 - Issueは目的・受入条件・状態、PRは差分・検証証跡の正本とする。registryはURLと観測時刻を持つ索引である。
 - Status.Ingest publisherが`PUT /api/status/requests/upsert`を1回送る。operator用GET権限を流用しない。
 - 422は入力不正、409はgeneration・状態・内容時計・Blob ETag競合、503は保存済みsnapshotの読取または書込障害である。receiptがない通信結果不明時は再送しない。
