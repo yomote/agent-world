@@ -1,5 +1,7 @@
 # 最小Vertical Sliceの設計
 
+概念の責務、論理データ関係、成功・failure・通信失敗のシーケンス、テスト責務は[現行ドメインモデルと設計図](domain-model.md)にまとめる。この文書は最小Vertical Sliceの契約とルールを正本として扱う。
+
 ```mermaid
 flowchart LR
   Manual[React 手動操作] --> Action
