@@ -113,6 +113,7 @@ def _write_billing_confirmation(
 
 
 def _run_entra_resume_guard(tmp_path: Path, **overrides):
+    guard_arguments = overrides.pop("_guard_arguments", [])
     actual = {
         "application": {
             "appId": RESUME_CLIENT_ID,
@@ -158,6 +159,7 @@ def _run_entra_resume_guard(tmp_path: Path, **overrides):
             RESUME_SP_ID,
             "-AllowedUserObjectId",
             RESUME_USER_ID,
+            *guard_arguments,
         ],
         capture_output=True,
         text=True,
@@ -167,7 +169,9 @@ def _run_entra_resume_guard(tmp_path: Path, **overrides):
     )
 
 
-def _run_configure_entra_resume(tmp_path: Path, external):
+def _run_configure_entra_resume(
+    tmp_path: Path, external, *, recover_credential=False, metadata_count=1
+):
     log = tmp_path / "az-calls.log"
     ingress_external = "null" if external is None else str(external).lower()
     service_principal_json = json.dumps(
@@ -176,7 +180,7 @@ def _run_configure_entra_resume(tmp_path: Path, external):
             "appId": RESUME_CLIENT_ID,
             "displayName": "agent-world-yomote-jpe-login",
             "servicePrincipalType": "Application",
-            "appRoleAssignmentRequired": False,
+            "appRoleAssignmentRequired": recover_credential,
         },
         separators=(",", ":"),
     )
@@ -186,9 +190,38 @@ def _run_configure_entra_resume(tmp_path: Path, external):
     )
     assignment_projection = "--query value[].{resourceId:resourceId,principalId:principalId}"
     unprojected_assignment = r'{"value":[{"principalDisplayName":"tenant\user"}]}'
+    orphan_display = "agent-world-easy-auth-20260913085447-1cdb7362"
+    orphan_key = "55555555-5555-5555-5555-555555555555"
+    initial_credentials = json.dumps(
+        [
+            {
+                "keyId": orphan_key,
+                "displayName": orphan_display,
+                "endDateTime": "2027-09-13T08:54:47Z",
+            }
+        ]
+        if recover_credential
+        else [],
+        separators=(",", ":"),
+    )
+    recovery_arguments = (
+        f" -ResumeOrphanCredentialKeyId {orphan_key}"
+        f" -ResumeOrphanCredentialDisplayName {orphan_display}"
+        if recover_credential
+        else ""
+    )
+    metadata_entries = ",".join(
+        [
+            '{`"keyId`":`"66666666-6666-6666-6666-666666666666`",'
+            '`"displayName`":`"$script:newDisplay`",'
+            '`"endDateTime`":`"2027-09-13T09:00:00Z`"}'
+        ]
+        * metadata_count
+    )
     wrapper = tmp_path / "run-configure-resume.ps1"
     wrapper.write_text(
         f"""
+function global:Invoke-RestMethod {{ return @{{ id = 'fake-secret-version' }} }}
 function global:az {{
   $joined = [string]::Join(' ', $args)
   Add-Content -LiteralPath '{log.as_posix()}' -Value $joined
@@ -209,7 +242,19 @@ function global:az {{
   if ($joined -match '^ad sp show') {{
     return '{service_principal_json}'
   }}
-  if ($joined -match '^ad app credential list') {{ return '[]' }}
+  if ($joined -match '^ad app credential delete') {{ $script:deleted = $true; return }}
+  if ($joined -match '^ad app credential reset') {{
+    $script:created = $true
+    $script:newDisplay = ([regex]::Match($joined, '--display-name ([^ ]+)')).Groups[1].Value
+    return '{{"password":"not-a-real-secret"}}'
+  }}
+  if ($joined -match '^ad app credential list' -and
+      $joined.Contains('--query [].{{keyId:keyId}}')) {{ return '[]' }}
+  if ($joined -match '^ad app credential list') {{
+    if ($script:created) {{ return "[{metadata_entries}]" }}
+    return '{initial_credentials}'
+  }}
+  if ($joined -match '^rest .*--method post') {{ return }}
   if ($joined -match '^rest .*appRoleAssignments' -and
       $joined.Contains('{assignment_projection}')) {{
     return '[]'
@@ -217,6 +262,13 @@ function global:az {{
   if ($joined -match '^rest .*appRoleAssignments') {{ return '{unprojected_assignment}' }}
   if ($joined -match '^containerapp auth show') {{ return '{auth_json}' }}
   if ($joined -match '^ad sp update') {{ $global:LASTEXITCODE = 1; return }}
+  if ($joined -match '^keyvault list') {{ return 'test-vault' }}
+  if ($joined -match '^containerapp show' -and $joined.Contains('keys(identity')) {{
+    return '/identity/id'
+  }}
+  if ($joined -match '^account get-access-token') {{ return 'fake-token' }}
+  if ($joined -match '^containerapp secret set') {{ return }}
+  if ($joined -match '^deployment group create') {{ return }}
   throw "Unexpected az call: $joined"
 }}
 try {{
@@ -227,7 +279,7 @@ try {{
     -AllowedUserObjectId {RESUME_USER_ID} `
     -ResumeTenantId {RESUME_USER_ID} `
     -ResumeClientId {RESUME_CLIENT_ID} `
-    -ResumeServicePrincipalObjectId {RESUME_SP_ID}
+    -ResumeServicePrincipalObjectId {RESUME_SP_ID}{recovery_arguments}
 }} catch {{
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
@@ -498,6 +550,36 @@ def test_entra_resume_guard_allows_well_formed_foreign_assignment(tmp_path):
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_resume_guard_accepts_only_the_exact_orphan_credential(tmp_path):
+    """今回作成済みの一意な未使用credentialだけを削除対象にする。"""
+    display_name = "agent-world-easy-auth-20260913085447-1cdb7362"
+    result = _run_entra_resume_guard(
+        tmp_path,
+        servicePrincipal={
+            "id": RESUME_SP_ID,
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "servicePrincipalType": "Application",
+            "appRoleAssignmentRequired": True,
+        },
+        credentials=[
+            {
+                "keyId": "55555555-5555-5555-5555-555555555555",
+                "displayName": display_name,
+                "endDateTime": "2027-09-13T08:54:47Z",
+            }
+        ],
+        _guard_arguments=[
+            "-OrphanCredentialKeyId",
+            "55555555-5555-5555-5555-555555555555",
+            "-OrphanCredentialDisplayName",
+            display_name,
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
 def test_configure_entra_resume_accepts_single_scalar_app_and_reaches_update(tmp_path):
     """1件だけのTSV appIdをUUID先頭文字に崩さず、検証後の同SP更新へ進む。"""
     result, calls = _run_configure_entra_resume(tmp_path, external=False)
@@ -516,6 +598,78 @@ def test_configure_entra_resume_requires_known_internal_ingress(tmp_path, extern
     assert "ingressはinternalのactualが必須" in result.stderr
     assert "ad sp update" not in calls
     assert "ad app credential reset" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_configure_entra_recovers_exact_orphan_and_completes_owned_writes(tmp_path):
+    """exact orphan削除後の新credentialを一意化し、KV・本人assignment・authまで完了する。"""
+    result, calls = _run_configure_entra_resume(tmp_path, external=False, recover_credential=True)
+    assert result.returncode == 0, result.stderr
+    assert calls.count("ad app credential delete") == 1
+    assert calls.count("ad app credential reset") == 1
+    assert "containerapp secret set" in calls
+    assert "--method post" in calls
+    assert "deployment group create" in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("metadata_count", [0, 2])
+def test_configure_entra_stops_when_new_credential_metadata_is_not_unique(tmp_path, metadata_count):
+    """新credential metadataが0件・複数ならKVやassignmentへ進まない。"""
+    result, calls = _run_configure_entra_resume(
+        tmp_path,
+        external=False,
+        recover_credential=True,
+        metadata_count=metadata_count,
+    )
+    assert result.returncode != 0
+    assert "Credential metadataを一意に特定できません" in result.stderr
+    assert "containerapp secret set" not in calls
+    assert "--method post" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "invalid_args",
+    [
+        ["-ResumeTenantId", RESUME_USER_ID],
+        ["-ResumeTenantId", RESUME_USER_ID, "-ResumeClientId", RESUME_CLIENT_ID],
+        ["-ResumeOrphanCredentialKeyId", "55555555-5555-5555-5555-555555555555"],
+        [
+            "-ResumeOrphanCredentialKeyId",
+            "55555555-5555-5555-5555-555555555555",
+            "-ResumeOrphanCredentialDisplayName",
+            "orphan",
+        ],
+    ],
+)
+def test_configure_entra_rejects_invalid_resume_argument_shapes_before_az(invalid_args):
+    """許可した3形以外はAzure read/writeを始める前に拒否する。"""
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(CONFIGURE_ENTRA),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-AllowedUserObjectId",
+            RESUME_USER_ID,
+            *invalid_args,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Entra引数はnew create" in result.stderr
+    assert "Azure context verified" not in result.stdout
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")

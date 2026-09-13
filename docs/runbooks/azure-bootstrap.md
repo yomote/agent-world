@@ -85,6 +85,8 @@ Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraC
 
 app registrationとservice principalの作成直後、`appRoleAssignmentRequired`更新だけがGraphの`Resource does not exist`で失敗した場合はConfigure全体を再実行しない。app/SPが各1件、同じtenant/client ID/SP object ID、single-tenant、正確なcallback、ID token有効であり、credential・本人assignment・Easy Authがまだ存在しないことをread-only actualで確認する。その既知stateに限り、同じコマンドへ`-ResumeTenantId`、`-ResumeClientId`、`-ResumeServicePrincipalObjectId`を追加して一度だけ再開する。対象違いまたは想定外の副作用があれば停止する。
 
+Configureの引数は、resume引数なしのnew create、上記3 IDsだけのpartial resume、3 IDsに`-ResumeOrphanCredentialKeyId`と`-ResumeOrphanCredentialDisplayName`を加えるcredential recoveryの3形だけを許可する。後者はmetadata特定失敗で今回作成された未使用credentialがexact 1件、SPのassignment必須が有効、本人assignment・Key Vault secret・Container App secret参照・Easy Authが未作成、ingressがinternalである場合に限る。exact credentialを1回削除し、actual 0件を確認してから新credentialを1件発行する。削除結果またはactualが不明なら再送せず、新credentialを発行しない。
+
 期限前のrotationでは、一意なdisplay nameで新しいcredentialを`--append`作成し、metadataのkey IDと期限を控え、同じKey Vault secret名を更新する。versionless Key Vault参照の更新反映には最大30分かかり得るため、旧credentialを最低35分は併存させる。その後、新credentialがKey Vaultのlatest versionであるactualと本人loginを確認してから、古いcredentialをkey ID指定で削除する。初回構成時とrotation後は本人user contextでDirectory側も確認する。
 
 ```powershell

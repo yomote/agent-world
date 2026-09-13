@@ -98,3 +98,15 @@ def test_entra_resume_validates_partial_state_before_any_followup_write():
 
     assert resume_branch < guard < create_branch < update
     assert "value[].{resourceId:resourceId,principalId:principalId}" in CONFIGURE_ENTRA_SCRIPT
+
+
+def test_entra_credential_recovery_deletes_exact_orphan_before_new_reset():
+    """失われたsecretのcredentialを暗黙resetせず、exact削除とactual0を先行する。"""
+    delete = CONFIGURE_ENTRA_SCRIPT.index("az ad app credential delete")
+    actual_zero = CONFIGURE_ENTRA_SCRIPT.index("Credential remains after exact deletion")
+    reset = CONFIGURE_ENTRA_SCRIPT.index("az ad app credential reset")
+
+    assert delete < actual_zero < reset
+    assert (
+        "$allCredentials = @($credentialMetadataJson | ConvertFrom-Json)" in CONFIGURE_ENTRA_SCRIPT
+    )

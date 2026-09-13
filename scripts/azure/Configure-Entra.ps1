@@ -6,10 +6,20 @@ param(
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $AllowedUserObjectId,
   [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeTenantId = '',
   [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeClientId = '',
-  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeServicePrincipalObjectId = ''
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeServicePrincipalObjectId = '',
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ResumeOrphanCredentialKeyId = '',
+  [string] $ResumeOrphanCredentialDisplayName = ''
 )
 
 $ErrorActionPreference = "Stop"
+$resumeValues = @($ResumeTenantId, $ResumeClientId, $ResumeServicePrincipalObjectId) | Where-Object { $_ }
+$orphanValues = @($ResumeOrphanCredentialKeyId, $ResumeOrphanCredentialDisplayName) | Where-Object { $_ }
+$validResumeShape = ($resumeValues.Count -eq 0 -and $orphanValues.Count -eq 0) `
+  -or ($resumeValues.Count -eq 3 -and $orphanValues.Count -eq 0) `
+  -or ($resumeValues.Count -eq 3 -and $orphanValues.Count -eq 2)
+if (-not $validResumeShape) {
+  throw 'Entra引数はnew create、3 IDsのpartial resume、3 IDsとorphan key/displayのcredential recoveryだけを許可します。'
+}
 & "$PSScriptRoot/Assert-AzureContext.ps1" -SubscriptionId $SubscriptionId
 $accountType = & az account show --only-show-errors --query user.type --output tsv
 $signedInUserId = & az ad signed-in-user show --only-show-errors --query id --output tsv
@@ -26,10 +36,6 @@ $existing = @(& az ad app list --display-name $displayName --query '[].appId' --
 if ($LASTEXITCODE -ne 0) { throw "Entra app registration lookup failed." }
 
 $redirectUri = "https://$fqdn/.auth/login/aad/callback"
-$resumeValues = @($ResumeTenantId, $ResumeClientId, $ResumeServicePrincipalObjectId) | Where-Object { $_ }
-if ($resumeValues.Count -ne 0 -and $resumeValues.Count -ne 3) {
-  throw 'ResumeTenantId、ResumeClientId、ResumeServicePrincipalObjectIdは3つとも必要です。'
-}
 if ($resumeValues.Count -eq 3) {
   if ($null -eq $ingress.external -or [bool]$ingress.external) {
     throw 'Resume前のContainer App ingressはinternalのactualが必須です。'
@@ -59,18 +65,32 @@ if ($resumeValues.Count -eq 3) {
       assignments = @($assignmentsJson | ConvertFrom-Json)
       auth = $authJson | ConvertFrom-Json
     } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resumeActualFile -Encoding utf8NoBOM
-    & "$PSScriptRoot/Assert-EntraResumeState.ps1" `
-      -ActualPath $resumeActualFile `
-      -AppName $AppName `
-      -ExpectedRedirectUri $redirectUri `
-      -ClientId $ResumeClientId `
-      -ServicePrincipalObjectId $ResumeServicePrincipalObjectId `
-      -AllowedUserObjectId $AllowedUserObjectId
+    $resumeGuardParameters = @{
+      ActualPath = $resumeActualFile
+      AppName = $AppName
+      ExpectedRedirectUri = $redirectUri
+      ClientId = $ResumeClientId
+      ServicePrincipalObjectId = $ResumeServicePrincipalObjectId
+      AllowedUserObjectId = $AllowedUserObjectId
+    }
+    if ($ResumeOrphanCredentialKeyId -or $ResumeOrphanCredentialDisplayName) {
+      $resumeGuardParameters.OrphanCredentialKeyId = $ResumeOrphanCredentialKeyId
+      $resumeGuardParameters.OrphanCredentialDisplayName = $ResumeOrphanCredentialDisplayName
+    }
+    & "$PSScriptRoot/Assert-EntraResumeState.ps1" @resumeGuardParameters
   } finally {
     Remove-Item -LiteralPath $resumeActualFile -Force -ErrorAction SilentlyContinue
   }
   $clientId = $ResumeClientId
   $servicePrincipalId = $ResumeServicePrincipalObjectId
+  if ($ResumeOrphanCredentialKeyId) {
+    & az ad app credential delete --only-show-errors --id $clientId --key-id $ResumeOrphanCredentialKeyId
+    if ($LASTEXITCODE -ne 0) { throw 'Orphan credential deletion failed or is unknown. New credential was not created.' }
+    $remainingCredentialsJson = & az ad app credential list --only-show-errors --id $clientId --query '[].{keyId:keyId}' --output json
+    if ($LASTEXITCODE -ne 0 -or -not $remainingCredentialsJson) { throw 'Credential actual after deletion is unknown. New credential was not created.' }
+    $remainingCredentials = @($remainingCredentialsJson | ConvertFrom-Json)
+    if ($remainingCredentials.Count -ne 0) { throw 'Credential remains after exact deletion. New credential was not created.' }
+  }
 } else {
   if ($existing) { throw "同名のapp registrationが既にあります。重複作成せずactualを確認してください: $displayName" }
   $clientId = & az ad app create --only-show-errors --display-name $displayName --sign-in-audience AzureADMyOrg --enable-id-token-issuance true --web-redirect-uris $redirectUri --query appId --output tsv
@@ -78,8 +98,10 @@ if ($resumeValues.Count -eq 3) {
   $servicePrincipalId = & az ad sp create --only-show-errors --id $clientId --query id --output tsv
   if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalId) { throw "Entra service principal creation failed." }
 }
-& az ad sp update --only-show-errors --id $servicePrincipalId --set appRoleAssignmentRequired=true --output none
-if ($LASTEXITCODE -ne 0) { throw "Entra assignment requirement update failed." }
+if (-not $ResumeOrphanCredentialKeyId) {
+  & az ad sp update --only-show-errors --id $servicePrincipalId --set appRoleAssignmentRequired=true --output none
+  if ($LASTEXITCODE -ne 0) { throw "Entra assignment requirement update failed." }
+}
 
 $credentialDisplayName = "agent-world-easy-auth-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 $credentialKeyId = $null
@@ -101,7 +123,8 @@ try {
   if ($LASTEXITCODE -ne 0 -or -not $credentialMetadataJson) {
     throw "Credential metadata lookup failed. actualを確認してください: clientId=$clientId displayName=$credentialDisplayName"
   }
-  $matchingCredentials = @($credentialMetadataJson | ConvertFrom-Json | Where-Object displayName -eq $credentialDisplayName)
+  $allCredentials = @($credentialMetadataJson | ConvertFrom-Json)
+  $matchingCredentials = @($allCredentials | Where-Object displayName -eq $credentialDisplayName)
   if ($matchingCredentials.Count -ne 1) {
     throw "Credential metadataを一意に特定できません。actualを確認してください: clientId=$clientId displayName=$credentialDisplayName"
   }

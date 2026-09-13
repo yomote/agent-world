@@ -5,13 +5,19 @@ param(
   [Parameter(Mandatory)] [string] $ExpectedRedirectUri,
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ClientId,
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $ServicePrincipalObjectId,
-  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $AllowedUserObjectId
+  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $AllowedUserObjectId,
+  [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $OrphanCredentialKeyId = '',
+  [string] $OrphanCredentialDisplayName = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $actual = Get-Content -Raw -LiteralPath $ActualPath | ConvertFrom-Json
 $redirects = @($actual.application.web.redirectUris)
 $credentials = @($actual.credentials)
+$orphanStage = $OrphanCredentialKeyId -or $OrphanCredentialDisplayName
+if ([bool]$OrphanCredentialKeyId -ne [bool]$OrphanCredentialDisplayName) {
+  throw 'Orphan credential key IDとdisplay nameは両方必要です。'
+}
 $assignmentsHaveValidShape = $actual.PSObject.Properties.Name -contains 'assignments' -and $actual.assignments -is [System.Array]
 if ($assignmentsHaveValidShape) {
   foreach ($assignment in $actual.assignments) {
@@ -39,8 +45,13 @@ if (($actual.application.appId -ine $ClientId) `
     -or ($actual.servicePrincipal.appId -ine $ClientId) `
     -or ($actual.servicePrincipal.displayName -cne "$AppName-login") `
     -or ($actual.servicePrincipal.servicePrincipalType -cne 'Application') `
-    -or $actual.servicePrincipal.appRoleAssignmentRequired `
-    -or $credentials.Count -ne 0 `
+    -or ($orphanStage -and -not $actual.servicePrincipal.appRoleAssignmentRequired) `
+    -or (-not $orphanStage -and $actual.servicePrincipal.appRoleAssignmentRequired) `
+    -or ($orphanStage -and ($credentials.Count -ne 1 `
+        -or $credentials[0].keyId -ine $OrphanCredentialKeyId `
+        -or $credentials[0].displayName -cne $OrphanCredentialDisplayName `
+        -or -not $credentials[0].endDateTime)) `
+    -or (-not $orphanStage -and $credentials.Count -ne 0) `
     -or -not $assignmentsHaveValidShape `
     -or $assignments.Count -ne 0 `
     -or $actual.auth.platform.enabled `
