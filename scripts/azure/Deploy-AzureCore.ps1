@@ -8,7 +8,7 @@ param(
   [Parameter(Mandatory)] [ValidatePattern('^\d{4}-\d{2}-01T00:00:00Z$')] [string] $BudgetStartDate,
   [ValidateRange(1, 1000000)] [int] $BudgetAmount = 1000,
   [string[]] $BudgetContactEmails = @(),
-  [string] $ConfirmedBudgetCurrency = '',
+  [string] $BillingCurrencyConfirmationPath = '',
   [string] $ApprovedWhatIfSha256 = '',
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $OperatorPrincipalObjectId,
   [string] $TenantId = '',
@@ -26,8 +26,10 @@ if ($BudgetContactEmails.Count -gt 0) {
 if ($Apply) {
   & "$PSScriptRoot/Assert-AzureApplyInputs.ps1" `
     -BudgetContactEmails $BudgetContactEmails `
-    -ConfirmedBudgetCurrency $ConfirmedBudgetCurrency `
-    -ApprovedWhatIfSha256 $ApprovedWhatIfSha256
+    -ApprovedWhatIfSha256 $ApprovedWhatIfSha256 `
+    -BillingCurrencyConfirmationPath $BillingCurrencyConfirmationPath `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroupName $ResourceGroupName
 }
 & "$PSScriptRoot/Assert-AzureContext.ps1" -SubscriptionId $SubscriptionId
 $accountType = & az account show --only-show-errors --query user.type --output tsv
@@ -36,11 +38,6 @@ if ($accountType -ne 'user' -or $signedInUserId -ne $OperatorPrincipalObjectId) 
   throw "OperatorPrincipalObjectIdは現在login中の本人object IDと一致させてください。"
 }
 & "$PSScriptRoot/Test-GhcrPublic.ps1" -Image $Image
-if ($Apply) {
-  & "$PSScriptRoot/Test-AzureBillingCurrency.ps1" `
-    -SubscriptionId $SubscriptionId `
-    -ExpectedCurrency $ConfirmedBudgetCurrency
-}
 if ($ExternalIngress -and -not $EnableEntraAuth) {
   throw "ExternalIngressはEnableEntraAuthと同時にだけ有効化できます。"
 }

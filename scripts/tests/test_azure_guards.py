@@ -10,7 +10,7 @@ PLAN_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureInitialPlan.ps1"
 AUTH_PLAN_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureAuthPlan.ps1"
 CONTAINMENT = ROOT / "scripts" / "azure" / "Disable-AzureExternalIngress.ps1"
 APPLY_INPUT_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureApplyInputs.ps1"
-BILLING_CURRENCY = ROOT / "scripts" / "azure" / "Test-AzureBillingCurrency.ps1"
+BILLING_CONFIRMATION = ROOT / "scripts" / "azure" / "Assert-AzureBillingCurrencyConfirmation.ps1"
 BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
 EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
@@ -73,6 +73,34 @@ def _run_apply_input_guard(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _write_billing_confirmation(
+    tmp_path: Path,
+    *,
+    subscription: str = "sub-1",
+    resource_group: str = "rg-agent-world-jpe",
+    currency: str = "JPY",
+) -> Path:
+    confirmation = tmp_path / "billing-currency-confirmation.private.json"
+    confirmation.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "method": "Azure BillingProperty REST 2024-04-01",
+                "subscriptionId": subscription,
+                "budgetScopeResourceId": (
+                    f"/subscriptions/{subscription}/resourceGroups/{resource_group}"
+                ),
+                "currency": currency,
+                "currencyConfirmedAtUtc": "2026-09-07T15:09:46.8412110Z",
+                "budgetScopeConfirmationMethod": "Azure Cost Management budget scope",
+                "budgetScopeConfirmedAtUtc": "2026-09-13T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return confirmation
+
+
 def _run_budget_email_guard(*addresses: str) -> subprocess.CompletedProcess[str]:
     values = ",".join("'" + address.replace("'", "''") + "'" for address in addresses)
     command = f"& '{BUDGET_EMAILS.as_posix()}' -BudgetContactEmails @({values})"
@@ -103,34 +131,79 @@ def test_budget_email_guard_rejects_blank_or_invalid_address(address):
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
-def test_apply_input_guard_accepts_complete_approved_inputs():
-    """通知先・実通貨・承認済みplanが揃う正常stageを通す。"""
+def test_apply_input_guard_accepts_complete_approved_inputs(tmp_path):
+    """通知先・初回通貨確認記録・承認済みplanが揃う正常stageを通す。"""
+    confirmation = _write_billing_confirmation(tmp_path)
     result = _run_apply_input_guard(
         "-BudgetContactEmails",
         "owner@example.invalid",
-        "-ConfirmedBudgetCurrency",
-        "JPY",
         "-ApprovedWhatIfSha256",
         "a" * 64,
+        "-BillingCurrencyConfirmationPath",
+        str(confirmation),
+        "-SubscriptionId",
+        "sub-1",
+        "-ResourceGroupName",
+        "rg-agent-world-jpe",
     )
     assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
-@pytest.mark.parametrize("missing", ["contact", "currency", "hash"])
-def test_apply_input_guard_rejects_incomplete_approval(missing):
+@pytest.mark.parametrize("missing", ["contact", "confirmation", "hash"])
+def test_apply_input_guard_rejects_incomplete_approval(tmp_path, missing):
     """Budgetやplanの未承認入力をAzure照会より前に停止する。"""
+    confirmation = _write_billing_confirmation(tmp_path)
+    complete = [
+        "-BudgetContactEmails",
+        "owner@example.invalid",
+        "-ApprovedWhatIfSha256",
+        "a" * 64,
+        "-BillingCurrencyConfirmationPath",
+        str(confirmation),
+        "-SubscriptionId",
+        "sub-1",
+        "-ResourceGroupName",
+        "rg-agent-world-jpe",
+    ]
     arguments = {
-        "contact": [],
-        "currency": ["-BudgetContactEmails", "owner@example.invalid"],
-        "hash": [
-            "-BudgetContactEmails",
-            "owner@example.invalid",
-            "-ConfirmedBudgetCurrency",
-            "JPY",
-        ],
+        "contact": complete[2:],
+        "confirmation": complete[:4] + complete[6:],
+        "hash": complete[:2] + complete[4:],
     }[missing]
     result = _run_apply_input_guard(*arguments)
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("mismatch", ["currency", "subscription", "scope"])
+def test_billing_confirmation_rejects_unapproved_target(tmp_path, mismatch):
+    """非JPYや別subscription・Budget scopeの記録を承認済み扱いしない。"""
+    confirmation = _write_billing_confirmation(
+        tmp_path,
+        currency="USD" if mismatch == "currency" else "JPY",
+        subscription="sub-2" if mismatch == "subscription" else "sub-1",
+        resource_group="other-rg" if mismatch == "scope" else "rg-agent-world-jpe",
+    )
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(BILLING_CONFIRMATION),
+            "-ConfirmationPath",
+            str(confirmation),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     assert result.returncode != 0
 
 
@@ -243,27 +316,6 @@ def _fake_az_script(tmp_path: Path, external: str) -> tuple[Path, Path]:
         f"Add-Content -LiteralPath '{log.as_posix()}' -Value ($Args -join ' ')\n"
         f"if (($Args -join ' ') -match 'containerapp show') {{ Write-Output '{external}' }}\n"
         "exit 0\n",
-        encoding="utf-8",
-    )
-    return fake, log
-
-
-def _fake_cost_az_script(tmp_path: Path, *, currency: str, exit_code: int = 0) -> tuple[Path, Path]:
-    log = tmp_path / "cost-az.log"
-    fake = tmp_path / "fake-cost-az.ps1"
-    response = json.dumps(
-        {
-            "properties": {
-                "columns": [{"name": "PreTaxCost"}, {"name": "Currency"}],
-                "rows": [[0, currency]],
-            }
-        }
-    )
-    fake.write_text(
-        "param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)\n"
-        f"Add-Content -LiteralPath '{log.as_posix()}' -Value ($Args -join ' ')\n"
-        f"Write-Output '{response}'\n"
-        f"exit {exit_code}\n",
         encoding="utf-8",
     )
     return fake, log
@@ -399,61 +451,6 @@ def test_unreadable_deployment_state_stops_before_ingress_actual(tmp_path):
     assert "no terminal provisioning state was verified" in result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert len(calls) == 1
-
-
-@pytest.mark.skipif(PWSH is None, reason="PowerShell billing test requires pwsh")
-def test_billing_currency_guard_accepts_one_jpy_actual_row(tmp_path):
-    """実請求応答がJPYと確認できた正常stageを通す。"""
-    fake, log = _fake_cost_az_script(tmp_path, currency="JPY")
-    result = subprocess.run(
-        [
-            PWSH,
-            "-NoProfile",
-            "-File",
-            str(BILLING_CURRENCY),
-            "-SubscriptionId",
-            "sub-1",
-            "-ExpectedCurrency",
-            "JPY",
-            "-AzureCli",
-            str(fake),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
-
-
-@pytest.mark.skipif(PWSH is None, reason="PowerShell billing test requires pwsh")
-@pytest.mark.parametrize(("currency", "exit_code"), [("USD", 0), ("JPY", 1)])
-def test_billing_currency_guard_stops_without_retry(tmp_path, currency, exit_code):
-    """通貨不一致や429相当の照会失敗を1回で停止する。"""
-    fake, log = _fake_cost_az_script(tmp_path, currency=currency, exit_code=exit_code)
-    result = subprocess.run(
-        [
-            PWSH,
-            "-NoProfile",
-            "-File",
-            str(BILLING_CURRENCY),
-            "-SubscriptionId",
-            "sub-1",
-            "-ExpectedCurrency",
-            "JPY",
-            "-AzureCli",
-            str(fake),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    assert result.returncode != 0
-    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell containment test requires pwsh")

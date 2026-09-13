@@ -66,25 +66,26 @@ Budgetは通知でありhard capではない。Budget未作成は金額通知も
 
 ### 実行済みと未実行
 
-| 検査 / 操作                                                                    | 状態                                                                                        |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| ローカル実装、unit / build、独立レビュー                                       | 初回reviewの5指摘を修正し、修正stateのローカル再検証はPASS。固定SHAの限定reviewは未実行     |
-| GitHub `azure-production`のmain限定 / admin bypass無効                         | APIでactual確認済み                                                                         |
-| Azure subscription / provider / regionのread-only確認                          | 2026-09-13に再確認。Enabled 1件、本人user、Japan East、必要provider登録済み                 |
-| 専用Resource Group                                                             | 2026-09-13に`rg-agent-world-jpe`が存在しないことを確認                                      |
-| Cost Management通貨 / 当月cost                                                 | 2026-09-13 01:44 JSTの新preflightで1回だけ照会し429。再試行0で停止、未確認                  |
-| GHCR build / push / package公開 / 匿名pull                                     | 未実行                                                                                      |
-| Azure subscription / RG scopeのwhat-if                                         | placeholder digest・Budgetなしで実行しCreate 8件のみ。実image/Budget付き最終what-ifは未実行 |
-| Azure / Entra / OIDC / role assignment / GitHub environment variableの書き込み | **未実行**                                                                                  |
-| Internet公開 / smartphone確認                                                  | **未実行**                                                                                  |
+| 検査 / 操作                                                                    | 状態                                                                                                                                             |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ローカル実装、unit / build、独立レビュー                                       | PR #14 / #60はmerge・current-head CI済み。初回通貨記録guardの変更はローカル実装中                                                                |
+| GitHub `azure-production`のmain限定 / admin bypass無効                         | APIでactual確認済み                                                                                                                              |
+| Azure subscription / provider / regionのread-only確認                          | 2026-09-13に再確認。Enabled 1件、本人user、Japan East、必要provider登録済み                                                                      |
+| 専用Resource Group                                                             | 2026-09-13に`rg-agent-world-jpe`が存在しないことを確認                                                                                           |
+| 請求通貨 / Budget scope                                                        | 9月7日に同subscriptionのBillingProperty JPYを確認。9月13日に同subscription内の既存RG BudgetがJPY表示であることをPortalで確認。対象予定RGは未作成 |
+| Cost Management ActualCost                                                     | 同じ照会で429が継続。2026-09-13の既知累計requests 4 / retries 0。当月costは未取得。deploy通貨guardから分離する                                   |
+| GHCR build / push / package公開 / 匿名pull                                     | main imageをbuild / push済み。package Public、実digestの匿名pullを確認済み                                                                       |
+| Azure subscription / RG scopeのwhat-if                                         | 実digest・Budget付きでCreate 9 / Modify 0 / Delete 0、Create-only allowlistとhashを確認済み                                                      |
+| Azure / Entra / OIDC / role assignment / GitHub environment variableの書き込み | **未実行**                                                                                                                                       |
+| Internet公開 / smartphone確認                                                  | **未実行**                                                                                                                                       |
 
 ### 確定済み入力とApply停止条件
 
 本人がBudget通知先を指定済みである。実addressはpublic Issue / PR / commitに記録せず、最終what-ifとapplyのprivate parameterだけに渡す。
 
-Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの既定値も1000で一致する。この金額は既決の目安であってhard capではない。請求通貨JPYは`docs/runbooks/azure-management-status.md`に記録された同一subscriptionのBillingProperty確認を根拠とする。Apply scriptはCost Managementを1回再確認し、429、認証失敗、JPY不一致、または通知先不備で初回apply前に停止する。金額を勝手に読み替えたりBudgetなしで公開したりしない。
+Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの既定値も1000で一致する。この金額は既決の目安であってhard capではない。請求通貨JPYは`docs/runbooks/azure-management-status.md`に記録された同一subscriptionのBillingProperty確認と、同subscription内の既存Resource Group BudgetのPortal JPY表示を根拠とする。確認方法、対象subscription、対象予定Budget scope、JPY、各UTC時刻はrepository外のprivate JSONへ保存する。対象予定RG自体のBudgetを観測済みとは扱わない。
 
-2026-09-06の照会は429後に既定の60秒・120秒待機とread retry上限を使い切ったが、応答の`Retry-After` / reset値は証跡に残っていない。2026-09-13 01:44 JSTは別taskから1週間経過し明示resumeされた新preflightとしてsubscription scopeを1回だけ照会した。再び429だったため、今回のshared budgetはrequests 1、retries 0で停止した。Azure CLIの安全な出力には今回も`Retry-After` / reset値がなく、次回再開時刻は確定していない。
+2026-09-06の照会は429後に既定の60秒・120秒待機とread retry上限を使い切った。2026-09-13もユーザーの回復確認ごとに同じActualCost queryが429となり、既知累計requests 4、retries 0で停止した。応答の`Retry-After` / reset値は証跡に残っておらず、原因は未確定である。初回通貨確認後の通常deployはprivate記録のローカル整合だけを検査し、このQueryを呼ばない。ActualCostは費用観測として別の低頻度処理に残す。
 
 承認前のread-only preflightでは、subscription名とstate、本人user context、本人object IDを取得できること、Japan East、必要provider、専用RG不存在を秘密値を出さず再照合した。未公開imageの代わりにゼロのplaceholder digestを使ったsubscription what-ifは、専用RG、Container App / environment、Key Vault、managed identity、Log Analytics、Key Vault role 2件のCreate 8件だけで、Modify / Deleteは0件だった。Budget通知先が空なのでBudgetはこの差分に含まれない。この結果は実deployment image、実通貨、通知先を入れたapply直前の最終what-ifの代わりにはしない。
 
@@ -92,9 +93,9 @@ Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの
 
 1. 固定したPR headをpushし、Ready化してcurrent-head `check`と`container-check`を実行する。両方の成功と独立reviewを提示し、PR #14をmergeするか人間が判断する。自動mergeは行わない。
 2. merge承認後、`Deploy Azure`を`image_only=true`、確認文字列`publish-ghcr-image`で手動実行し、current mainのsource imageを一度buildしてGHCRへSHA tagでpushする。通常のmain pushはbootstrap enablementと全Azure変数が揃う前にimageを書き込めない。package公開の承認を確認してpublic化し、匿名pullで解決したdigestを記録する。
-3. subscription alias `omote-dev-subscription`、tenant、本人object ID、Japan East、専用RG `rg-agent-world-jpe`の不存在、Container App候補`agent-world-yomote-jpe`をread-onlyで再照合する。Cost Managementの再照会は新しいretry budgetと再開条件を明示できる場合だけ1回行う。
+3. subscription alias `omote-dev-subscription`、tenant、本人object ID、Japan East、専用RG `rg-agent-world-jpe`の不存在、Container App候補`agent-world-yomote-jpe`をread-onlyで再照合する。初回通貨確認のprivate記録を対象subscriptionと予定Budget scopeへ固定する。
 4. 実image digest、実通貨、確認済み通知先で`Deploy-AzureCore.ps1`を`-Apply`なしで実行する。専用RG内のCreateだけで削除・既存更新がなく、Budget Createを含む結果とFullResourcePayloadsの内容を含むwhat-if SHA256を提示してAzure適用の明示承認を得る。ここまでの準備承認をapply承認へ流用しない。
-5. 適用承認後、同じ引数へ確認済みJPYと承認済みwhat-if SHA256、`-Apply`を加える。scriptはCost ManagementでJPYを再確認し、通知先非空、専用RG不存在、Create-only allowlist、plan hash一致を満たす場合だけinternal ingressのcore、Key Vault、managed identity、Log Analytics、Budgetを作る。自己申告のJPY文字列だけをactual billing確認の代わりにしない。
+5. 適用承認後、同じ引数へprivate通貨確認記録path、承認済みwhat-if SHA256、`-Apply`を加える。scriptは記録が対象subscription、Budget scope、JPY、確認方法・時刻と一致し、通知先非空、専用RG不存在、Create-only allowlist、plan hash一致を満たす場合だけinternal ingressのcore、Key Vault、managed identity、Log Analytics、Budgetを作る。通常deployは通貨APIやActualCost Queryを呼ばない。subscription、Budget scope、請求契約を変更するときは初回記録を更新する。
 6. `Configure-Entra.ps1`でsingle-tenant app、本人assignment、1年secretを作る。secret値はKey Vaultだけへ保存する。
 7. Entra DirectoryとEasy Authのactualが本人1件、HTTPS必須、匿名path `/healthz`だけであることを確認する。
 8. Entra引数と`-ExternalIngress`を加えたwhat-ifを確認後、applyする。直後に未認証UI / APIの拒否とhealthを検査する。

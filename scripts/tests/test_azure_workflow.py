@@ -67,7 +67,9 @@ def test_image_preparation_uses_the_reviewed_fail_closed_helper():
 def test_core_apply_requires_budget_plan_and_billing_guards():
     """Budgetや承認済みwhat-ifなしにAzure Applyへ進む回帰を防ぐ。"""
     assert "Assert-AzureApplyInputs.ps1" in DEPLOY_SCRIPT
-    assert "Test-AzureBillingCurrency.ps1" in DEPLOY_SCRIPT
+    assert "BillingCurrencyConfirmationPath" in DEPLOY_SCRIPT
+    assert "Test-AzureBillingCurrency.ps1" not in DEPLOY_SCRIPT
+    assert "Microsoft.CostManagement/query" not in DEPLOY_SCRIPT
     assert "Assert-AzureInitialPlan.ps1" in DEPLOY_SCRIPT
     assert "Assert-AzureAuthPlan.ps1" in DEPLOY_SCRIPT
     assert "--result-format FullResourcePayloads" in DEPLOY_SCRIPT
