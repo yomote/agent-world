@@ -346,7 +346,7 @@ def _run_resume_after_key_vault(
     container_secret_exists=False,
     credential_root="array",
     secret_version_root="array",
-    container_secret_root="array",
+    container_secret_root="empty",
     vault_root="array",
     ingress_external=False,
     secret_enabled=True,
@@ -440,12 +440,22 @@ def _run_resume_after_key_vault(
     container_secrets = (
         [{"name": "microsoft-provider-authentication-secret"}] if container_secret_exists else []
     )
+    effective_container_root = (
+        "array"
+        if container_secret_exists and container_secret_root == "empty"
+        else container_secret_root
+    )
     container_secret_payload = {
         "array": container_secrets,
+        "empty": "",
         "scalar": {"name": "foreign"},
         "null": None,
-    }[container_secret_root]
-    container_secrets_json = json.dumps(container_secret_payload, separators=(",", ":"))
+    }[effective_container_root]
+    container_secrets_json = (
+        ""
+        if effective_container_root == "empty"
+        else json.dumps(container_secret_payload, separators=(",", ":"))
+    )
     wrapper = tmp_path / "run-resume-after-key-vault.ps1"
     wrapper.write_text(
         f"""
@@ -477,7 +487,7 @@ function global:az {{
   if ($joined -match '^keyvault list') {{ return '{vault_json}' }}
   if ($joined -match '^keyvault secret list-versions') {{ return '{secret_json}' }}
   if ($joined -match '^keyvault secret list') {{ return '{base_secret_json}' }}
-  if ($joined -match '^containerapp show .*properties.configuration.secrets') {{
+  if ($joined -match '^containerapp secret list') {{
     return '{container_secrets_json}'
   }}
   if ($joined -match '^containerapp show .*identity.userAssignedIdentities') {{
@@ -913,8 +923,8 @@ def test_resume_after_key_vault_completes_only_the_remaining_owned_writes(tmp_pa
     assert "keyvault secret show" not in calls
     assert "keyvault secret list-versions" in calls
     assert "keyvault secret show" not in calls
-    assert "containerapp secret list" not in calls
-    assert "properties.configuration.secrets" in calls
+    assert "containerapp secret list" in calls
+    assert "--show-values" not in calls
     assert calls.count("containerapp secret set") == 1
     assert calls.count("--method post") == 1
     assert calls.count("deployment group create") == 1
@@ -959,7 +969,7 @@ def test_resume_after_key_vault_rejects_existing_container_secret_reference(tmp_
     """ref設定済みまたは結果不明のstateへ同じwriteを再送しない。"""
     result, calls = _run_resume_after_key_vault(tmp_path, container_secret_exists=True)
     assert result.returncode != 0
-    assert "secret referenceが既に存在します" in result.stderr
+    assert "secret metadataが0件ではありません" in result.stderr
     assert "identity.userAssignedIdentities" not in calls
     assert "containerapp secret set" not in calls
 
