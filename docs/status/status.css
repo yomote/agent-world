@@ -233,6 +233,16 @@ summary:focus-visible {
   border-radius: 14px;
   background: var(--panel);
 }
+.task-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+}
+.task-summary .status-counts {
+  margin: 0;
+}
 .tree-scroll {
   overflow: auto;
   overscroll-behavior: contain;

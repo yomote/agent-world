@@ -105,7 +105,7 @@ export function capacityDescription(capacity) {
       note: "runtimeの実行枠snapshotはまだ受信していません。",
       rows: [],
       metrics: [
-        { label: "稼働", value: "未取得" },
+        { label: "稼働（観測時点の実行中）", value: "未取得" },
         { label: "同時実行上限", value: "未取得" },
         { label: "空き", value: "未取得", note: "明示供給なし" },
       ],
@@ -153,11 +153,11 @@ export function capacityDescription(capacity) {
   return {
     headline: `このセッション：観測時点の実行中 ${running} / 同時実行上限 ${limit}`,
     note: availabilitySupplied
-      ? "空きは観測値の差です。次のagentを起動できることは保証しません。"
-      : "空きは明示供給されていません。上限や担当行から推測しません。",
+      ? "実行中はruntime turn状態の観測です。タスク件数・進捗・実作業人数とは別です。空きは観測値の差で、次のagentを起動できることは保証しません。"
+      : "実行中はruntime turn状態の観測です。タスク件数・進捗・実作業人数とは別です。空きは明示供給されておらず、上限や担当行から推測しません。次のagentを起動できることは保証しません。",
     rows,
     metrics: [
-      { label: "稼働", value: running },
+      { label: "稼働（観測時点の実行中）", value: running },
       { label: "同時実行上限", value: limit },
       {
         label: "空き",
@@ -497,6 +497,14 @@ function render(snapshot) {
   const capacityMeta = document.querySelector("#capacity-meta");
   capacityMeta.replaceChildren();
   for (const [name, value] of capacity.rows) metaRow(capacityMeta, name, value);
+  const taskSummary = summarizeItems(snapshot.items);
+  document.querySelector("#task-total").textContent =
+    `公開タスク行 ${taskSummary.total}件（current node・履歴とは別）`;
+  const statusCounts = document.querySelector("#status-counts");
+  statusCounts.replaceChildren();
+  for (const entry of taskSummary.statuses) {
+    statusCounts.append(text("li", `${statusDescription(entry.status)} ${entry.count}件`));
+  }
   renderTree(snapshot);
 }
 

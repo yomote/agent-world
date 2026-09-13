@@ -72,6 +72,14 @@
           current
           sessionの全nodeです。履歴は破線で接続し、現在の人数には数えません。図だけ横へ動かせます。
         </p>
+        <div class="task-summary" aria-live="polite">
+          <p id="task-total" class="task-total">公開タスク行 —件</p>
+          <ul
+            id="status-counts"
+            class="status-counts"
+            aria-label="公開タスク行の進捗状態別件数"
+          ></ul>
+        </div>
         <dl id="tree-meta" class="tree-meta" aria-live="polite"></dl>
         <div id="tree-scroll" class="tree-scroll" tabindex="0" aria-label="依頼と担当のツリー">
           <svg

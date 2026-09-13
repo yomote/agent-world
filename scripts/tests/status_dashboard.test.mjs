@@ -267,3 +267,27 @@ test("asset queryはJS/CSSを同じv5へ更新し図だけpan可能にする", a
   assert.match(css, /\.tree-scroll\s*{[^}]*overflow:\s*auto/s);
   assert.match(css, /width:\s*calc\(100vw - 24px\)/);
 });
+
+test("公開task件数と状態内訳をtree node・履歴・capacityから分離して描画する", async () => {
+  // 集計helperだけが残り、利用者からtask行数と内訳が消える回帰を防ぐ。
+  const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  assert.match(html, /id="task-total"[^>]*>公開タスク行/);
+  assert.match(html, /id="status-counts"/);
+  assert.match(source, /summarizeItems\(snapshot\.items\)/);
+  assert.match(source, /公開タスク行.*current node・履歴とは別/);
+});
+
+test("容量metricはruntime turn観測でtask数・進捗・実作業人数と別だと明示する", () => {
+  // 「稼働」を人やタスクの実稼働と誤読させる回帰を防ぐ。
+  const description = capacityDescription({
+    scope: "/root session tree",
+    observed_at: "2026-09-13T01:00:00Z",
+    state_source: "runtime-list-agents-metadata",
+    running: 4,
+  });
+  assert.equal(description.metrics[0].label, "稼働（観測時点の実行中）");
+  assert.match(description.note, /runtime turn状態/);
+  assert.match(description.note, /タスク件数・進捗・実作業人数とは別/);
+  assert.match(description.note, /起動できることは保証しません/);
+});
