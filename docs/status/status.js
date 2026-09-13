@@ -466,7 +466,7 @@ function renderTree(snapshot) {
     const restored = [...svg.querySelectorAll(".tree-node")].find(
       (group) => group.dataset.agent === focusedAgent,
     );
-    restored?.focus({ preventScroll: true });
+    (restored || selectedGroup)?.focus({ preventScroll: true });
   }
 }
 

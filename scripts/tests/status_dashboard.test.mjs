@@ -300,3 +300,9 @@ test("refresh後は同じagentの選択を復元し、消えたagentだけ先頭
   assert.equal(selectedAgentAfterRefresh(nodes, "completed-worker"), "front");
   assert.equal(selectedAgentAfterRefresh([], "worker"), null);
 });
+
+test("refreshでfocused agentが消えた場合も先頭fallbackへfocusする", async () => {
+  // focused node消失時にbodyへfocusが落ちてkeyboard操作を失う回帰を防ぐ。
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  assert.match(source, /\(restored \|\| selectedGroup\)\?\.focus\(\{ preventScroll: true \}\)/);
+});
