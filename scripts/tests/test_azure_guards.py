@@ -113,12 +113,16 @@ def _run_publish_external(
     """Run the two-write publication packet against a stateful fake Azure CLI."""
     log = tmp_path / "publish-calls.log"
     evidence = ROOT / "artifacts" / "test-publish" / tmp_path.name
-    shutil.rmtree(evidence, ignore_errors=True)
+    if evidence.is_dir():
+        shutil.rmtree(evidence)
+    elif evidence.exists():
+        evidence.unlink()
     smoke = tmp_path / "smoke.ps1"
     smoke_action = "throw 'smoke failed'\n" if smoke_fail else "Write-Output 'smoke ok'\n"
     if after_evidence_failure:
-        blocked_path = (evidence / "external-after.private.json").as_posix()
-        smoke_action += f"New-Item -ItemType Directory -Path '{blocked_path}' | Out-Null\n"
+        evidence_path = evidence.as_posix()
+        smoke_action += f"Remove-Item -Recurse -Force '{evidence_path}'\n"
+        smoke_action += f"Set-Content -LiteralPath '{evidence_path}' -Value blocked\n"
     smoke.write_text("param($BaseUrl,$AuthMode)\n" + smoke_action, encoding="utf-8")
     expected_identity = (
         "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
@@ -327,7 +331,10 @@ try {{
         check=False,
     )
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
-    shutil.rmtree(evidence, ignore_errors=True)
+    if evidence.is_dir():
+        shutil.rmtree(evidence)
+    elif evidence.exists():
+        evidence.unlink()
     return result, calls
 
 
@@ -587,12 +594,15 @@ def test_publish_external_contains_postcondition_drift(tmp_path, post_drift):
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
-def test_publish_external_contains_when_after_evidence_cannot_be_saved(tmp_path):
-    """公開後snapshotを保存できなければ成功扱いせずexternalを閉じる。"""
+def test_publish_external_does_not_republish_when_after_evidence_cannot_be_saved(tmp_path):
+    """auth/smoke成功後のsnapshot失敗で正常な公開writeを巻き戻さない。"""
     result, calls = _run_publish_external(tmp_path, after_evidence_failure=True)
-    assert result.returncode != 0
-    assert calls.count("containerapp ingress enable") == 2
-    assert calls.count("ad app update") == 2
+    assert result.returncode == 0
+    output = result.stdout + result.stderr
+    assert "EXTERNAL PUBLICATION SUCCEEDED" in output
+    assert "Do not republish" in output
+    assert calls.count("containerapp ingress enable") == 1
+    assert calls.count("ad app update") == 1
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")

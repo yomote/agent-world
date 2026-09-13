@@ -289,9 +289,13 @@ try {
     -AzureCli $AzureCli
   if ((Get-ImmutableContainerState $afterContainer) -cne $beforeComparable) { throw 'Container App immutable state drift' }
   & $SmokeScript -BaseUrl "https://$publicFqdn" -AuthMode entra
+} catch {
+  Restore-Internal $internalFqdn $internalCallback $_.Exception.Message
+}
+try {
   @{ application = $afterApp; auth = $afterAuth; container = $afterContainer } |
     ConvertTo-Json -Depth 100 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'external-after.private.json') -Encoding utf8NoBOM
 } catch {
-  Restore-Internal $internalFqdn $internalCallback $_.Exception.Message
+  Write-Warning 'EXTERNAL PUBLICATION SUCCEEDED, but after evidence save failed. Do not republish; repair the local evidence separately.'
 }
 Write-Output "External ingress publication verified: https://$publicFqdn"
