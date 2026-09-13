@@ -145,11 +145,17 @@ if ($allSecretVersions.Count -ne 1 `
     -or ([Uri]$secretMetadata[0].id).Segments[-1].Trim('/') -ine $KeyVaultSecretVersion) {
   throw 'Key Vault secret metadataが承認済みcredential/versionと一致しません。'
 }
-$containerSecretsJson = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query properties.configuration.secrets --output json
-if ($LASTEXITCODE -ne 0 -or -not $containerSecretsJson) { throw 'Container App secret reference actualを読み取れません。' }
-Assert-JsonRootArray -Json $containerSecretsJson -Label 'Container App secret reference'
-$targetSecret = @($containerSecretsJson | ConvertFrom-Json | Where-Object name -CEQ 'microsoft-provider-authentication-secret')
-if ($targetSecret.Count -ne 0) { throw 'Container App secret referenceが既に存在します。再送しません。' }
+$containerSecretsJson = & az containerapp secret list --only-show-errors --resource-group $ResourceGroupName --name $AppName --output json
+if ($LASTEXITCODE -ne 0) { throw 'Container App secret metadataを読み取れません。' }
+if ([string]::IsNullOrWhiteSpace([string]$containerSecretsJson)) {
+  # The dedicated CLI list command returns no stdout for an empty collection.
+  # `--show-values` is intentionally omitted so secret values are never read.
+  $containerSecrets = @()
+} else {
+  Assert-JsonRootArray -Json $containerSecretsJson -Label 'Container App secret metadata'
+  $containerSecrets = @($containerSecretsJson | ConvertFrom-Json)
+}
+if ($containerSecrets.Count -ne 0) { throw 'Container App secret metadataが0件ではありません。再送しません。' }
 
 & "$PSScriptRoot/Complete-EntraConfiguration.ps1" `
   -SubscriptionId $SubscriptionId `
