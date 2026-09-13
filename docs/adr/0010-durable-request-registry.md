@@ -14,7 +14,7 @@ handoverはprepareとclaimに分ける。prepareはactive Front Deskとworker状
 
 bundle schema version 1は、expected generation、from/to logical alias、prepared_at、`explicit-dispatch-required`、request ID順にsortした公開用のrequest参照と次手を含む。digest欄とserver handover状態はpreimageへ含めない。UTF-8、JSON key辞書順、空白なし、`ensure_ascii=false`で直列化したbytesのSHA-256を`sha256:<lower hex>`とする。timestampは入力済みISO 8601文字列を保持する。prepare後はregistryを更新せず、claimがstaleなら再送せず再prepareする。
 
-receiptは今回提出したrequest、active Front Desk、generation、handoverとopaque revisionだけを返す。保持した他requestを返さず、PUTをGET oracleにしない。通信結果不明時は再送せず、認可済みoperator側の照合へ戻る。
+receiptは今回提出したrequest、generation、opaque revisionを返す。active Front Deskはinitialize/claim、handoverはprepare/claimの各actionで今回生成した値だけを返す。通常updateは保存済みruntime bindingやhandoverを返さない。保持した他requestを返さず、PUTをGET oracleにしない。通信結果不明時は再送せず、認可済みoperator側の照合へ戻る。
 
 ## トレードオフ
 

@@ -663,7 +663,11 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 changed=changed,
                 revision=revision,
                 generation=registry.generation,
-                active_front_desk=registry.active_front_desk,
+                active_front_desk=(
+                    registry.active_front_desk
+                    if update.action in {"initialize", "claim-handover"}
+                    else None
+                ),
                 requests=[by_id[request.request_id] for request in update.requests],
                 handover=(
                     registry.handover

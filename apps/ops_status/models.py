@@ -396,7 +396,7 @@ class RequestRegistryReceipt(BaseModel):
     changed: bool
     revision: str = Field(min_length=1, max_length=256)
     generation: int = Field(ge=1)
-    active_front_desk: FrontDeskClaim
+    active_front_desk: FrontDeskClaim | None = None
     requests: list[RequestRecord]
     handover: RegistryHandover | None = None
 

@@ -216,6 +216,8 @@ def test_request_registry_update_preserves_other_requests_and_rejects_stale_gene
 
     assert response.status_code == 200
     assert response.json()["generation"] == 2
+    assert "active_front_desk" not in response.json()
+    assert "handover" not in response.json()
     assert [item["request_id"] for item in response.json()["requests"]] == ["request-64"]
     assert {item.request_id for item in store.value.request_registry.requests} == {
         "request-59",
