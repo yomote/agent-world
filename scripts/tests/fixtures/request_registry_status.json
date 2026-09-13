@@ -4,20 +4,130 @@
   "observed_at": "2026-09-13T04:00:00Z",
   "received_at": "2026-09-13T04:00:00Z",
   "items": [
-    {"agent":"front-desk","role":"窓口","task":"依頼registry","status":"running","observed_at":"2026-09-13T04:00:00Z","parent_relation":"root","parent_source":"runtime-canonical-task-path","parent_observed_at":"2026-09-13T04:00:00Z"},
-    {"agent":"status-owner","role":"実装担当","task":"Issue 64","status":"running","observed_at":"2026-09-13T04:00:00Z","parent_relation":"delegated","parent_agent":"front-desk","parent_source":"runtime-canonical-task-path","parent_observed_at":"2026-09-13T04:00:00Z"}
+    {
+      "agent": "front-desk",
+      "role": "窓口",
+      "task": "依頼registry",
+      "status": "running",
+      "observed_at": "2026-09-13T04:00:00Z",
+      "parent_relation": "root",
+      "parent_source": "runtime-canonical-task-path",
+      "parent_observed_at": "2026-09-13T04:00:00Z"
+    },
+    {
+      "agent": "status-owner",
+      "role": "実装担当",
+      "task": "Issue 64",
+      "status": "running",
+      "observed_at": "2026-09-13T04:00:00Z",
+      "parent_relation": "delegated",
+      "parent_agent": "front-desk",
+      "parent_source": "runtime-canonical-task-path",
+      "parent_observed_at": "2026-09-13T04:00:00Z"
+    }
   ],
-  "runtime_capacity": {"scope":"root session tree","observed_at":"2026-09-13T04:00:00Z","state_source":"runtime-list-agents-metadata","limit_source":"runtime-instructions","running":2,"idle":0,"completed":0,"total":2,"max_concurrent_agents":8,"available":6,"availability_source":"derived-running-limit","availability_definition":"max-concurrent-minus-running"},
-  "session_tree": {"scope":"root session tree","observed_at":"2026-09-13T04:00:00Z","source":"runtime-list-agents-metadata","root_agent":"front-desk","nodes":[{"agent":"front-desk","parent_agent":null},{"agent":"status-owner","parent_agent":"front-desk"}],"covered_agents":["front-desk","status-owner"]},
+  "runtime_capacity": {
+    "scope": "root session tree",
+    "observed_at": "2026-09-13T04:00:00Z",
+    "state_source": "runtime-list-agents-metadata",
+    "limit_source": "runtime-instructions",
+    "running": 2,
+    "idle": 0,
+    "completed": 0,
+    "total": 2,
+    "max_concurrent_agents": 8,
+    "available": 6,
+    "availability_source": "derived-running-limit",
+    "availability_definition": "max-concurrent-minus-running"
+  },
+  "session_tree": {
+    "scope": "root session tree",
+    "observed_at": "2026-09-13T04:00:00Z",
+    "source": "runtime-list-agents-metadata",
+    "root_agent": "front-desk",
+    "nodes": [
+      { "agent": "front-desk", "parent_agent": null },
+      { "agent": "status-owner", "parent_agent": "front-desk" }
+    ],
+    "covered_agents": ["front-desk", "status-owner"]
+  },
   "request_registry": {
     "generation": 3,
-    "active_front_desk": {"alias":"front-desk-current","claimed_at":"2026-09-13T04:00:00Z","runtime_session_id":"runtime-current","runtime_observed_at":"2026-09-13T04:00:00Z"},
+    "active_front_desk": {
+      "alias": "front-desk-current",
+      "claimed_at": "2026-09-13T04:00:00Z",
+      "runtime_session_id": "runtime-current",
+      "runtime_observed_at": "2026-09-13T04:00:00Z"
+    },
     "updated_at": "2026-09-13T04:00:00Z",
     "source": "manual-public-registry",
     "requests": [
-      {"request_id":"request-59","scope_id":"scope-request-59","issue_url":"https://github.com/yomote/agent-world/issues/59","issue_state":"closed","issue_observation":"confirmed","issue_observed_at":"2026-09-13T03:45:00Z","public_title":"session treeを表示する","public_purpose":"担当関係を確認する","acceptance_summary":"公開画面でtreeを操作できる","authority_source":"github-issue-observation","lifecycle":"completed","owner_agent":"status-owner","member_agents":["front-desk","status-owner"],"progress_summary":"PR 61を公開済み","blocker":null,"next_action":null,"report_updated_at":"2026-09-13T03:45:00Z","report_source":"manual-public-summary","runtime_connection":"record-only","runtime_observed_at":"2026-09-13T03:45:00Z","evidence":[{"kind":"pull-request","url":"https://github.com/yomote/agent-world/pull/61","observed_at":"2026-09-13T03:45:00Z"}]},
-      {"request_id":"request-64","scope_id":"scope-request-64","issue_url":"https://github.com/yomote/agent-world/issues/64","issue_state":"open","issue_observation":"confirmed","issue_observed_at":"2026-09-13T04:00:00Z","public_title":"依頼registryとhandover","public_purpose":"新しい窓口へ未完依頼を引き継ぐ","acceptance_summary":"二重claimとworker自動再開を防ぐ","authority_source":"github-issue-observation","lifecycle":"running","owner_agent":"status-owner","member_agents":["front-desk","status-owner"],"progress_summary":"APIとCLIを検証中","blocker":null,"next_action":"独立review","report_updated_at":"2026-09-13T04:00:00Z","report_source":"manual-public-summary","runtime_connection":"connected","runtime_observed_at":"2026-09-13T04:00:00Z","evidence":[{"kind":"issue","url":"https://github.com/yomote/agent-world/issues/64","observed_at":"2026-09-13T04:00:00Z"}]}
+      {
+        "request_id": "request-59",
+        "scope_id": "scope-request-59",
+        "issue_url": "https://github.com/yomote/agent-world/issues/59",
+        "issue_state": "closed",
+        "issue_observation": "confirmed",
+        "issue_observed_at": "2026-09-13T03:45:00Z",
+        "public_title": "session treeを表示する",
+        "public_purpose": "担当関係を確認する",
+        "acceptance_summary": "公開画面でtreeを操作できる",
+        "authority_source": "github-issue-observation",
+        "lifecycle": "completed",
+        "owner_agent": "status-owner",
+        "member_agents": ["front-desk", "status-owner"],
+        "progress_summary": "PR 61を公開済み",
+        "blocker": null,
+        "next_action": null,
+        "report_updated_at": "2026-09-13T03:45:00Z",
+        "report_source": "manual-public-summary",
+        "runtime_connection": "record-only",
+        "runtime_observed_at": "2026-09-13T03:45:00Z",
+        "evidence": [
+          {
+            "kind": "pull-request",
+            "url": "https://github.com/yomote/agent-world/pull/61",
+            "observed_at": "2026-09-13T03:45:00Z"
+          }
+        ]
+      },
+      {
+        "request_id": "request-64",
+        "scope_id": "scope-request-64",
+        "issue_url": "https://github.com/yomote/agent-world/issues/64",
+        "issue_state": "open",
+        "issue_observation": "confirmed",
+        "issue_observed_at": "2026-09-13T04:00:00Z",
+        "public_title": "依頼registryとhandover",
+        "public_purpose": "新しい窓口へ未完依頼を引き継ぐ",
+        "acceptance_summary": "二重claimとworker自動再開を防ぐ",
+        "authority_source": "github-issue-observation",
+        "lifecycle": "running",
+        "owner_agent": "status-owner",
+        "member_agents": ["front-desk", "status-owner"],
+        "progress_summary": "APIとCLIを検証中",
+        "blocker": null,
+        "next_action": "独立review",
+        "report_updated_at": "2026-09-13T04:00:00Z",
+        "report_source": "manual-public-summary",
+        "runtime_connection": "connected",
+        "runtime_observed_at": "2026-09-13T04:00:00Z",
+        "evidence": [
+          {
+            "kind": "issue",
+            "url": "https://github.com/yomote/agent-world/issues/64",
+            "observed_at": "2026-09-13T04:00:00Z"
+          }
+        ]
+      }
     ],
-    "handover": {"state":"ready","from_front_desk":"front-desk-current","to_front_desk":"front-desk-next","bundle_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prepared_at":"2026-09-13T04:00:00Z","resume_policy":"explicit-dispatch-required"}
+    "handover": {
+      "state": "ready",
+      "from_front_desk": "front-desk-current",
+      "to_front_desk": "front-desk-next",
+      "bundle_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "prepared_at": "2026-09-13T04:00:00Z",
+      "resume_policy": "explicit-dispatch-required"
+    }
   }
 }
