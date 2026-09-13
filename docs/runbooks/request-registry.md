@@ -9,6 +9,51 @@ bundle用CLIはPython 3.11の標準libraryだけで動き、専用venvや追加i
 - 422は入力不正、409はgeneration・状態・内容時計・Blob ETag競合、503は保存済みsnapshotの読取または書込障害である。receiptがない通信結果不明時は再送しない。
 - `runtime_connection=record-only`または`unknown`をrunningや再接続済みに変換しない。APIはworkerをdispatchしない。
 
+## project rootからのbootstrap
+
+新しいtop-level root sessionは`AGENTS.md`を入口にする。Front Deskは受付だけを行い、PM controllerが次のread-only発見をworkerへ委任する。subagent、child、既存worker、旧rootはこの入口からclaimしない。
+
+`python scripts/manage_status_registry.py discover --locator .codex/handoff-locator.local.json --output .codex/bootstrap-result.local.json`
+
+locatorはproject rootの`.codex/handoff-locator.local.json`だけを使い、gitへcommitしない。日付付きcheckoutや一時venvを参照せず、次のschema version 1を使う。
+
+```json
+{
+  "schema_version": 1,
+  "project_id": "yomote/agent-world",
+  "repo_url": "https://github.com/yomote/agent-world",
+  "registry_source_commit": "<request registryを含む40桁commit>",
+  "runbook": "docs/runbooks/request-registry.md",
+  "cli": "scripts/manage_status_registry.py",
+  "bundle_path": "<stable absolute bundle path>",
+  "start_path": "<stable absolute start document path>",
+  "context_path": "<stable absolute public context path>",
+  "context_digest": "sha256:<64 lowercase hex>",
+  "expected_generation": "<claimで使うpositive generation>",
+  "bundle_digest": "sha256:<64 lowercase hex>",
+  "from_front_desk": "<current logical alias>",
+  "to_front_desk": "<successor logical alias>",
+  "claim_executed": false,
+  "claim_policy": "new-top-level-root-explicit-claim-only"
+}
+```
+
+locatorにtoken、cookie、certificate、会話本文を入れない。`context_path`は最終registry snapshotとprepare receiptから作った公開情報だけを持ち、目的、受入条件、owner、進捗、阻害、次手、証跡、報告時刻をrequestごとに復元する。CLIはcontextのcanonical digest、bundle request ID集合、generation・digest・from/to・ready・dispatch policyとの一致も検証する。
+
+`registry_source_commit`はregistry/CLI契約の固定sourceであり、bootstrap入口を追加したcommitとは分ける。CLIはproject ID、固定したrunbook/CLI path、git内のsource commitと両pathのblob、凍結bundleのgeneration・digest・from/to、claim未実行を照合する。source objectがlocalにない場合はworkerがoriginからそのcommitだけをfetchし、再度照合する。
+
+`local_handover_candidate=true`はlocal artifactの整合だけを示す。server側のactive owner、generation、ready状態は未確認で、owner移転やworker起動を意味しない。claim payloadはlocatorの`registry_source_commit`を固定したclean detached checkoutから生成する。primary workspaceがdirtyならcheckout/resetせず、存在しない専用pathへ`git worktree add --detach <new-path> <registry_source_commit>`で作る。
+
+locatorなしは「引継なし」と表示する。別project、既claim、不一致、読取失敗、他のactive owner、接続状態不明はFront Deskの受付を維持したまま受取りを保留する。新しいrootのruntime session IDを得てから既存の`claim`手順へ進み、payloadを1回だけ送る。409、422、503、timeout、結果不明では再送せず、locatorも変更しない。
+
+成功receiptでgeneration、active Front Desk、runtime ID、accepted handover、digestを確認したworkerだけがlocal markerを更新する。送信したclaim payloadも渡し、receiptのruntime IDをexact照合する。
+
+`python scripts/manage_status_registry.py mark-claimed --claim-payload <sent-claim.json> --receipt <successful-claim-receipt.json> --output .codex/claim-marker-result.local.json`
+
+marker更新後に初めてowner移転済みとして扱い、必要な未完依頼のworkerだけを明示dispatchする。`mark-claimed`はworkerを起動せず、locator自体も変更しない。locator bytesのdigestとbundle digestに紐づく`.codex/handoff-claim.local.json`をatomicに保存するため、将来prepareでlocatorを置換しても古いclaim markerが新handoverを使用済みにしない。
+
+将来新しいhandoverをprepareした場合は、prepare receiptを確認した担当workerが同じstable locatorを新しいbundle、public context、両digest、generation、from/toへ明示更新する。`discover`はlocatorやregistryを更新しない。新規root sessionを開いただけでは処理は始まらず、最初のユーザーmessageで`AGENTS.md`が適用された後にこの分配を行う。
+
 ## 通常更新
 
 `initialize`は未初期化時に`expected_generation=0`で一度だけ使う。以後はactive Front Desk aliasと現在generationを指定して`update`する。指定requestだけが更新され、他requestは保持される。同内容はno-opとなる。

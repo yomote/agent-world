@@ -9,6 +9,11 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.codex/handoff-locator.local.json
+.codex/bootstrap-result.local.json
+.codex/claim-marker-result.local.json
+.codex/handoff-claim.local.json
+.codex/handoff-claim.local.tmp
 artifacts/
 .terraform/
 *.tfstate
