@@ -546,32 +546,42 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
 
             current = current_version.snapshot
             require_active_runtime_binding(current.request_registry, update.runtime_binding)
-            current_agents = [item.agent for item in current.items]
+            binding_activates_current = bool(
+                update.runtime_binding is not None
+                and current.runtime_binding is None
+                and current.request_registry is not None
+                and current.request_registry.active_front_desk.runtime_session_id is not None
+            )
+            current_items = [] if binding_activates_current else current.items
+            current_agents = [item.agent for item in current_items]
             if len(current_agents) != len(set(current_agents)):
                 raise HTTPException(status_code=409, detail="status snapshot has duplicate agents")
 
-            current_by_agent = {item.agent: item for item in current.items}
+            current_by_agent = {item.agent: item for item in current_items}
             for item in update.items:
                 previous = current_by_agent.get(item.agent)
                 if previous is not None:
                     reject_older_item(previous, item)
             capacity_supplied = "runtime_capacity" in update.model_fields_set
             if (
-                capacity_supplied
+                not binding_activates_current
+                and capacity_supplied
                 and update.runtime_capacity is not None
                 and current.runtime_capacity is not None
             ):
                 reject_older_capacity(current.runtime_capacity, update.runtime_capacity)
             focus_supplied = "focus_summary" in update.model_fields_set
             if (
-                focus_supplied
+                not binding_activates_current
+                and focus_supplied
                 and update.focus_summary is not None
                 and current.focus_summary is not None
             ):
                 reject_older_focus(current.focus_summary, update.focus_summary)
             tree_supplied = "session_tree" in update.model_fields_set
             if (
-                tree_supplied
+                not binding_activates_current
+                and tree_supplied
                 and update.session_tree is not None
                 and current.session_tree is not None
             ):
@@ -595,13 +605,23 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 )
 
             replacements = {item.agent: item for item in update.items}
-            merged_items = [replacements.pop(item.agent, item) for item in current.items]
+            merged_items = [replacements.pop(item.agent, item) for item in current_items]
             merged_items.extend(replacements.values())
             merged_capacity = (
-                update.runtime_capacity if capacity_supplied else current.runtime_capacity
+                update.runtime_capacity
+                if capacity_supplied
+                else (None if binding_activates_current else current.runtime_capacity)
             )
-            merged_focus = update.focus_summary if focus_supplied else current.focus_summary
-            merged_tree = update.session_tree if tree_supplied else current.session_tree
+            merged_focus = (
+                update.focus_summary
+                if focus_supplied
+                else (None if binding_activates_current else current.focus_summary)
+            )
+            merged_tree = (
+                update.session_tree
+                if tree_supplied
+                else (None if binding_activates_current else current.session_tree)
+            )
             merged_history = update.known_history if history_supplied else current.known_history
             merged_binding = update.runtime_binding or current.runtime_binding
             observation_times = [current.observed_at, *(item.observed_at for item in update.items)]
