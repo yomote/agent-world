@@ -1,6 +1,6 @@
 # Mind Inbox からの移植計画
 
-追補 (2026-09-13): この文書は最初のVertical Sliceを作った時点の移植判断として保持する。現行デモの配置は [ADR 0011](adr/0011-demo-directory-layout.md) と [resident-move README](../demos/resident-move/README.md) を参照する。
+追補 (2026-09-13): この文書は最初のVertical Sliceを作った時点の移植判断として保持する。現行デモの配置は [ADR 0011](adr/0011-demo-directory-layout.md) と [resident-move README](../demos/resident-move/README.md) を参照する。次周のAI Escapeは [Issue #79](https://github.com/yomote/agent-world/issues/79) と [Issue #80](https://github.com/yomote/agent-world/issues/80) が正本であり、この過去の移植判断や未採用proposalを現在計画として読み替えない。
 
 追補 (2026-09-05): 工場機能とGitHub設定のIaCを取り込むという追加指示により、CI・依存更新・契約検査・GitHub設定管理の採否を[工場機能の棚卸し](factory-adoption.md)で更新した。下表は最初のVertical Slice時点の判断を残す。
 

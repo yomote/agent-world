@@ -10,6 +10,12 @@ ResidentのActionとWorldの変化を観察する、デモと実験の置場で�
 
 archiveは削除予定という意味ではありません。再現できる実験資産として保守しますが、新機能開発の主対象からは外します。`docs/proposals/` に置かれた文書がある場合、それらは過去の未採用提案であり、現在の実装計画ではありません。
 
+## 現在の配置と次周
+
+現在のWorldデモは `demos/resident-move/` だけです。`apps/ops_status/` は開発状況を表示する運用アプリで、Worldデモではありません。`packages/`、`apps/lab/`、`apps/lab-host/`、`demos/ai-escape/` はまだ存在しません。
+
+次周のAI Escapeは [Issue #79](https://github.com/yomote/agent-world/issues/79) と [Issue #80](https://github.com/yomote/agent-world/issues/80) が計画の正本です。そこで検討する `apps/lab/`、`apps/lab-host/`、`packages/agent-runtime/`、`packages/contracts/`、`demos/ai-escape/` は将来の候補であり、この移動では空ディレクトリや共通基盤を先に作りません。
+
 ## 既存デモの起動
 
 前提は **Node.js 22.13以上（推奨22 LTS）・npm・Python 3.11以上** です。リポジトリ直下で次を実行します。
