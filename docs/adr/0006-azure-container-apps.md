@@ -19,6 +19,8 @@ GitHub Actionsはenvironment subjectのOIDCで専用Resource GroupだけのContr
 
 Log Analyticsは30日保持、0.023 GB/日のingestion safeguard、アプリのaccess log無効化を使う。Budgetは50% actual、80% forecast、100% actualで通知する。Budgetもログの日次上限も課金のhard capではなく、日次cost検査を併用する。
 
+請求通貨は初回に対象subscriptionとResource GroupのBudget scopeを対応付けて確認し、方法・対象・通貨・UTC確認時刻をrepository外のprivate JSONへ保存する。coreや認証設定の通常applyはこの記録が対象subscription、Budget scope、JPYと一致することだけをローカル検査し、Cost Management Queryを呼ばない。subscription、Budget scope、請求契約を変更するときは初回確認を更新する。費用実績の取得はdeploy guardから分離して低頻度に行う。
+
 ## トレードオフ
 
 scale-to-zeroは通常時のcompute費用を抑える一方、cold startとWorld resetがある。最大1 replicaはWorldの一貫性を守る一方、可用性と処理量を制限する。GHCR packageをpublicにするためimage自体は匿名取得できるが、sourceは既にpublicであり、アプリ入口はEntraで保護する。Key Vaultは資源と少額のoperation費を増やすが、secretを再deployやGitHubへ持ち回らずに済む。
