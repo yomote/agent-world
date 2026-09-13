@@ -135,6 +135,15 @@ def reject_older_focus(previous: FocusSummary, incoming: FocusSummary) -> None:
         raise HTTPException(status_code=409, detail="ambiguous focus summary")
 
 
+def reject_clocked_snapshot(previous, incoming, *, clock: str, label: str) -> None:
+    previous_time = getattr(previous, clock)
+    incoming_time = getattr(incoming, clock)
+    if incoming_time < previous_time:
+        raise HTTPException(status_code=409, detail=f"older {label}")
+    if incoming_time == previous_time and incoming != previous:
+        raise HTTPException(status_code=409, detail=f"ambiguous {label}")
+
+
 def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot) -> None:
     if incoming.observed_at < current.observed_at:
         raise HTTPException(status_code=409, detail="older status snapshot observation")
@@ -159,6 +168,16 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
         if incoming.focus_summary is None:
             raise HTTPException(status_code=409, detail="full snapshot cannot clear focus summary")
         reject_older_focus(current.focus_summary, incoming.focus_summary)
+    for field, clock, label in (
+        ("session_tree", "observed_at", "session tree"),
+        ("known_history", "recorded_at", "known history"),
+    ):
+        previous = getattr(current, field)
+        replacement = getattr(incoming, field)
+        if previous is not None:
+            if replacement is None:
+                raise HTTPException(status_code=409, detail=f"full snapshot cannot clear {label}")
+            reject_clocked_snapshot(previous, replacement, clock=clock, label=label)
 
 
 def principal_allowed(request: Request, expected_environment_key: str) -> bool:
@@ -173,7 +192,7 @@ def principal_allowed(request: Request, expected_environment_key: str) -> bool:
 
 
 def create_app(store: SnapshotStore | None = None) -> FastAPI:
-    app = FastAPI(title="Agent World Management Status", version="0.4.0")
+    app = FastAPI(title="Agent World Management Status", version="0.5.0")
     snapshots = store or configured_store()
     ingest_lock = Lock()
 
@@ -295,6 +314,30 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 and current.focus_summary is not None
             ):
                 reject_older_focus(current.focus_summary, update.focus_summary)
+            tree_supplied = "session_tree" in update.model_fields_set
+            if (
+                tree_supplied
+                and update.session_tree is not None
+                and current.session_tree is not None
+            ):
+                reject_clocked_snapshot(
+                    current.session_tree,
+                    update.session_tree,
+                    clock="observed_at",
+                    label="session tree",
+                )
+            history_supplied = "known_history" in update.model_fields_set
+            if (
+                history_supplied
+                and update.known_history is not None
+                and current.known_history is not None
+            ):
+                reject_clocked_snapshot(
+                    current.known_history,
+                    update.known_history,
+                    clock="recorded_at",
+                    label="known history",
+                )
 
             replacements = {item.agent: item for item in update.items}
             merged_items = [replacements.pop(item.agent, item) for item in current.items]
@@ -303,11 +346,17 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 update.runtime_capacity if capacity_supplied else current.runtime_capacity
             )
             merged_focus = update.focus_summary if focus_supplied else current.focus_summary
+            merged_tree = update.session_tree if tree_supplied else current.session_tree
+            merged_history = update.known_history if history_supplied else current.known_history
             observation_times = [current.observed_at, *(item.observed_at for item in update.items)]
             if capacity_supplied and update.runtime_capacity is not None:
                 observation_times.append(update.runtime_capacity.observed_at)
             if focus_supplied and update.focus_summary is not None:
                 observation_times.append(update.focus_summary.updated_at)
+            if tree_supplied and update.session_tree is not None:
+                observation_times.append(update.session_tree.observed_at)
+            if history_supplied and update.known_history is not None:
+                observation_times.append(update.known_history.recorded_at)
             now = datetime.now(UTC)
             try:
                 merged = StatusSnapshot(
@@ -318,6 +367,8 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     items=merged_items,
                     runtime_capacity=merged_capacity,
                     focus_summary=merged_focus,
+                    session_tree=merged_tree,
+                    known_history=merged_history,
                 )
             except ValidationError as error:
                 raise HTTPException(status_code=422, detail="merged snapshot is invalid") from error
@@ -348,6 +399,8 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             items=[stored_by_agent[item.agent] for item in update.items],
             runtime_capacity=stored.runtime_capacity if capacity_supplied else None,
             focus_summary=stored.focus_summary if focus_supplied else None,
+            session_tree=stored.session_tree if tree_supplied else None,
+            known_history=stored.known_history if history_supplied else None,
         )
 
     static_root = Path(__file__).parents[2] / "docs" / "status"
