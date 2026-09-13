@@ -12,6 +12,7 @@ import {
   parentSourceDescription,
   relationshipEdges,
   requestConnectionDescription,
+  requestFocusDescription,
   requestHasCurrentConnection,
   requestLifecycleDescription,
   requestScopedSnapshot,
@@ -384,6 +385,11 @@ const request59 = {
   report_updated_at: "2026-09-13T03:45:00Z",
   runtime_connection: "record-only",
   runtime_observed_at: "2026-09-13T03:45:00Z",
+  public_purpose: "担当関係を確認する",
+  progress_summary: "PR 61を公開済み",
+  next_action: null,
+  blocker: null,
+  report_source: "manual-public-summary",
 };
 
 const request64 = {
@@ -394,6 +400,11 @@ const request64 = {
   report_updated_at: "2026-09-13T04:00:00Z",
   runtime_connection: "connected",
   runtime_observed_at: "2026-09-13T04:00:00Z",
+  public_purpose: "新しい窓口へ未完依頼を引き継ぐ",
+  progress_summary: "APIとCLIを検証中",
+  next_action: "独立review",
+  blocker: null,
+  report_source: "manual-public-summary",
 };
 
 test("default requestは未完の最新報告、全完了なら先頭、選択済みなら維持する", () => {
@@ -451,6 +462,7 @@ test("record-only requestは同aliasがcurrent treeにあっても最新treeと�
       request59,
       new Set(["front-desk", "status-owner"]),
       snapshot.request_registry,
+      snapshot.session_tree.observed_at,
     ),
     /記録のみ.*現在接続を示しません/,
   );
@@ -463,11 +475,23 @@ test("accepted handover後はclaimより古いconnected観測を引継確認待�
     handover: { state: "accepted" },
   };
   const current = new Set(["front-desk", "status-owner"]);
-  assert.equal(requestHasCurrentConnection(request64, current, registry), false);
-  assert.match(requestConnectionDescription(request64, current, registry), /旧観測.*引継確認待ち/);
+  assert.equal(
+    requestHasCurrentConnection(request64, current, registry, "2026-09-13T04:06:00Z"),
+    false,
+  );
+  assert.match(
+    requestConnectionDescription(request64, current, registry, "2026-09-13T04:06:00Z"),
+    /旧観測.*引継確認待ち/,
+  );
   const refreshed = { ...request64, runtime_observed_at: "2026-09-13T04:06:00Z" };
-  assert.equal(requestHasCurrentConnection(refreshed, current, registry), true);
-  assert.match(requestConnectionDescription(refreshed, current, registry), /現在接続を確認/);
+  assert.equal(
+    requestHasCurrentConnection(refreshed, current, registry, "2026-09-13T04:06:00Z"),
+    true,
+  );
+  assert.match(
+    requestConnectionDescription(refreshed, current, registry, "2026-09-13T04:06:00Z"),
+    /現在接続を確認/,
+  );
 });
 
 test("handover待ちとreconnectableを稼働扱いせず明示dispatch必要と示す", () => {
@@ -500,4 +524,55 @@ test("依頼一覧は登録状態・Issue観測・runtime時計を分離しnativ
   assert.match(source, /準備済みですが稼働中を示しません。再開には明示dispatchが必要/);
   assert.match(source, /focusedRequestId/);
   assert.match(source, /\(restored \|\| selected\)\?\.focus/);
+});
+
+test("connected同aliasでもtree観測がrequest runtime観測より古ければscopeしない", () => {
+  // 古いsession treeへ新しいconnected記録を重ねて現在接続と表示する回帰を防ぐ。
+  const staleTreeSnapshot = {
+    ...registrySnapshot,
+    session_tree: {
+      ...registrySnapshot.session_tree,
+      observed_at: "2026-09-13T03:59:59Z",
+    },
+    request_registry: {
+      active_front_desk: { claimed_at: "2026-09-13T04:00:00Z" },
+      requests: [request64],
+    },
+  };
+  const scoped = requestScopedSnapshot(staleTreeSnapshot, request64);
+  assert.equal(scoped.session_tree, null);
+  assert.equal(scoped.request_context.connection_confirmed, false);
+  assert.match(
+    requestConnectionDescription(
+      request64,
+      new Set(["front-desk", "status-owner"]),
+      staleTreeSnapshot.request_registry,
+      staleTreeSnapshot.session_tree.observed_at,
+    ),
+    /tree観測が古い.*現在接続を示しません/,
+  );
+});
+
+test("選択request要約はpublic summaryとreport clockへbindしacceptanceを混ぜない", async () => {
+  // 59/64切替後もglobal focusや受入条件を今回進捗として見せる回帰を防ぐ。
+  assert.deepEqual(requestFocusDescription(request59), {
+    purpose: "担当関係を確認する",
+    progress: "PR 61を公開済み",
+    blocker: "未報告",
+    nextAction: "未報告",
+    updatedAt: "2026-09-13T03:45:00Z",
+    source: "registryの手動公開summary",
+  });
+  assert.deepEqual(requestFocusDescription(request64), {
+    purpose: "新しい窓口へ未完依頼を引き継ぐ",
+    progress: "APIとCLIを検証中",
+    blocker: "未報告",
+    nextAction: "独立review",
+    updatedAt: "2026-09-13T04:00:00Z",
+    source: "registryの手動公開summary",
+  });
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  assert.match(source, /"選択した依頼の要約"/);
+  assert.match(source, /runtime\/current treeとは別です/);
+  assert.match(source, /renderFocus\(latestSnapshot, request\)/);
 });

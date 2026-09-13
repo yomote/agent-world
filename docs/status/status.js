@@ -287,6 +287,7 @@ export function requestScopedSnapshot(snapshot, request) {
     request,
     new Set(currentNodes.map((node) => node.agent)),
     snapshot.request_registry,
+    snapshot.session_tree?.observed_at,
   );
   if (!connectedToCurrent) {
     return {
@@ -344,11 +345,13 @@ export function requestScopedSnapshot(snapshot, request) {
   };
 }
 
-export function requestConnectionDescription(request, currentAgents, registry) {
+export function requestConnectionDescription(request, currentAgents, registry, treeObservedAt) {
   const hasCurrent = (request.member_agents || []).some((agent) => currentAgents.has(agent));
   if (request.runtime_connection === "connected" && hasCurrent) {
-    if (!requestHasCurrentConnection(request, currentAgents, registry)) {
-      return "connected旧観測 / 引継確認待ち（現在接続を示しません）";
+    if (!requestHasCurrentConnection(request, currentAgents, registry, treeObservedAt)) {
+      return registry?.handover?.state === "accepted"
+        ? "connected旧観測 / 引継確認待ち（現在接続を示しません）"
+        : "connected記録 / current tree観測が古いか未取得（現在接続を示しません）";
     }
     return "registry connected記録 / current tree対応aliasあり（現在接続を確認）";
   }
@@ -361,21 +364,39 @@ export function requestConnectionDescription(request, currentAgents, registry) {
   return "接続状態未取得（現在接続を示しません）";
 }
 
-export function requestHasCurrentConnection(request, currentAgents, registry) {
+export function requestHasCurrentConnection(request, currentAgents, registry, treeObservedAt) {
   if (
     request.runtime_connection !== "connected" ||
     !(request.member_agents || []).some((agent) => currentAgents.has(agent))
   ) {
     return false;
   }
-  if (registry?.handover?.state !== "accepted") return true;
   const runtimeClock = Date.parse(request.runtime_observed_at);
+  const treeClock = Date.parse(treeObservedAt);
+  if (!Number.isFinite(runtimeClock) || !Number.isFinite(treeClock) || treeClock < runtimeClock) {
+    return false;
+  }
+  if (registry?.handover?.state !== "accepted") return true;
   const claimClock = Date.parse(registry.active_front_desk.claimed_at);
-  return Number.isFinite(runtimeClock) && Number.isFinite(claimClock) && runtimeClock >= claimClock;
+  return Number.isFinite(claimClock) && runtimeClock >= claimClock && treeClock >= claimClock;
 }
 
 export function requestLifecycleDescription(lifecycle) {
   return REQUEST_LIFECYCLE_LABELS[lifecycle] || lifecycle || "登録状態未取得";
+}
+
+export function requestFocusDescription(request) {
+  return {
+    purpose: request.public_purpose,
+    progress: request.progress_summary || "未報告",
+    blocker: request.blocker || "未報告",
+    nextAction: request.next_action || "未報告",
+    updatedAt: request.report_updated_at,
+    source:
+      request.report_source === "manual-public-summary"
+        ? "registryの手動公開summary"
+        : "registry公開summaryの出所未取得",
+  };
 }
 
 export function treePanState(scrollLeft, clientWidth, scrollWidth) {
@@ -582,6 +603,7 @@ function renderRequestRegistry(snapshot) {
           String(candidate.dataset.requestId === selectedRequestId),
         );
       }
+      renderFocus(latestSnapshot, request);
       renderTreeArea(latestSnapshot, request);
     });
     const dl = document.createElement("dl");
@@ -616,7 +638,12 @@ function renderRequestRegistry(snapshot) {
     metaRow(
       dl,
       "runtime connection",
-      requestConnectionDescription(request, currentAgents, registry),
+      requestConnectionDescription(
+        request,
+        currentAgents,
+        registry,
+        snapshot.session_tree?.observed_at,
+      ),
     );
     metaRow(dl, "runtime観測", dated(request.runtime_observed_at));
     metaRow(dl, "証跡", evidenceLinks(request.evidence));
@@ -839,6 +866,39 @@ function renderTreeArea(snapshot, request) {
   renderTree(scoped);
 }
 
+function renderFocus(snapshot, request) {
+  const focusMeta = document.querySelector("#focus-meta");
+  focusMeta.replaceChildren();
+  if (request) {
+    const focus = requestFocusDescription(request);
+    document.querySelector("#focus-title").textContent = "選択した依頼の要約";
+    metaRow(focusMeta, "作業目的", focus.purpose);
+    metaRow(focusMeta, "確認済み進捗", focus.progress);
+    metaRow(focusMeta, "阻害", focus.blocker);
+    metaRow(focusMeta, "次の行動", focus.nextAction);
+    document.querySelector("#focus-updated").textContent = `報告 ${dated(focus.updatedAt)}`;
+    document.querySelector("#focus-source").textContent =
+      `出典：${focus.source}（runtime/current treeとは別です）`;
+    return;
+  }
+  document.querySelector("#focus-title").textContent = "今見る要約";
+  if (snapshot.focus_summary) {
+    metaRow(focusMeta, "作業目的", snapshot.focus_summary.purpose);
+    metaRow(focusMeta, "確認済み進捗", snapshot.focus_summary.progress_summary);
+    metaRow(focusMeta, "阻害", snapshot.focus_summary.blocker || "未報告");
+    metaRow(focusMeta, "次の行動", snapshot.focus_summary.next_action);
+    document.querySelector("#focus-updated").textContent =
+      `報告 ${dated(snapshot.focus_summary.updated_at)}`;
+    document.querySelector("#focus-source").textContent =
+      "出典：公開用に明示された今回要約（他の担当行から推測していません）";
+  } else {
+    for (const name of ["作業目的", "確認済み進捗", "阻害", "次の行動"])
+      metaRow(focusMeta, name, "未取得");
+    document.querySelector("#focus-updated").textContent = "報告時刻 未取得";
+    document.querySelector("#focus-source").textContent = "今回要約は未取得です。";
+  }
+}
+
 function render(snapshot) {
   latestSnapshot = snapshot;
   const selectedRequest = renderRequestRegistry(snapshot);
@@ -856,23 +916,7 @@ function render(snapshot) {
   document.querySelector("#source-kind").textContent = sourceLabel;
   document.querySelector("#source-note").textContent = sourceNote;
 
-  const focusMeta = document.querySelector("#focus-meta");
-  focusMeta.replaceChildren();
-  if (snapshot.focus_summary) {
-    metaRow(focusMeta, "作業目的", snapshot.focus_summary.purpose);
-    metaRow(focusMeta, "確認済み進捗", snapshot.focus_summary.progress_summary);
-    metaRow(focusMeta, "阻害", snapshot.focus_summary.blocker || "未報告");
-    metaRow(focusMeta, "次の行動", snapshot.focus_summary.next_action);
-    document.querySelector("#focus-updated").textContent =
-      `報告 ${dated(snapshot.focus_summary.updated_at)}`;
-    document.querySelector("#focus-source").textContent =
-      "出典：公開用に明示された今回要約（他の担当行から推測していません）";
-  } else {
-    for (const name of ["作業目的", "確認済み進捗", "阻害", "次の行動"])
-      metaRow(focusMeta, name, "未取得");
-    document.querySelector("#focus-updated").textContent = "報告時刻 未取得";
-    document.querySelector("#focus-source").textContent = "今回要約は未取得です。";
-  }
+  renderFocus(snapshot, selectedRequest);
 
   const capacity = capacityDescription(snapshot.runtime_capacity);
   const metrics = document.querySelector("#capacity-metrics");
