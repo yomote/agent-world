@@ -39,6 +39,22 @@ const HISTORY_SOURCE_LABELS = {
   "pm-recorded-completed-work-unit": "PMが記録した完了work unit",
 };
 
+const REQUEST_LIFECYCLE_LABELS = {
+  registered: "登録済み",
+  delegated: "委任済み",
+  running: "進行中",
+  blocked: "阻害あり",
+  "handover-waiting": "引継待ち（明示dispatch必要）",
+  reconnectable: "再接続可能（明示dispatch必要）",
+  completed: "完了",
+};
+
+const ISSUE_STATE_LABELS = {
+  open: "Issue open",
+  closed: "Issue closed",
+  unknown: "Issue状態未取得",
+};
+
 export function elapsed(iso, now = Date.now()) {
   const parsed = Date.parse(iso);
   if (!Number.isFinite(parsed)) return "未取得";
@@ -244,6 +260,124 @@ export function selectedAgentAfterRefresh(nodes, preferredAgent) {
   return nodes[0]?.agent || null;
 }
 
+export function selectedRequestAfterRefresh(registry, preferredRequestId) {
+  const requests = registry?.requests || [];
+  if (preferredRequestId && requests.some((request) => request.request_id === preferredRequestId)) {
+    return preferredRequestId;
+  }
+  const pending = requests.filter((request) => request.lifecycle !== "completed");
+  if (!pending.length) return requests[0]?.request_id || null;
+  return (
+    pending.reduce((latest, request) => {
+      if (!latest) return request;
+      const latestClock = Date.parse(latest.report_updated_at);
+      const requestClock = Date.parse(request.report_updated_at);
+      return requestClock > latestClock ? request : latest;
+    }, null)?.request_id || null
+  );
+}
+
+export function requestScopedSnapshot(snapshot, request) {
+  if (!request) return snapshot;
+  const members = new Set(request.member_agents || []);
+  const currentNodes = (snapshot.session_tree?.nodes || []).filter((node) =>
+    members.has(node.agent),
+  );
+  const connectedToCurrent = requestHasCurrentConnection(
+    request,
+    new Set(currentNodes.map((node) => node.agent)),
+    snapshot.request_registry,
+  );
+  if (!connectedToCurrent) {
+    return {
+      ...snapshot,
+      items: [],
+      session_tree: null,
+      known_history: null,
+      request_context: {
+        request_id: request.request_id,
+        scope_id: request.scope_id,
+        current_count: 0,
+        history_count: 0,
+        connection_confirmed: false,
+        runtime_connection: request.runtime_connection,
+      },
+    };
+  }
+  const currentAgents = new Set(currentNodes.map((node) => node.agent));
+  const historyEntries = (snapshot.known_history?.entries || []).filter(
+    (entry) => members.has(entry.agent) && !currentAgents.has(entry.agent),
+  );
+  const visibleAgents = new Set([
+    ...currentNodes.map((node) => node.agent),
+    ...historyEntries.map((entry) => entry.agent),
+  ]);
+  const scopedTree = snapshot.session_tree
+    ? {
+        ...snapshot.session_tree,
+        root_agent:
+          currentNodes.find((node) => node.agent === snapshot.session_tree.root_agent)?.agent ||
+          currentNodes[0]?.agent ||
+          historyEntries[0]?.agent ||
+          snapshot.session_tree.root_agent,
+        nodes: currentNodes,
+        covered_agents: snapshot.session_tree.covered_agents.filter((agent) =>
+          currentAgents.has(agent),
+        ),
+      }
+    : null;
+  return {
+    ...snapshot,
+    items: snapshot.items.filter((item) => visibleAgents.has(item.agent)),
+    session_tree: scopedTree,
+    known_history: snapshot.known_history
+      ? { ...snapshot.known_history, entries: historyEntries }
+      : null,
+    request_context: {
+      request_id: request.request_id,
+      scope_id: request.scope_id,
+      current_count: currentNodes.length,
+      history_count: historyEntries.length,
+      connection_confirmed: true,
+      runtime_connection: request.runtime_connection,
+    },
+  };
+}
+
+export function requestConnectionDescription(request, currentAgents, registry) {
+  const hasCurrent = (request.member_agents || []).some((agent) => currentAgents.has(agent));
+  if (request.runtime_connection === "connected" && hasCurrent) {
+    if (!requestHasCurrentConnection(request, currentAgents, registry)) {
+      return "connected旧観測 / 引継確認待ち（現在接続を示しません）";
+    }
+    return "registry connected記録 / current tree対応aliasあり（現在接続を確認）";
+  }
+  if (request.runtime_connection === "connected") {
+    return "registry connected記録 / current tree対応aliasなし";
+  }
+  if (request.runtime_connection === "record-only") {
+    return "記録のみ（現在接続を示しません）";
+  }
+  return "接続状態未取得（現在接続を示しません）";
+}
+
+export function requestHasCurrentConnection(request, currentAgents, registry) {
+  if (
+    request.runtime_connection !== "connected" ||
+    !(request.member_agents || []).some((agent) => currentAgents.has(agent))
+  ) {
+    return false;
+  }
+  if (registry?.handover?.state !== "accepted") return true;
+  const runtimeClock = Date.parse(request.runtime_observed_at);
+  const claimClock = Date.parse(registry.active_front_desk.claimed_at);
+  return Number.isFinite(runtimeClock) && Number.isFinite(claimClock) && runtimeClock >= claimClock;
+}
+
+export function requestLifecycleDescription(lifecycle) {
+  return REQUEST_LIFECYCLE_LABELS[lifecycle] || lifecycle || "登録状態未取得";
+}
+
 export function treePanState(scrollLeft, clientWidth, scrollWidth) {
   const max = Math.max(0, scrollWidth - clientWidth);
   return {
@@ -294,6 +428,21 @@ function optionalLink(label, url) {
   node.href = url;
   node.rel = "noopener noreferrer";
   return node;
+}
+
+function evidenceLinks(evidence) {
+  if (!evidence?.length) return "未報告";
+  const container = document.createElement("span");
+  evidence.forEach((entry, index) => {
+    if (index) container.append(document.createTextNode(" / "));
+    const link = optionalLink(entry.kind || "証跡", entry.url);
+    if (typeof Node !== "undefined" && link instanceof Node) container.append(link);
+    else container.append(document.createTextNode(link));
+    if (entry.observed_at) {
+      container.append(document.createTextNode(`（${dated(entry.observed_at)}）`));
+    }
+  });
+  return container;
 }
 
 const nodeLabel = (node) => node.item?.owner_label || node.agent;
@@ -358,6 +507,135 @@ function renderDetail(node, allItems) {
   target.append(dl);
 }
 
+let selectedRequestId = null;
+let latestSnapshot = null;
+
+function renderRequestRegistry(snapshot) {
+  const section = document.querySelector("#request-registry");
+  const registry = snapshot.request_registry;
+  if (!registry) {
+    section.hidden = true;
+    selectedRequestId = null;
+    return null;
+  }
+  section.hidden = false;
+  const focusedRequestId =
+    document.activeElement?.closest?.(".request-selector")?.dataset.requestId || null;
+  selectedRequestId = selectedRequestAfterRefresh(registry, selectedRequestId);
+  document.querySelector("#request-registry-updated").textContent =
+    `registry更新 ${dated(registry.updated_at)}`;
+  const registryMeta = document.querySelector("#request-registry-meta");
+  registryMeta.replaceChildren();
+  metaRow(registryMeta, "世代", String(registry.generation));
+  metaRow(
+    registryMeta,
+    "登録の出所",
+    registry.source === "manual-public-registry" ? "手動公開registry" : "未取得",
+  );
+  metaRow(registryMeta, "active Front Desk", registry.active_front_desk.alias);
+  metaRow(registryMeta, "Front Desk claim", dated(registry.active_front_desk.claimed_at));
+  metaRow(
+    registryMeta,
+    "active runtime binding",
+    registry.active_front_desk.runtime_session_id || "未取得",
+  );
+  metaRow(
+    registryMeta,
+    "active runtime観測",
+    dated(registry.active_front_desk.runtime_observed_at),
+  );
+  const handover = document.querySelector("#request-handover");
+  if (registry.handover) {
+    handover.hidden = false;
+    handover.textContent =
+      registry.handover.state === "ready"
+        ? `引継待ち: ${registry.handover.from_front_desk} → ${registry.handover.to_front_desk}。準備済みですが稼働中を示しません。再開には明示dispatchが必要です。`
+        : `引継accepted: ${registry.handover.from_front_desk} → ${registry.handover.to_front_desk}。再開には明示dispatchが必要です。`;
+  } else {
+    handover.hidden = true;
+    handover.textContent = "";
+  }
+  const currentAgents = new Set(snapshot.session_tree?.nodes?.map((node) => node.agent) || []);
+  const list = document.querySelector("#request-list");
+  list.replaceChildren();
+  for (const request of registry.requests) {
+    const card = document.createElement("article");
+    card.className = "request-card";
+    card.setAttribute("role", "listitem");
+    const selector = document.createElement("button");
+    selector.type = "button";
+    selector.className = "request-selector";
+    selector.dataset.requestId = request.request_id;
+    selector.setAttribute("aria-pressed", String(request.request_id === selectedRequestId));
+    selector.setAttribute("aria-label", `${request.public_title}を選択`);
+    selector.append(
+      text("span", `${request.request_id} / ${request.scope_id}`, "request-selector-id"),
+      text("span", requestLifecycleDescription(request.lifecycle), "request-selector-state"),
+      text("span", request.public_title, "request-selector-title"),
+      text("span", request.public_purpose, "request-selector-purpose"),
+    );
+    selector.addEventListener("click", () => {
+      selectedRequestId = request.request_id;
+      for (const candidate of list.querySelectorAll(".request-selector")) {
+        candidate.setAttribute(
+          "aria-pressed",
+          String(candidate.dataset.requestId === selectedRequestId),
+        );
+      }
+      renderTreeArea(latestSnapshot, request);
+    });
+    const dl = document.createElement("dl");
+    dl.className = "request-card-meta";
+    metaRow(dl, "受入条件", request.acceptance_summary);
+    metaRow(dl, "owner alias", request.owner_agent || "未報告");
+    metaRow(dl, "member aliases", request.member_agents.join(", ") || "未報告");
+    metaRow(dl, "登録状態", requestLifecycleDescription(request.lifecycle));
+    metaRow(dl, "確認済み進捗", request.progress_summary || "未報告");
+    metaRow(dl, "阻害", request.blocker || "未報告");
+    metaRow(dl, "最終報告", dated(request.report_updated_at));
+    metaRow(
+      dl,
+      "報告の出所",
+      request.report_source === "manual-public-summary" ? "手動公開summary" : "未取得",
+    );
+    metaRow(dl, "次手", request.next_action || "未報告");
+    metaRow(
+      dl,
+      "Issue",
+      request.issue_url
+        ? optionalLink(ISSUE_STATE_LABELS[request.issue_state], request.issue_url)
+        : "—",
+    );
+    metaRow(dl, "Issue確認", request.issue_observation === "confirmed" ? "確認済み" : "取得不能");
+    metaRow(
+      dl,
+      "依頼根拠",
+      request.authority_source === "github-issue-observation" ? "GitHub Issue観測" : "未取得",
+    );
+    metaRow(dl, "Issue状態観測", dated(request.issue_observed_at));
+    metaRow(
+      dl,
+      "runtime connection",
+      requestConnectionDescription(request, currentAgents, registry),
+    );
+    metaRow(dl, "runtime観測", dated(request.runtime_observed_at));
+    metaRow(dl, "証跡", evidenceLinks(request.evidence));
+    card.append(selector, dl);
+    list.append(card);
+  }
+  if (!registry.requests.length) list.append(text("p", "登録済み依頼はありません。", "empty"));
+  if (focusedRequestId) {
+    const restored = [...list.querySelectorAll(".request-selector")].find(
+      (selector) => selector.dataset.requestId === focusedRequestId,
+    );
+    const selected = [...list.querySelectorAll(".request-selector")].find(
+      (selector) => selector.dataset.requestId === selectedRequestId,
+    );
+    (restored || selected)?.focus({ preventScroll: true });
+  }
+  return registry.requests.find((request) => request.request_id === selectedRequestId) || null;
+}
+
 function renderTree(snapshot) {
   const svg = document.querySelector("#session-tree");
   const detail = document.querySelector("#node-detail");
@@ -367,9 +645,31 @@ function renderTree(snapshot) {
   treeMeta.replaceChildren();
   const description = sessionTreeDescription(snapshot.session_tree);
   if (!description.valid) {
-    document.querySelector("#tree-coverage").textContent = "current tree 未取得";
-    detail.textContent = "このscopeのcurrent session treeは未取得です。";
+    document.querySelector("#tree-coverage").textContent = snapshot.request_context
+      ? "選択依頼のcurrent tree 非適用"
+      : "current tree 未取得";
+    detail.textContent = snapshot.request_context
+      ? "選択依頼は現在接続を確認できないため、最新treeと履歴を適用していません。registryの記録だけを表示しています。"
+      : "このscopeのcurrent session treeは未取得です。";
     for (const name of ["対象範囲", "treeの出所", "tree観測"]) metaRow(treeMeta, name, "未取得");
+    if (snapshot.request_context) {
+      metaRow(
+        treeMeta,
+        "選択依頼",
+        `${snapshot.request_context.request_id} / scope_id ${snapshot.request_context.scope_id}`,
+      );
+      metaRow(
+        treeMeta,
+        "現在接続",
+        snapshot.request_context.runtime_connection === "record-only"
+          ? "記録のみ（最新tree・履歴非適用）"
+          : "現在の接続なし／未確認",
+      );
+    }
+    svg.setAttribute("viewBox", "0 0 600 170");
+    svg.setAttribute("width", "600");
+    svg.setAttribute("height", "170");
+    updateTreePanControls();
     return;
   }
   const tree = snapshot.session_tree;
@@ -383,6 +683,22 @@ function renderTree(snapshot) {
   metaRow(treeMeta, "対象範囲", description.scope);
   metaRow(treeMeta, "treeの出所", description.source);
   metaRow(treeMeta, "tree観測", dated(description.observedAt));
+  if (snapshot.request_context) {
+    metaRow(
+      treeMeta,
+      "選択依頼",
+      `${snapshot.request_context.request_id} / scope_id ${snapshot.request_context.scope_id}`,
+    );
+    metaRow(
+      treeMeta,
+      "現在接続",
+      snapshot.request_context.connection_confirmed
+        ? "current tree対応aliasあり（現在接続を確認）"
+        : snapshot.request_context.runtime_connection === "record-only"
+          ? "記録のみ（現在接続を示しません）"
+          : "現在の接続なし／未確認",
+    );
+  }
   metaRow(
     treeMeta,
     "既知履歴",
@@ -391,7 +707,13 @@ function renderTree(snapshot) {
       : "未取得",
   );
   if (!nodes.length) {
-    detail.textContent = "表示できるnodeがありません。";
+    svg.setAttribute("viewBox", "0 0 600 170");
+    svg.setAttribute("width", "600");
+    svg.setAttribute("height", "170");
+    updateTreePanControls();
+    detail.textContent = snapshot.request_context
+      ? "選択依頼に対応するcurrent・履歴aliasはありません。registry記録だけを表示しています。"
+      : "表示できるnodeがありません。";
     return;
   }
   const width = Math.max(600, ...nodes.map((node) => node.x + 216));
@@ -498,7 +820,28 @@ function renderTree(snapshot) {
   }
 }
 
+function renderTreeArea(snapshot, request) {
+  const scoped = requestScopedSnapshot(snapshot, request);
+  const taskSummary = summarizeItems(scoped.items);
+  document.querySelector("#task-total").textContent = request
+    ? `選択依頼の公開担当行 ${taskSummary.total}件（current node・履歴とは別）`
+    : `公開タスク行 ${taskSummary.total}件（current node・履歴とは別）`;
+  const statusCounts = document.querySelector("#status-counts");
+  statusCounts.replaceChildren();
+  for (const entry of taskSummary.statuses) {
+    statusCounts.append(text("li", `${statusDescription(entry.status)} ${entry.count}件`));
+  }
+  document.querySelector("#tree-note").textContent = request
+    ? scoped.request_context.connection_confirmed
+      ? "現在接続を確認した選択依頼のmember_agentsと、保存済みcurrent・既知履歴aliasの一致だけを表示します。別依頼の同名行や人数は合算しません。"
+      : "選択依頼は現在接続を確認できないため、最新tree・履歴を適用しません。registryの公開summaryと時計だけを参照してください。"
+    : "current sessionの全nodeです。履歴は破線で接続し、現在の人数には数えません。図だけ横へ動かせます。";
+  renderTree(scoped);
+}
+
 function render(snapshot) {
+  latestSnapshot = snapshot;
+  const selectedRequest = renderRequestRegistry(snapshot);
   const [sourceLabel, sourceNote] = sourceDescription(snapshot.source);
   const notice = document.querySelector(".notice");
   const hasStaleItem = snapshot.items.some((item) => item.stale);
@@ -548,15 +891,7 @@ function render(snapshot) {
   const capacityMeta = document.querySelector("#capacity-meta");
   capacityMeta.replaceChildren();
   for (const [name, value] of capacity.rows) metaRow(capacityMeta, name, value);
-  const taskSummary = summarizeItems(snapshot.items);
-  document.querySelector("#task-total").textContent =
-    `公開タスク行 ${taskSummary.total}件（current node・履歴とは別）`;
-  const statusCounts = document.querySelector("#status-counts");
-  statusCounts.replaceChildren();
-  for (const entry of taskSummary.statuses) {
-    statusCounts.append(text("li", `${statusDescription(entry.status)} ${entry.count}件`));
-  }
-  renderTree(snapshot);
+  renderTreeArea(snapshot, selectedRequest);
 }
 
 async function refresh() {

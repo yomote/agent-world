@@ -11,8 +11,13 @@ import {
   parentDescription,
   parentSourceDescription,
   relationshipEdges,
+  requestConnectionDescription,
+  requestHasCurrentConnection,
+  requestLifecycleDescription,
+  requestScopedSnapshot,
   sessionTreeDescription,
   selectedAgentAfterRefresh,
+  selectedRequestAfterRefresh,
   sourceDescription,
   statusDescription,
   summarizeItems,
@@ -261,12 +266,12 @@ test("旧refresh・stale・focus・時計・linkとkeyboard操作を実装に保
   }
 });
 
-test("asset queryはJS/CSSを同じv5へ更新し図だけpan可能にする", async () => {
+test("asset queryはJS/CSSを同じv6へ更新し図だけpan可能にする", async () => {
   // 旧cacheの片方だけが残ることと390px page overflowの再発を防ぐ。
   const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../../docs/status/status.css", import.meta.url), "utf8");
-  assert.match(html, /status\.css\?v=5/);
-  assert.match(html, /status\.js\?v=5/);
+  assert.match(html, /status\.css\?v=6/);
+  assert.match(html, /status\.js\?v=6/);
   assert.match(css, /\.tree-scroll\s*{[^}]*overflow:\s*auto/s);
   assert.match(css, /width:\s*calc\(100vw - 24px\)/);
 });
@@ -277,8 +282,8 @@ test("公開task件数と状態内訳をtree node・履歴・capacityから分�
   const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
   assert.match(html, /id="task-total"[^>]*>公開タスク行/);
   assert.match(html, /id="status-counts"/);
-  assert.match(source, /summarizeItems\(snapshot\.items\)/);
-  assert.match(source, /公開タスク行.*current node・履歴とは別/);
+  assert.match(source, /summarizeItems\(scoped\.items\)/);
+  assert.match(source, /公開(?:タスク行|担当行).*current node・履歴とは別/);
 });
 
 test("容量metricはruntime turn観測でtask数・進捗・実作業人数と別だと明示する", () => {
@@ -332,4 +337,167 @@ test("tree pan controlsを同じscroll containerへ接続する", async () => {
   assert.match(source, /#tree-pan-left"\)\.addEventListener\("click", \(\) => panTree\(-1\)\)/);
   assert.match(source, /#tree-pan-right"\)\.addEventListener\("click", \(\) => panTree\(1\)\)/);
   assert.match(source, /#tree-scroll"\)\.addEventListener\("scroll", updateTreePanControls\)/);
+});
+
+const registrySnapshot = {
+  items: [
+    { agent: "front-desk", status: "running" },
+    { agent: "status-owner", status: "running" },
+    { agent: "other-request", status: "running" },
+  ],
+  session_tree: {
+    scope: "root session tree",
+    observed_at: "2026-09-13T04:00:00Z",
+    source: "runtime-list-agents-metadata",
+    root_agent: "front-desk",
+    nodes: [
+      { agent: "front-desk", parent_agent: null },
+      { agent: "status-owner", parent_agent: "front-desk" },
+      { agent: "other-request", parent_agent: "front-desk" },
+    ],
+    covered_agents: ["front-desk", "status-owner", "other-request"],
+  },
+  known_history: {
+    recorded_at: "2026-09-13T04:00:00Z",
+    entries: [
+      {
+        agent: "status-owner",
+        parent_agent: "front-desk",
+        status: "completed",
+        source: "pm-recorded-completed-work-unit",
+      },
+      {
+        agent: "old-worker",
+        parent_agent: "front-desk",
+        status: "completed",
+        source: "pm-recorded-completed-work-unit",
+      },
+    ],
+  },
+};
+
+const request59 = {
+  request_id: "request-59",
+  scope_id: "scope-request-59",
+  lifecycle: "completed",
+  member_agents: ["front-desk", "status-owner"],
+  report_updated_at: "2026-09-13T03:45:00Z",
+  runtime_connection: "record-only",
+  runtime_observed_at: "2026-09-13T03:45:00Z",
+};
+
+const request64 = {
+  request_id: "request-64",
+  scope_id: "scope-request-64",
+  lifecycle: "running",
+  member_agents: ["front-desk", "status-owner", "old-worker"],
+  report_updated_at: "2026-09-13T04:00:00Z",
+  runtime_connection: "connected",
+  runtime_observed_at: "2026-09-13T04:00:00Z",
+};
+
+test("default requestは未完の最新報告、全完了なら先頭、選択済みなら維持する", () => {
+  // 配列順や完了済み依頼へ意図せず選択が飛ぶ回帰を防ぐ。
+  const registry = { requests: [request59, request64] };
+  assert.equal(selectedRequestAfterRefresh(registry, null), "request-64");
+  assert.equal(selectedRequestAfterRefresh(registry, "request-59"), "request-59");
+  assert.equal(
+    selectedRequestAfterRefresh(
+      { requests: [request59, { ...request64, lifecycle: "completed" }] },
+      null,
+    ),
+    "request-59",
+  );
+});
+
+test("connected requestだけmember aliasのcurrentと重複しない履歴へscopeする", () => {
+  // 別request行を混ぜたり、同aliasのcurrentとhistoryを二重表示する回帰を防ぐ。
+  const snapshot = {
+    ...registrySnapshot,
+    request_registry: {
+      active_front_desk: { claimed_at: "2026-09-13T04:00:00Z" },
+      requests: [request59, request64],
+    },
+  };
+  const scoped = requestScopedSnapshot(snapshot, request64);
+  assert.deepEqual(
+    scoped.session_tree.nodes.map((node) => node.agent),
+    ["front-desk", "status-owner"],
+  );
+  assert.deepEqual(
+    scoped.known_history.entries.map((entry) => entry.agent),
+    ["old-worker"],
+  );
+  assert.deepEqual(
+    scoped.items.map((item) => item.agent),
+    ["front-desk", "status-owner"],
+  );
+  assert.equal(scoped.request_context.connection_confirmed, true);
+});
+
+test("record-only requestは同aliasがcurrent treeにあっても最新treeと履歴を適用しない", () => {
+  // 完了59と進行64の共有aliasから、過去依頼を現在稼働へ見せる回帰を防ぐ。
+  const snapshot = {
+    ...registrySnapshot,
+    request_registry: { requests: [request59, request64] },
+  };
+  const scoped = requestScopedSnapshot(snapshot, request59);
+  assert.equal(scoped.session_tree, null);
+  assert.equal(scoped.known_history, null);
+  assert.deepEqual(scoped.items, []);
+  assert.equal(scoped.request_context.connection_confirmed, false);
+  assert.match(
+    requestConnectionDescription(
+      request59,
+      new Set(["front-desk", "status-owner"]),
+      snapshot.request_registry,
+    ),
+    /記録のみ.*現在接続を示しません/,
+  );
+});
+
+test("accepted handover後はclaimより古いconnected観測を引継確認待ちにする", () => {
+  // active aliasの移転だけで旧request接続を新contextへ継承する回帰を防ぐ。
+  const registry = {
+    active_front_desk: { claimed_at: "2026-09-13T04:05:00Z" },
+    handover: { state: "accepted" },
+  };
+  const current = new Set(["front-desk", "status-owner"]);
+  assert.equal(requestHasCurrentConnection(request64, current, registry), false);
+  assert.match(requestConnectionDescription(request64, current, registry), /旧観測.*引継確認待ち/);
+  const refreshed = { ...request64, runtime_observed_at: "2026-09-13T04:06:00Z" };
+  assert.equal(requestHasCurrentConnection(refreshed, current, registry), true);
+  assert.match(requestConnectionDescription(refreshed, current, registry), /現在接続を確認/);
+});
+
+test("handover待ちとreconnectableを稼働扱いせず明示dispatch必要と示す", () => {
+  // 再開可能な登録状態をworker自動再開やrunningへ格上げする回帰を防ぐ。
+  assert.match(requestLifecycleDescription("handover-waiting"), /引継待ち.*明示dispatch必要/);
+  assert.match(requestLifecycleDescription("reconnectable"), /再接続可能.*明示dispatch必要/);
+});
+
+test("registry nullは従来snapshotをそのままtreeへ渡す", () => {
+  // request_registry未導入snapshotの既存画面を空scopeへ変える回帰を防ぐ。
+  assert.equal(requestScopedSnapshot(registrySnapshot, null), registrySnapshot);
+  assert.equal(selectedRequestAfterRefresh(null, "request-64"), null);
+});
+
+test("依頼一覧は登録状態・Issue観測・runtime時計を分離しnative selectorを使う", async () => {
+  // registryの手動記録をruntime観測へ混ぜ、handover readyを稼働表示する回帰を防ぐ。
+  const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  assert.match(html, /id="request-registry"[^>]*hidden/s);
+  assert.match(html, /id="request-list"/);
+  assert.ok(html.indexOf('id="health"') < html.indexOf('id="request-registry"'));
+  assert.ok(html.indexOf('id="request-registry"') < html.indexOf('id="focus-title"'));
+  assert.ok(html.indexOf('id="request-registry"') < html.indexOf('id="capacity-title"'));
+  assert.match(source, /selector\.type = "button"/);
+  assert.match(source, /"登録状態"/);
+  assert.match(source, /"Issue確認"/);
+  assert.match(source, /"Issue状態観測"/);
+  assert.match(source, /"runtime connection"/);
+  assert.match(source, /"runtime観測"/);
+  assert.match(source, /準備済みですが稼働中を示しません。再開には明示dispatchが必要/);
+  assert.match(source, /focusedRequestId/);
+  assert.match(source, /\(restored \|\| selected\)\?\.focus/);
 });
