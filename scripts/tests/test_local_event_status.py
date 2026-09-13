@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from ops_status.api import create_app
 from ops_status.models import StatusSnapshot
 from ops_status.store import FileSnapshotStore
+
 from scripts.publish_status_snapshot import publish_if_new
 
 ROOT = Path(__file__).parents[2]
