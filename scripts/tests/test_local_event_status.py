@@ -1,8 +1,16 @@
+import argparse
+import hashlib
 import json
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+from fastapi.testclient import TestClient
+from ops_status.api import create_app
+from ops_status.models import StatusSnapshot
+from ops_status.store import FileSnapshotStore
+from scripts.publish_status_snapshot import publish_if_new
 
 ROOT = Path(__file__).parents[2]
 
@@ -56,7 +64,13 @@ def config(path: Path, runtime_capacity: dict | None = None) -> None:
     )
 
 
-def run(config_path: Path, sessions: Path, output: Path, compat_v1: bool = False):
+def run(
+    config_path: Path,
+    sessions: Path,
+    output: Path,
+    compat_v1: bool = False,
+    claim_marker: Path | None = None,
+):
     command = [
         sys.executable,
         str(ROOT / "scripts" / "sync_status_from_local_events.py"),
@@ -69,12 +83,114 @@ def run(config_path: Path, sessions: Path, output: Path, compat_v1: bool = False
     ]
     if compat_v1:
         command.append("--compat-v1")
+    if claim_marker is not None:
+        command.extend(["--claim-marker", str(claim_marker)])
     return subprocess.run(
         command,
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
+    )
+
+
+def test_sync_automatically_binds_status_to_successful_claim_marker(tmp_path):
+    """claim後に利用者のJSON手編集なしでpublisherが受理できるpayloadを作る。"""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    record(
+        sessions / "worker.jsonl",
+        "/root/worker",
+        [("2026-09-06T12:00:01Z", "task_started")],
+    )
+    config_path = tmp_path / "config.json"
+    config(config_path)
+    marker_path = tmp_path / "handoff-claim.local.json"
+    marker_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "locator_digest": "sha256:" + "a" * 64,
+                "bundle_digest": "sha256:" + "b" * 64,
+                "generation": 6,
+                "active_front_desk": "front-desk-2",
+                "runtime_session_id": "root-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "current.json"
+
+    result = run(config_path, sessions, output, claim_marker=marker_path)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["runtime_binding"] == {
+        "registry_generation": 6,
+        "front_desk_alias": "front-desk-2",
+        "runtime_session_digest": "sha256:" + hashlib.sha256(b"root-1").hexdigest(),
+    }
+    assert '"runtime_session_id"' not in output.read_text(encoding="utf-8")
+
+    server_data = json.loads(
+        (ROOT / "scripts/tests/fixtures/request_registry_status.json").read_text(encoding="utf-8")
+    )
+    server_data.update(
+        {
+            "source": "ingest-upsert",
+            "observed_at": "2026-09-06T12:00:00Z",
+            "received_at": "2026-09-06T12:00:00Z",
+            "items": [],
+            "runtime_capacity": None,
+            "focus_summary": None,
+            "session_tree": None,
+            "known_history": None,
+        }
+    )
+    registry = server_data["request_registry"]
+    registry["generation"] = 6
+    registry["updated_at"] = "2026-09-06T12:00:00Z"
+    registry["active_front_desk"] = {
+        "alias": "front-desk-2",
+        "claimed_at": "2026-09-06T12:00:00Z",
+        "claim_generation": 6,
+        "runtime_session_id": "root-1",
+        "runtime_observed_at": "2026-09-06T12:00:00Z",
+    }
+    registry["handover"] = {
+        "state": "accepted",
+        "from_front_desk": "front-desk-1",
+        "to_front_desk": "front-desk-2",
+        "bundle_digest": "sha256:" + "b" * 64,
+        "prepared_at": "2026-09-06T11:59:00Z",
+        "accepted_at": "2026-09-06T12:00:00Z",
+        "resume_policy": "explicit-dispatch-required",
+    }
+    store = FileSnapshotStore(tmp_path / "server.json")
+    store.write(StatusSnapshot.model_validate(server_data))
+    client = TestClient(create_app(store))
+    publish_args = argparse.Namespace(
+        base_url="https://status.example.test",
+        audience="api://status",
+        ingest_client_id="ingest-client",
+        snapshot=output,
+        state=tmp_path / "publish-state.json",
+    )
+
+    def send(url: str, _token: str, body: bytes) -> int:
+        assert url.endswith("/api/status/upsert")
+        response = client.put(
+            "/api/status/upsert",
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 200, response.json()
+        return response.status_code
+
+    assert publish_if_new(publish_args, lambda *_: "token", send) is True
+    assert (
+        store.read().runtime_binding.runtime_session_digest
+        == payload["runtime_binding"]["runtime_session_digest"]
     )
 
 

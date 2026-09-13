@@ -1,6 +1,7 @@
 import hashlib
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,7 +18,10 @@ from scripts.manage_status_registry import (
     read_registry,
     root_runtime_session_id,
 )
-from scripts.sync_status_from_local_events import snapshot_payload
+from scripts.sync_status_from_local_events import (
+    runtime_binding_from_claim_marker,
+    snapshot_payload,
+)
 
 
 def registry(at: datetime) -> dict:
@@ -97,6 +101,26 @@ def test_root_runtime_binding_uses_thread_id_and_rejects_child_or_missing_proven
         )
     with pytest.raises(ValueError, match="canonical task path"):
         root_runtime_session_id({"CODEX_THREAD_ID": root, "CODEX_SESSION_ID": child}, "/root")
+
+
+def test_cli_rejects_raw_runtime_claim_path():
+    """runtime provenance検査を生のCLI引数で迂回する回帰を防ぐ。"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parents[1] / "manage_status_registry.py"),
+            "claim",
+            "--runtime-session-id",
+            "unverified-runtime",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr
+    assert "claim-root" in result.stderr
 
 
 def test_claim_rejects_tampered_or_wrong_successor(tmp_path):
@@ -355,5 +379,9 @@ def test_mark_claimed_requires_success_receipt_before_disabling_locator(tmp_path
         (tmp_path / "repo/.codex/handoff-claim.local.json").read_text(encoding="utf-8")
     )
     assert marker["runtime_session_id"] == "runtime-new"
+    assert (
+        runtime_binding_from_claim_marker(tmp_path / "repo/.codex/handoff-claim.local.json")
+        == result["runtime_binding"]
+    )
     with pytest.raises(ValueError, match="successful claim marker"):
         discover(locator_path, tmp_path / "repo")

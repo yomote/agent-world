@@ -10,7 +10,7 @@ registry更新は既存Status.Ingest principalの`PUT /api/status/requests/upser
 
 handoverはprepareとclaimに分ける。prepareはactive Front Deskとworker状態を変えず、後継logical alias、generation、bundle digestをready状態へ保存する。claimはnamed successor、expected generation、digestの全一致時だけactive Front Deskを移す。runtime IDは新context開始後にruntime metadataから検証してclaimへ結び、logical aliasと混同しない。claimと同じBlob ETag CASで旧rootのcurrent items、capacity、focus、treeを無効化し、完了履歴は別記録として保持する。未完依頼は`handover-waiting`かつ`record-only`へ移し、進捗・証跡を保持したままworkerの明示dispatchを待つ。
 
-claim後のstatus更新はclaim済みgeneration、active alias、root runtime IDのSHA-256 digestをserver側で照合する。partial upsertとfull PUTの両方へ適用し、bindingのない保存済みschema version 1は読めてもcurrent表示へは使わない。公開GETはraw runtime IDとdigestを除き、alias、generation、binding検証結果だけを返す。
+claim後のstatus更新はowner移転時だけ変わるclaim generation、active alias、root runtime IDのSHA-256 digestをserver側で照合する。通常の依頼更新で増えるregistry generationとは分離する。partial upsertとfull PUTの両方へ適用し、bindingのない保存済みschema version 1は読めてもcurrent表示へは使わない。旧snapshotのaccepted handoverは成功markerのgenerationが現在generation以下でalias、runtime digest、claim clockが一致する場合だけ移行入力を受ける。公開GETはraw runtime IDとdigestを除き、alias、generation、binding検証結果だけを返す。
 
 ## Bundleの決定形式
 

@@ -580,12 +580,6 @@ def main() -> None:
     prepare_parser.add_argument("--successor", required=True)
     prepare_parser.add_argument("--observed-at", required=True)
     prepare_parser.add_argument("--output", type=Path, required=True)
-    claim_parser = subparsers.add_parser("claim")
-    claim_parser.add_argument("--bundle", type=Path, required=True)
-    claim_parser.add_argument("--actor", required=True)
-    claim_parser.add_argument("--observed-at", required=True)
-    claim_parser.add_argument("--runtime-session-id", required=True)
-    claim_parser.add_argument("--output", type=Path, required=True)
     claim_root_parser = subparsers.add_parser("claim-root")
     claim_root_parser.add_argument("--bundle", type=Path, required=True)
     claim_root_parser.add_argument("--actor", required=True)
@@ -603,8 +597,6 @@ def main() -> None:
         result = mark_claimed(args.locator, args.claim_payload, args.receipt, args.project_root)
     elif args.command == "prepare":
         result = prepare(args.registry, args.successor, args.observed_at)
-    elif args.command == "claim":
-        result = claim(args.bundle, args.actor, args.observed_at, args.runtime_session_id)
     else:
         result = claim_root(args.bundle, args.actor, args.observed_at, args.canonical_task_path)
     args.output.write_text(

@@ -298,6 +298,7 @@ class FrontDeskClaim(BaseModel):
 
     alias: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
     claimed_at: AwareDatetime
+    claim_generation: int | None = Field(default=None, ge=1)
     runtime_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     runtime_observed_at: AwareDatetime | None = None
 

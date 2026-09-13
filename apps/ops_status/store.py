@@ -166,7 +166,17 @@ def status_response(snapshot: StatusSnapshot, now: datetime | None = None) -> St
             binding = snapshot.runtime_binding
             runtime_binding_verified = bool(
                 binding
-                and binding.registry_generation == registry.generation
+                and (
+                    binding.registry_generation == active.claim_generation
+                    or (
+                        active.claim_generation is None
+                        and registry.handover is not None
+                        and registry.handover.state == "accepted"
+                        and registry.handover.to_front_desk == active.alias
+                        and registry.handover.accepted_at == active.claimed_at
+                        and binding.registry_generation <= registry.generation
+                    )
+                )
                 and binding.front_desk_alias == active.alias
                 and binding.runtime_session_digest == expected_digest
             )

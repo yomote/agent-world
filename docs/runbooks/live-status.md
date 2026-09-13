@@ -65,7 +65,7 @@ writerは検証済みsnapshotを一時fileからrenameして置き換える。�
 
 Azure版の`PUT /api/status/upsert`は`local-event-record`のrequestを受け、`agent`が一致する完全なwork itemだけを置換し、新しい`agent`は末尾へ追加する。未指定rowと、省略した`runtime_capacity`はserver側で保持する。capacityは非null値を明示した場合だけ置換する。保存snapshotのsourceは`ingest-upsert`となり、保持した手動rowまで新しいeventから自動取得したとは表示しない。古いrow/capacity観測、重複agent、未初期化snapshot、Blob ETag競合は409で停止する。receiptは今回指定した保存済みrow、指定したcapacity、変更有無、opaque revisionだけで、保持した他rowやsnapshot全体をingestへ返さない。同内容は保存時刻を更新せずno-opにする。
 
-Front Desk claim後のpartial/full status更新は、claim成功receiptで確認したregistry generation、active alias、root runtime IDのSHA-256 digestを`runtime_binding`として送る。serverは保存済みregistryと3値を照合し、旧root、child、古いgenerationからの更新を409にする。claimはregistry移転と同じBlob ETag CASで旧`items`、`runtime_capacity`、`focus_summary`、`session_tree`、bindingを無効化し、完了履歴はcurrentとは別に保持する。通信結果不明、409、503、timeoutでは再送、marker更新、dispatchを行わない。
+Front Desk claim後のpartial/full status更新は、local event collectorが成功markerからowner claim generation、active alias、root runtime IDのSHA-256 digestを`runtime_binding`として自動付与する。serverは保存済みowner epochと3値を照合し、旧root、child、古いclaimからの更新を409にする。通常の依頼registry更新ではowner epochを変えない。claimはregistry移転と同じBlob ETag CASで旧`items`、`runtime_capacity`、`focus_summary`、`session_tree`、bindingを無効化し、完了履歴はcurrentとは別に保持する。通信結果不明、409、503、timeoutでは再送、marker更新、dispatchを行わない。
 
 公開GETはraw runtime IDとdigestを返さず、active runtimeの有無とbinding検証結果だけを返す。画面はalias、generation、検証状態を表示し、binding欠落・不一致では旧current表示を隠す。binding fieldがない保存済みschema version 1 snapshotも読取可能だが、active runtimeがある場合は未確認としてcurrent表示へ使わない。
 

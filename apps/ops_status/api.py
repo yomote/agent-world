@@ -268,6 +268,7 @@ def apply_registry_update(
             active_front_desk=FrontDeskClaim(
                 alias=update.actor_front_desk,
                 claimed_at=update.observed_at,
+                claim_generation=1,
                 runtime_session_id=update.actor_runtime_session_id,
                 runtime_observed_at=(
                     update.observed_at if update.actor_runtime_session_id is not None else None
@@ -335,6 +336,7 @@ def apply_registry_update(
         active = FrontDeskClaim(
             alias=update.actor_front_desk,
             claimed_at=update.observed_at,
+            claim_generation=current.generation + 1,
             runtime_session_id=update.actor_runtime_session_id,
             runtime_observed_at=(
                 update.observed_at if update.actor_runtime_session_id is not None else None
@@ -396,9 +398,20 @@ def require_active_runtime_binding(
         return
     active = registry.active_front_desk
     expected_digest = f"sha256:{hashlib.sha256(active.runtime_session_id.encode()).hexdigest()}"
+    legacy_claim = (
+        active.claim_generation is None
+        and registry.handover is not None
+        and registry.handover.state == "accepted"
+        and registry.handover.to_front_desk == active.alias
+        and registry.handover.accepted_at == active.claimed_at
+    )
+    generation_matches = binding is not None and (
+        binding.registry_generation == active.claim_generation
+        or (legacy_claim and binding.registry_generation <= registry.generation)
+    )
     if (
         binding is None
-        or binding.registry_generation != registry.generation
+        or not generation_matches
         or binding.front_desk_alias != active.alias
         or binding.runtime_session_digest != expected_digest
     ):

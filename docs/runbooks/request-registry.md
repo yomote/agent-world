@@ -77,7 +77,7 @@ operatorが取得済みのregistry JSONから公開用の復元一覧を確認�
    `python scripts/manage_status_registry.py claim-root --bundle handover.json --actor front-desk-next --canonical-task-path <delegated-worker-path> --observed-at <ISO8601> --output claim.json`
 
 5. claim payloadを1回送る。stale generation、別successor、digest不一致、二重claimは409で停止する。旧workerを再起動せず、registryにあるIssue、次手、証跡を復元して明示dispatchを待つ。
-6. 成功receiptのgeneration、active alias、runtime ID、from/to、digest、`changed=true`を送信payloadとexact照合する。成功時だけmarkerを保存して明示dispatchへ進む。status publisherはそのgeneration、alias、runtime IDのSHA-256 digestを`runtime_binding`として毎回送り、raw runtime IDは公開GETや画面へ出さない。prepare bundleへ未知のruntime IDを作らない。
+6. 成功receiptのgeneration、active alias、runtime ID、from/to、digest、`changed=true`を送信payloadとexact照合する。成功時だけmarkerを保存して明示dispatchへ進む。local event collectorは既定の`.codex/handoff-claim.local.json`からclaim generation、alias、runtime IDを読み、runtime IDをSHA-256 digestへ変換した`runtime_binding`を自動付与する。claim generationはowner epochとして通常の依頼更新generationとは別に保持される。raw runtime IDはstatus payload、公開GET、画面へ出さない。prepare bundleへ未知のruntime IDを作らない。
 
 `CODEX_THREAD_ID`とcanonical task pathの検査はruntimeが渡したmetadataの取り違えを防ぐためのprovenance検査であり、APIがrootの真正性を暗号学的に証明するものではない。API側の信頼境界は既存Status.Ingest認証、registry CAS、成功receiptのexact照合である。
 
