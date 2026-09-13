@@ -13,7 +13,11 @@ Reactのbuild成果をFastAPIが配信する単一imageをAzure Container Apps C
 
 初回coreはinternal ingressで作り、Entra registration、本人assignment、Easy Auth actualを確認した後だけexternalへ切り替える。external切替直後の未認証拒否smokeまでを初回公開とする。
 
+既存coreへのfull Bicep再適用がprovider既定値、reference式、配列順序を複数の`Modify`として示す場合、初回公開はEntra callbackとContainer App ingressだけをactual比較付きの専用scriptで変更する。公開前後のauth、image digest、UAMI、Key Vault参照とContainer Appの残構成を固定し、結果不明時は再送しない。ingressがterminalかつexternalと確定した場合だけinternalへ戻し、そのactualを確認してからcallbackを復旧する。
+
 Azure Resource Managerの宣言とactualを直接比較でき、共有state backendを増やさないBicepを採用する。coreはResource Group、Container Apps environment/app、Log Analytics、Key Vault、managed identity、Budgetを管理し、`what-if`をdriftの正本にする。Entra app registrationはMicrosoft Graph資源なのでbootstrap scriptで作り、Bicepの`authConfigs`とread-only検査で期待値を固定する。
+
+専用scriptによる公開成功はBicep drift 0を意味しない。公開後も同じ入力のfull what-ifをprivate保存して公開前の差分と照合し、恒常的なprovider差分は未解消として記録する。広いallowlistで差分を隠さず、snapshot、smoke、post-what-ifを既存の構成図生成・照合へ渡す。
 
 GitHub Actionsはenvironment subjectのOIDCで専用Resource GroupだけのContributorを使う。imageは公開GHCRのdigestで参照し、ACRの固定費とregistry credentialを持たない。本人限定時はsingle-tenant Entra registration、enterprise app assignment必須、Easy Authの本人object ID allowlistを重ねる。client secretはKey Vaultだけに保存し、GitHubへ渡さない。
 

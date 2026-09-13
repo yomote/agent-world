@@ -79,7 +79,43 @@ signed-in userのobject IDは `az ad signed-in-user show --query id -o tsv` か�
   -AllowedUserObjectId <signed-in-user-object-id>
 ```
 
-Entra authのactual設定後、同じcore引数に`-TenantId <tenant-id> -EntraClientId <client-id> -EnableEntraAuth -ExternalIngress`を追加してwhat-ifを確認する。新しいhashの承認後に`-ApprovedWhatIfSha256 <approved-hash> -Apply`を加える。scriptは外部公開前にDirectoryのsingle-tenant registration・本人assignmentと、Easy Authの本人1名allowlist、未認証redirect、HTTPS必須、匿名pathが`/healthz`だけ、他provider無効であるactualを検査する。外部公開deploymentがnonzeroやtimeout相当の応答で終わった場合は再送せず、createに使った同じdeployment名のprovisioning stateを1回読む。Succeeded / Failed / Canceledのterminal stateを確認できた場合だけingress actualを読み、externalなら1回だけ無効化し、internalなら書き込まない。nonterminal、空、読取失敗は`EXTERNAL DEPLOYMENT UNKNOWN`として停止し、後で公開へ変化し得るため、同deploymentとingressのmanual actual確認まで完了を主張しない。公開変更の直後にもHTTPSのhealthと未認証UI/API拒否をsmokeする。FQDN取得またはsmokeが失敗した場合はexternal ingressを1回だけ無効化し、actualを読み、再送せず公開失敗として停止する。
+Entra authのactual設定後、full core templateのwhat-ifは証拠としてprivate保存する。既存resourceのprovider既定値・reference式・配列順序が`Modify`として現れる場合、それらを広いnoise allowlistで無視してcore全体を再適用しない。公開変更は次の専用scriptでEntra app callbackとContainer App ingressの2対象だけに限定する。
+
+```powershell
+./scripts/azure/Publish-AzureExternalIngress.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName rg-agent-world-jpe `
+  -Location japaneast `
+  -AppName <app-name> `
+  -TenantId <tenant-id> `
+  -EntraClientId <client-id> `
+  -AllowedUserObjectId <signed-in-user-object-id> `
+  -Image ghcr.io/yomote/agent-world@sha256:<digest> `
+  -EvidenceDirectory <private-ignored-directory>
+```
+
+`EvidenceDirectory`はrepositoryのignored `artifacts/`配下だけを指定する。scriptはDirectoryのsingle-tenant registration・本人assignmentと、Easy Authの本人1名allowlist、未認証redirect、HTTPS必須、匿名pathが`/healthz`だけ、他provider無効であるactualを検査する。さらにSucceeded状態、UserAssigned identity、単一workerの0.25 vCPU / 0.5 GiB、3 probe、min 0 / max 1、対象RGの`application=agent-world` Key Vault exact 1件とsecret URLを公開前baselineとして固定する。internal FQDNが`<APP_NAME>.internal.<ENVIRONMENT_UNIQUE_ID>.<REGION>.azurecontainerapps.io`のexact形式である場合だけ、同じsuffixからpublic FQDNを組み立てる。callbackをinternalからpublicへexact 1件更新してactual確認した後、公式CLIでingressをexternal、port 8000、transport auto、allow-insecure falseへ1回だけ変更する。公開後はFQDN、image digest、UAMI、Key Vault secret reference、Container Appの残構成、auth全体、callback以外のEntra app構成、本人assignmentが保存beforeと一致することを確認し、HTTPS healthと未認証UI/API拒否をsmokeする。write結果、FQDN、immutable構成、auth、smokeのいずれかが不明または不一致なら、Container Appのprovisioning stateがterminalでexternalと確定した場合だけingressをinternalへ1回戻し、terminalかつactual falseと元のinternal FQDNを確認してからcallbackを元のinternal URLへ戻す。nonterminal/read不能は後からexternalへ変わり得るため`EXTERNAL PUBLICATION UNKNOWN`で停止し、競合するcontainmentやcallback writeを送らない。ingressがterminalかつ元のinternal actualのままならingress writeを追加せずcallbackだけ戻す。各結果が不明なら再送せず停止し、`ingress disable`をinternal復旧の代用にしない。
+
+auth、immutable構成、smokeまで成功した後の`external-after.private.json`保存だけが失敗した場合、公開自体は成功として終了し、再公開しない。warningを記録し、read-only actualからlocal evidenceだけを後で修復する。公開前snapshotを保存できない場合はwrite前に停止する。
+
+専用公開が成功しても、full core templateのdriftが0件になったとは扱わない。同じdigest・Budget・auth・external入力の`FullResourcePayloads` what-ifを公開後にread-onlyで1回保存し、公開前に保存したprovider既定値・reference式・配列順序の差分と照合する。既知差分が恒常的に残る場合はそのまま未解消driftとして記録し、広いallowlistや未確認PASSで隠さない。before/after snapshot、smoke、post-what-ifを既存の構成図JSON/generator照合へ渡すまでactual図の完了としない。
+
+公開に使用したprivate parameter fileをそのまま使い、post-what-ifを削除される一時fileではなく保存する。
+
+```powershell
+$postPlan = 'artifacts/azure-preflight/external-public-post-what-if-full.private.json'
+az deployment sub what-if `
+  --location japaneast `
+  --template-file infra/azure/main.bicep `
+  --parameters '@artifacts/azure-preflight/external-auth-parameters.private.json' `
+  --result-format FullResourcePayloads `
+  --no-pretty-print `
+  --output json |
+  Set-Content -LiteralPath $postPlan -Encoding utf8NoBOM
+Get-FileHash -Algorithm SHA256 -LiteralPath $postPlan
+```
+
+exit code、status、changeType別件数、各resource IDとbefore/afterを、公開前の`external-auth-what-if-full.private.json`と比較する。既知の5 Modifyを無条件にPASSへ変換せず、公開後にも残る差分として記録する。`external-before.private.json`、`external-after.private.json`、smoke結果、post-plan path/hash/drift内訳を`artifacts/azure-preflight/diagram-actual-handoff.private.json`へまとめ、Issue #38 / PR #53が指定する既存JSON/generatorの照合入力へ渡す。raw plan保存済みとactual図更新済みは別statusとして記録する。
 
 途中失敗時は自動再送しない。scriptが出す`clientId`、一意なcredential `displayName`、取得済みなら`keyId`と期限を使い、app registration、enterprise app、Key Vault secret、authConfigのactualを確認してから復旧する。secret値は再取得できない。Key Vault格納前に止まったcredentialはmetadataを確認し、`az ad app credential delete --id <client-id> --key-id <key-id>`で回収する。
 
