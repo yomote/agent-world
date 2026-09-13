@@ -38,6 +38,57 @@ class WorkItem(BaseModel):
     summary_updated_at: AwareDatetime | None = None
     next_action: str | None = Field(default=None, max_length=500)
     blocker: str | None = Field(default=None, max_length=500)
+    parent_relation: Literal["root", "delegated", "unknown"] | None = None
+    parent_agent: str | None = Field(default=None, min_length=1, max_length=80)
+    parent_source: Literal["runtime-canonical-task-path", "explicit-delegation"] | None = None
+    parent_observed_at: AwareDatetime | None = None
+    instruction_summary: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def check_parent_relation(self) -> "WorkItem":
+        if self.instruction_summary is not None and self.summary_updated_at is None:
+            raise ValueError("instruction_summary needs summary_updated_at")
+        if self.parent_agent == self.agent:
+            raise ValueError("agent cannot delegate to itself")
+        if self.parent_relation is None:
+            if any(
+                value is not None
+                for value in (self.parent_agent, self.parent_source, self.parent_observed_at)
+            ):
+                raise ValueError("parent fields need parent_relation")
+            return self
+        if self.parent_relation == "delegated":
+            if any(
+                value is None
+                for value in (self.parent_agent, self.parent_source, self.parent_observed_at)
+            ):
+                raise ValueError("delegated parent needs agent, source, and observation time")
+        elif self.parent_relation == "root":
+            if (
+                self.parent_agent is not None
+                or self.parent_source is None
+                or self.parent_observed_at is None
+            ):
+                raise ValueError("root parent needs source and observation time without an agent")
+        elif any(
+            value is not None
+            for value in (self.parent_agent, self.parent_source, self.parent_observed_at)
+        ):
+            raise ValueError("unknown parent cannot include inferred parent fields")
+        return self
+
+
+class FocusSummary(BaseModel):
+    """画面最上部へ表示する、明示された公開用の今回要約。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: str = Field(min_length=1, max_length=500)
+    progress_summary: str = Field(min_length=1, max_length=500)
+    blocker: str | None = Field(default=None, max_length=500)
+    next_action: str = Field(min_length=1, max_length=500)
+    updated_at: AwareDatetime
+    source: Literal["manual-public-summary"]
 
 
 class RuntimeCapacitySnapshot(BaseModel):
@@ -87,6 +138,24 @@ class StatusSnapshot(BaseModel):
     received_at: AwareDatetime
     items: list[WorkItem] = Field(max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
+    focus_summary: FocusSummary | None = None
+
+    @model_validator(mode="after")
+    def check_parent_cycles(self) -> "StatusSnapshot":
+        parents = {
+            item.agent: item.parent_agent
+            for item in self.items
+            if item.parent_relation == "delegated" and item.parent_agent is not None
+        }
+        for start in parents:
+            seen: set[str] = set()
+            current: str | None = start
+            while current in parents:
+                if current in seen:
+                    raise ValueError("parent relation cannot contain a cycle")
+                seen.add(current)
+                current = parents[current]
+        return self
 
 
 class StatusResponse(StatusSnapshot):
@@ -102,6 +171,7 @@ class StatusUpsertRequest(BaseModel):
     source: Literal["local-event-record"]
     items: list[WorkItem] = Field(default_factory=list, max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
+    focus_summary: FocusSummary | None = None
 
     @model_validator(mode="after")
     def check_targets(self) -> "StatusUpsertRequest":
@@ -111,12 +181,22 @@ class StatusUpsertRequest(BaseModel):
         capacity_supplied = "runtime_capacity" in self.model_fields_set
         if capacity_supplied and self.runtime_capacity is None:
             raise ValueError("runtime_capacity cannot be null when supplied")
-        if not self.items and not capacity_supplied:
-            raise ValueError("upsert needs an item or runtime_capacity")
+        focus_supplied = "focus_summary" in self.model_fields_set
+        if focus_supplied and self.focus_summary is None:
+            raise ValueError("focus_summary cannot be null when supplied")
+        if not self.items and not capacity_supplied and not focus_supplied:
+            raise ValueError("upsert needs an item, runtime_capacity, or focus_summary")
         for item in self.items:
             if (item.latest_activity is None) != (item.latest_activity_at is None):
                 raise ValueError("upsert activity and its timestamp must be supplied together")
-            has_summary = item.current_action is not None or item.progress_summary is not None
+            has_summary = any(
+                value is not None
+                for value in (
+                    item.current_action,
+                    item.progress_summary,
+                    item.instruction_summary,
+                )
+            )
             if has_summary != (item.summary_updated_at is not None):
                 raise ValueError("upsert summary and its timestamp must be supplied together")
         return self
@@ -131,3 +211,4 @@ class StatusUpsertReceipt(BaseModel):
     revision: str = Field(min_length=1, max_length=256)
     items: list[WorkItem]
     runtime_capacity: RuntimeCapacitySnapshot | None = None
+    focus_summary: FocusSummary | None = None

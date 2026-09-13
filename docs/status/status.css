@@ -191,6 +191,67 @@ summary:focus-visible {
   border-radius: 14px;
   background: var(--panel);
 }
+.focus-summary,
+.relationships {
+  margin-bottom: 30px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.focus-summary {
+  border-color: #3b7769;
+  background: linear-gradient(145deg, #10231f, #111722 70%);
+}
+.focus-summary .section-heading,
+.relationships .section-heading {
+  margin-top: 0;
+}
+.focus-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 9px 18px;
+  margin: 0 0 16px;
+}
+.focus-meta dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.focus-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.relationship-map {
+  display: grid;
+  gap: 10px;
+}
+.relationship-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.relationship-node {
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow-wrap: anywhere;
+  background: #0e141e;
+}
+.relationship-child {
+  border-color: #3b7769;
+}
+.relationship-arrow {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 900;
+}
+.relationship-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
 .capacity .section-heading {
   margin-top: 0;
 }
@@ -240,6 +301,26 @@ summary:focus-visible {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
+}
+.card-summary {
+  display: block;
+  cursor: pointer;
+  list-style-position: outside;
+}
+.card-summary::marker {
+  color: var(--accent);
+}
+.card-preview {
+  display: block;
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+.card[open] .card-summary {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 .card[data-status="blocked"] {
   border-left: 4px solid var(--danger);
@@ -298,16 +379,18 @@ summary:focus-visible {
   font-size: 0.75rem;
   font-weight: 800;
 }
-.card h3 {
+.card-owner {
+  display: block;
   margin: 14px 0 16px;
   font-size: 1.08rem;
+  font-weight: 700;
   line-height: 1.35;
 }
-.card h3 a {
+.card-owner a {
   color: #f4f7fb;
   text-decoration: none;
 }
-.card h3 a:hover {
+.card-owner a:hover {
   text-decoration: underline;
 }
 .meta {
@@ -469,6 +552,21 @@ footer {
   .capacity-meta {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+  .focus-meta {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .focus-meta dt:not(:first-child) {
+    margin-top: 9px;
+  }
+  .relationship-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .relationship-arrow {
+    transform: rotate(90deg);
+    align-self: center;
   }
   .capacity-meta dt:not(:first-child) {
     margin-top: 9px;

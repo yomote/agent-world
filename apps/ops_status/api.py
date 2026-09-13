@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .models import (
+    FocusSummary,
     RuntimeCapacitySnapshot,
     StatusResponse,
     StatusSnapshot,
@@ -41,7 +42,12 @@ def reject_older_item(
         "latest_activity_at",
         "current_action",
         "progress_summary",
+        "instruction_summary",
         "summary_updated_at",
+        "parent_relation",
+        "parent_agent",
+        "parent_source",
+        "parent_observed_at",
     }
     newer_activity = incoming.latest_activity_at is not None and (
         previous.latest_activity_at is None
@@ -71,11 +77,13 @@ def reject_older_item(
     previous_summary = (
         previous.current_action,
         previous.progress_summary,
+        previous.instruction_summary,
         previous.summary_updated_at,
     )
     incoming_summary = (
         incoming.current_action,
         incoming.progress_summary,
+        incoming.instruction_summary,
         incoming.summary_updated_at,
     )
     if previous_summary != incoming_summary and (
@@ -87,6 +95,29 @@ def reject_older_item(
     ):
         raise HTTPException(status_code=409, detail=f"older summary for agent {incoming.agent}")
 
+    previous_parent = (
+        previous.parent_relation,
+        previous.parent_agent,
+        previous.parent_source,
+        previous.parent_observed_at,
+    )
+    incoming_parent = (
+        incoming.parent_relation,
+        incoming.parent_agent,
+        incoming.parent_source,
+        incoming.parent_observed_at,
+    )
+    if previous_parent != incoming_parent and (
+        incoming.parent_observed_at is None
+        or (
+            previous.parent_observed_at is not None
+            and incoming.parent_observed_at <= previous.parent_observed_at
+        )
+    ):
+        raise HTTPException(
+            status_code=409, detail=f"older parent relation for agent {incoming.agent}"
+        )
+
 
 def reject_older_capacity(
     previous: RuntimeCapacitySnapshot, incoming: RuntimeCapacitySnapshot
@@ -95,6 +126,13 @@ def reject_older_capacity(
         raise HTTPException(status_code=409, detail="older runtime capacity observation")
     if incoming.observed_at == previous.observed_at and incoming != previous:
         raise HTTPException(status_code=409, detail="ambiguous runtime capacity observation")
+
+
+def reject_older_focus(previous: FocusSummary, incoming: FocusSummary) -> None:
+    if incoming.updated_at < previous.updated_at:
+        raise HTTPException(status_code=409, detail="older focus summary")
+    if incoming.updated_at == previous.updated_at and incoming != previous:
+        raise HTTPException(status_code=409, detail="ambiguous focus summary")
 
 
 def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot) -> None:
@@ -117,6 +155,10 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
                 status_code=409, detail="full snapshot cannot clear runtime capacity"
             )
         reject_older_capacity(current.runtime_capacity, incoming.runtime_capacity)
+    if current.focus_summary is not None:
+        if incoming.focus_summary is None:
+            raise HTTPException(status_code=409, detail="full snapshot cannot clear focus summary")
+        reject_older_focus(current.focus_summary, incoming.focus_summary)
 
 
 def principal_allowed(request: Request, expected_environment_key: str) -> bool:
@@ -131,7 +173,7 @@ def principal_allowed(request: Request, expected_environment_key: str) -> bool:
 
 
 def create_app(store: SnapshotStore | None = None) -> FastAPI:
-    app = FastAPI(title="Agent World Management Status", version="0.3.0")
+    app = FastAPI(title="Agent World Management Status", version="0.4.0")
     snapshots = store or configured_store()
     ingest_lock = Lock()
 
@@ -246,6 +288,13 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 and current.runtime_capacity is not None
             ):
                 reject_older_capacity(current.runtime_capacity, update.runtime_capacity)
+            focus_supplied = "focus_summary" in update.model_fields_set
+            if (
+                focus_supplied
+                and update.focus_summary is not None
+                and current.focus_summary is not None
+            ):
+                reject_older_focus(current.focus_summary, update.focus_summary)
 
             replacements = {item.agent: item for item in update.items}
             merged_items = [replacements.pop(item.agent, item) for item in current.items]
@@ -253,9 +302,12 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             merged_capacity = (
                 update.runtime_capacity if capacity_supplied else current.runtime_capacity
             )
+            merged_focus = update.focus_summary if focus_supplied else current.focus_summary
             observation_times = [current.observed_at, *(item.observed_at for item in update.items)]
             if capacity_supplied and update.runtime_capacity is not None:
                 observation_times.append(update.runtime_capacity.observed_at)
+            if focus_supplied and update.focus_summary is not None:
+                observation_times.append(update.focus_summary.updated_at)
             now = datetime.now(UTC)
             try:
                 merged = StatusSnapshot(
@@ -265,6 +317,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     received_at=now,
                     items=merged_items,
                     runtime_capacity=merged_capacity,
+                    focus_summary=merged_focus,
                 )
             except ValidationError as error:
                 raise HTTPException(status_code=422, detail="merged snapshot is invalid") from error
@@ -294,6 +347,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             revision=revision,
             items=[stored_by_agent[item.agent] for item in update.items],
             runtime_capacity=stored.runtime_capacity if capacity_supplied else None,
+            focus_summary=stored.focus_summary if focus_supplied else None,
         )
 
     static_root = Path(__file__).parents[2] / "docs" / "status"

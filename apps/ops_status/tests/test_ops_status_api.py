@@ -305,6 +305,177 @@ def test_ingest_upsert_replaces_capacity_only_when_supplied():
     assert store.value.runtime_capacity.running == 4
 
 
+def test_ingest_upsert_preserves_and_receipts_explicit_focus_and_relationships():
+    """明示された今回要約と委任関係だけを保存し、他行をreceiptへ漏らさない。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["items"].append(
+        {
+            "agent": "preserved",
+            "role": "既存担当",
+            "task": "保持対象",
+            "status": "completed",
+            "observed_at": current.isoformat(),
+        }
+    )
+    item = data["items"][0].copy()
+    item.update(
+        {
+            "parent_relation": "root",
+            "parent_source": "runtime-canonical-task-path",
+            "parent_observed_at": current.isoformat(),
+            "instruction_summary": "公開用の指示要約",
+            "current_action": "関係表示を実装",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    focus = {
+        "purpose": "誰が何をしているか把握する",
+        "progress_summary": "schemaを実装",
+        "blocker": "公開待ち",
+        "next_action": "画面を検証",
+        "updated_at": current.isoformat(),
+        "source": "manual-public-summary",
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [item], "focus_summary": focus},
+    )
+
+    assert response.status_code == 200
+    saved_focus = response.json()["focus_summary"]
+    assert saved_focus["purpose"] == focus["purpose"]
+    assert saved_focus["progress_summary"] == focus["progress_summary"]
+    assert datetime.fromisoformat(saved_focus["updated_at"].replace("Z", "+00:00")) == current
+    assert [row["agent"] for row in response.json()["items"]] == ["management-status-owner"]
+    assert "preserved" not in response.text
+    assert [row.agent for row in store.value.items] == ["management-status-owner", "preserved"]
+    assert store.value.items[0].instruction_summary == "公開用の指示要約"
+
+    next_item = item.copy()
+    next_item["observed_at"] = (current + timedelta(seconds=1)).isoformat()
+    next_item["current_action"] = "次の作業"
+    next_item["summary_updated_at"] = (current + timedelta(seconds=1)).isoformat()
+    preserved = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [next_item]},
+    )
+    assert preserved.status_code == 200
+    assert "focus_summary" not in preserved.json()
+    assert store.value.focus_summary is not None
+    assert store.value.focus_summary.purpose == focus["purpose"]
+
+
+def test_ingest_upsert_cannot_clear_parent_relation_with_newer_item_observation():
+    """新しい状態観測だけで確認済みの親関係を未取得へ戻す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["items"][0].update(
+        {
+            "parent_relation": "root",
+            "parent_source": "runtime-canonical-task-path",
+            "parent_observed_at": current.isoformat(),
+        }
+    )
+    incoming = data["items"][0].copy()
+    incoming["observed_at"] = (current + timedelta(seconds=1)).isoformat()
+    for field in ("parent_relation", "parent_source", "parent_observed_at"):
+        incoming.pop(field)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert", json={"source": "local-event-record", "items": [incoming]}
+    )
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+@pytest.mark.parametrize("target", ["parent", "focus"])
+def test_ingest_upsert_rejects_same_clock_different_relationship_or_focus(target):
+    """到着順だけで同時刻の委任関係や今回要約を上書きする回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["items"][0].update(
+        {
+            "parent_relation": "root",
+            "parent_source": "runtime-canonical-task-path",
+            "parent_observed_at": current.isoformat(),
+        }
+    )
+    data["focus_summary"] = {
+        "purpose": "現行目的",
+        "progress_summary": "現行進捗",
+        "next_action": "現行次行動",
+        "updated_at": current.isoformat(),
+        "source": "manual-public-summary",
+    }
+    payload = {"source": "local-event-record"}
+    if target == "parent":
+        item = data["items"][0].copy()
+        item["parent_relation"] = "delegated"
+        item["parent_agent"] = "outside-parent"
+        payload["items"] = [item]
+    else:
+        focus = data["focus_summary"].copy()
+        focus["progress_summary"] = "同時刻の別進捗"
+        payload["focus_summary"] = focus
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+
+    response = TestClient(create_app(store)).put("/api/status/upsert", json=payload)
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+def test_parent_schema_rejects_self_and_cycles_but_allows_outside_parent():
+    """明白な循環を保存せず、snapshot外の実parentは欠損扱いにしない。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    first = data["items"][0]
+    first.update(
+        {
+            "parent_relation": "delegated",
+            "parent_agent": "outside-parent",
+            "parent_source": "explicit-delegation",
+            "parent_observed_at": current.isoformat(),
+        }
+    )
+    assert StatusSnapshot.model_validate(data).items[0].parent_agent == "outside-parent"
+
+    first["parent_agent"] = first["agent"]
+    with pytest.raises(ValueError, match="itself"):
+        StatusSnapshot.model_validate(data)
+
+    first["parent_agent"] = "second"
+    data["items"].append(
+        {
+            "agent": "second",
+            "role": "worker",
+            "task": "second task",
+            "status": "running",
+            "observed_at": current.isoformat(),
+            "parent_relation": "delegated",
+            "parent_agent": first["agent"],
+            "parent_source": "runtime-canonical-task-path",
+            "parent_observed_at": current.isoformat(),
+        }
+    )
+    with pytest.raises(ValueError, match="cycle"):
+        StatusSnapshot.model_validate(data)
+
+
+def test_instruction_summary_requires_its_public_summary_clock_for_full_snapshots():
+    """初回/full PUTで指示要約だけを時刻なしに最新表示する回帰を防ぐ。"""
+    data = snapshot(datetime.now(UTC))
+    data["items"][0]["instruction_summary"] = "時計のない公開指示"
+
+    with pytest.raises(ValueError, match="summary_updated_at"):
+        StatusSnapshot.model_validate(data)
+
+
 def test_ingest_upsert_same_content_is_idempotent():
     """同内容の確認済み再送がreceived_atやBlobを刷新する回帰を防ぐ。"""
     current = datetime.now(UTC)

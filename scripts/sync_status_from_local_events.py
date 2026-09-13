@@ -12,7 +12,7 @@ from typing import Any
 ACTIVE_WINDOW_SECONDS = 120
 TASK_EVENTS = {"task_started", "task_complete"}
 ACTIVITY_EVENTS = {"item_completed"}
-CONFIG_KEYS = {"root_thread_id", "agents", "runtime_capacity"}
+CONFIG_KEYS = {"root_thread_id", "agents", "runtime_capacity", "focus_summary"}
 AGENT_KEYS = {
     "agent_path",
     "session_id",
@@ -30,6 +30,11 @@ AGENT_KEYS = {
     "pr_url",
     "next_action",
     "blocker",
+    "parent_relation",
+    "parent_agent",
+    "parent_source",
+    "parent_observed_at",
+    "instruction_summary",
 }
 PRIVATE_AGENT_KEYS = {"agent_path", "session_id", "parent_thread_id"}
 REQUIRED_AGENT_KEYS = {"agent_path", "agent", "role", "task"}
@@ -127,6 +132,8 @@ def validate_config(data: Any) -> dict[str, Any]:
         raise ValueError("agents must be a non-empty list")
     if "runtime_capacity" in data and not isinstance(data["runtime_capacity"], dict):
         raise ValueError("runtime_capacity must be an object when supplied")
+    if "focus_summary" in data and not isinstance(data["focus_summary"], dict):
+        raise ValueError("focus_summary must be an object when supplied")
     paths = set()
     required = REQUIRED_AGENT_KEYS
     for agent in data["agents"]:
@@ -256,6 +263,7 @@ def snapshot_payload(snapshot: Any, compat_v1: bool) -> dict[str, Any]:
         for item in payload["items"]
     ]
     payload.pop("runtime_capacity", None)
+    payload.pop("focus_summary", None)
     return payload
 
 
@@ -291,6 +299,7 @@ def sync_once(args: argparse.Namespace, config: dict[str, Any], reader: EventRea
             "received_at": now,
             "items": items,
             "runtime_capacity": config.get("runtime_capacity"),
+            "focus_summary": config.get("focus_summary"),
         }
     )
     payload = snapshot_payload(snapshot, args.compat_v1)
