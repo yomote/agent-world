@@ -9,7 +9,7 @@
     />
     <meta name="color-scheme" content="dark" />
     <title>Agent World — 開発状況</title>
-    <link rel="stylesheet" href="./status.css" />
+    <link rel="stylesheet" href="./status.css?v=3" />
   </head>
   <body>
     <header class="site-header">
@@ -44,10 +44,24 @@
         <span id="source-note">snapshotの出所を確認しています。</span>
       </p>
 
+      <section class="capacity" aria-labelledby="capacity-title">
+        <div class="section-heading">
+          <h2 id="capacity-title">このセッションの実行枠</h2>
+          <p id="capacity-headline" class="task-total">このセッション：読み込み中</p>
+        </div>
+        <p id="capacity-note" class="summary-note">
+          runtimeのturn状態の集計です。タスク件数・進捗・実作業人数とは別です。
+        </p>
+        <dl id="capacity-meta" class="capacity-meta" aria-live="polite"></dl>
+      </section>
+
       <section aria-labelledby="work-title">
         <div class="section-heading">
           <h2 id="work-title">現在の担当</h2>
+          <p id="task-total" class="task-total">表示中のタスク —件</p>
         </div>
+        <p class="summary-note">作業と進捗のメモは公開用に手動更新され、activity時刻とは別です。</p>
+        <ul id="status-counts" class="status-counts" aria-label="進捗状態別のタスク件数"></ul>
         <div id="work-items" class="work-grid" aria-live="polite"></div>
       </section>
     </main>
@@ -55,6 +69,6 @@
     <footer>
       <p>ブラウザは同一originの管理backendだけを読みます。GitHub APIへ接続しません。</p>
     </footer>
-    <script type="module" src="./status.js"></script>
+    <script type="module" src="./status.js?v=3"></script>
   </body>
 </html>

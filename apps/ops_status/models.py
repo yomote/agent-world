@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class WorkItem(BaseModel):
@@ -33,8 +33,49 @@ class WorkItem(BaseModel):
     ) = None
     latest_activity_at: AwareDatetime | None = None
     stale: bool = False
+    current_action: str | None = Field(default=None, max_length=500)
+    progress_summary: str | None = Field(default=None, max_length=500)
+    summary_updated_at: AwareDatetime | None = None
     next_action: str | None = Field(default=None, max_length=500)
     blocker: str | None = Field(default=None, max_length=500)
+
+
+class RuntimeCapacitySnapshot(BaseModel):
+    """公開が許可されたruntime集計だけを保持する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str = Field(min_length=1, max_length=240)
+    observed_at: AwareDatetime
+    state_source: Literal["runtime-list-agents-metadata"] | None = None
+    limit_source: Literal["runtime-instructions"] | None = None
+    running: int | None = Field(default=None, ge=0)
+    idle: int | None = Field(default=None, ge=0)
+    completed: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    max_concurrent_agents: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def check_sources_and_counts(self) -> "RuntimeCapacitySnapshot":
+        state_counts = (self.running, self.idle, self.completed, self.total)
+        if any(value is not None for value in state_counts) != (self.state_source is not None):
+            raise ValueError("state counts and state_source must be supplied together")
+        if (self.max_concurrent_agents is not None) != (self.limit_source is not None):
+            raise ValueError("max_concurrent_agents and limit_source must be supplied together")
+        if self.state_source is None and self.limit_source is None:
+            raise ValueError("runtime capacity needs a state count or a concurrency limit")
+        known_states = sum(
+            value for value in (self.running, self.idle, self.completed) if value is not None
+        )
+        if self.total is not None and known_states > self.total:
+            raise ValueError("known state counts cannot exceed total")
+        if (
+            self.running is not None
+            and self.max_concurrent_agents is not None
+            and self.running > self.max_concurrent_agents
+        ):
+            raise ValueError("running cannot exceed max_concurrent_agents")
+        return self
 
 
 class StatusSnapshot(BaseModel):
@@ -45,6 +86,7 @@ class StatusSnapshot(BaseModel):
     observed_at: AwareDatetime
     received_at: AwareDatetime
     items: list[WorkItem] = Field(max_length=32)
+    runtime_capacity: RuntimeCapacitySnapshot | None = None
 
 
 class StatusResponse(StatusSnapshot):

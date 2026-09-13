@@ -32,22 +32,26 @@ def record(
     path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
 
 
-def config(path: Path) -> None:
-    path.write_text(
-        json.dumps(
+def config(path: Path, runtime_capacity: dict | None = None) -> None:
+    payload = {
+        "root_thread_id": "root-1",
+        "agents": [
             {
-                "root_thread_id": "root-1",
-                "agents": [
-                    {
-                        "agent_path": "/root/worker",
-                        "agent": "status owner",
-                        "role": "実装担当",
-                        "task": "Issue #17",
-                        "issue_url": "https://github.com/yomote/agent-world/issues/17",
-                    }
-                ],
+                "agent_path": "/root/worker",
+                "agent": "status owner",
+                "role": "実装担当",
+                "task": "Issue #17",
+                "current_action": "表示の検証中",
+                "progress_summary": "実装済み、レビュー待ち",
+                "summary_updated_at": "2026-09-06T12:00:00Z",
+                "issue_url": "https://github.com/yomote/agent-world/issues/17",
             }
-        ),
+        ],
+    }
+    if runtime_capacity is not None:
+        payload["runtime_capacity"] = runtime_capacity
+    path.write_text(
+        json.dumps(payload),
         encoding="utf-8",
     )
 
@@ -96,6 +100,9 @@ def test_sync_emits_only_sanitized_idle_state_and_does_not_refresh_old_record(tm
     payload = json.loads(original)
     assert payload["source"] == "local-event-record"
     assert payload["items"][0]["status"] == "stopped"
+    assert payload["items"][0]["current_action"] == "表示の検証中"
+    assert payload["items"][0]["progress_summary"] == "実装済み、レビュー待ち"
+    assert payload["items"][0]["summary_updated_at"] == "2026-09-06T12:00:00Z"
     assert payload["items"][0]["stale"] is False
     assert "agent_path" not in original
     assert "root-1" not in original
@@ -243,3 +250,37 @@ def test_sync_can_seed_an_existing_v1_azure_api(tmp_path):
         "pr_url",
         "note",
     }
+
+
+def test_sync_keeps_explicit_runtime_capacity_observation_without_retimestamping(tmp_path):
+    """activity更新時に別sourceのcapacity観測時刻を現在へ偽装する回帰を防ぐ。"""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    current = datetime.now(UTC).isoformat()
+    record(sessions / "worker.jsonl", "/root/worker", [(current, "task_started")])
+    config_path = tmp_path / "config.json"
+    capacity_observed_at = "2026-09-12T16:55:23.9476494Z"
+    config(
+        config_path,
+        {
+            "scope": "/root session tree",
+            "observed_at": capacity_observed_at,
+            "state_source": "runtime-list-agents-metadata",
+            "limit_source": "runtime-instructions",
+            "running": 4,
+            "idle": 0,
+            "completed": 2,
+            "total": 6,
+            "max_concurrent_agents": 8,
+        },
+    )
+    output = tmp_path / "status.json"
+
+    result = run(config_path, sessions, output)
+
+    assert result.returncode == 0, result.stderr
+    capacity = json.loads(output.read_text(encoding="utf-8"))["runtime_capacity"]
+    # Pythonのdatetimeはmicrosecondsまでなので、7桁目は保存時に正規化される。
+    assert capacity["observed_at"] == "2026-09-12T16:55:23.947649Z"
+    assert capacity["running"] == 4
+    assert capacity["max_concurrent_agents"] == 8
