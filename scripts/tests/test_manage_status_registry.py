@@ -52,10 +52,11 @@ def test_prepare_is_canonical_and_claim_verifies_digest(tmp_path):
     artifact_path = tmp_path / "bundle.json"
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
 
-    update = claim(artifact_path, "front-desk-2", at.isoformat())
+    update = claim(artifact_path, "front-desk-2", at.isoformat(), "runtime-new")
 
     assert update["expected_generation"] == 5
     assert update["bundle_digest"] == artifact["bundle_digest"]
+    assert update["actor_runtime_session_id"] == "runtime-new"
     restored = boot(artifact_path)
     assert restored["claim_required"] is True
     assert restored["workers_started"] is False

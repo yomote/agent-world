@@ -27,7 +27,7 @@ operatorが取得済みのregistry JSONから公開用の復元一覧を確認�
 
    `python scripts/manage_status_registry.py boot --bundle handover.json --output boot.json`
 
-   `python scripts/manage_status_registry.py claim --bundle handover.json --actor front-desk-next --observed-at <ISO8601> --output claim.json`
+   `python scripts/manage_status_registry.py claim --bundle handover.json --actor front-desk-next --runtime-session-id <new-runtime-id> --observed-at <ISO8601> --output claim.json`
 
 5. claim payloadを1回送る。stale generation、別successor、digest不一致、二重claimは409で停止する。旧workerを再起動せず、registryにあるIssue、次手、証跡を復元して明示dispatchを待つ。
 6. 新contextのruntime IDが得られた後、logical Front Desk aliasとの対応を公開報告で更新する。prepare bundleへ未知のruntime IDを作らない。

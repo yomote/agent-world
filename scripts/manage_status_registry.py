@@ -101,7 +101,9 @@ def prepare(registry_path: Path, successor: str, prepared_at: str) -> dict:
     return {"bundle": bundle, "bundle_digest": digest, "update": update.model_dump(mode="json")}
 
 
-def claim(artifact_path: Path, actor: str, observed_at: str) -> dict:
+def claim(
+    artifact_path: Path, actor: str, observed_at: str, runtime_session_id: str | None = None
+) -> dict:
     bundle, expected = verify_artifact(artifact_path)
     if bundle.get("to_front_desk") != actor:
         raise ValueError("handover bundle names a different successor")
@@ -110,6 +112,7 @@ def claim(artifact_path: Path, actor: str, observed_at: str) -> dict:
         action="claim-handover",
         expected_generation=bundle["expected_generation"] + 1,
         actor_front_desk=actor,
+        actor_runtime_session_id=runtime_session_id,
         observed_at=observed_at,
         successor_front_desk=actor,
         bundle_digest=expected,
@@ -135,6 +138,7 @@ def main() -> None:
     claim_parser.add_argument("--bundle", type=Path, required=True)
     claim_parser.add_argument("--actor", required=True)
     claim_parser.add_argument("--observed-at", required=True)
+    claim_parser.add_argument("--runtime-session-id")
     claim_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "read":
@@ -144,7 +148,7 @@ def main() -> None:
     elif args.command == "prepare":
         result = prepare(args.registry, args.successor, args.observed_at)
     else:
-        result = claim(args.bundle, args.actor, args.observed_at)
+        result = claim(args.bundle, args.actor, args.observed_at, args.runtime_session_id)
     args.output.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
