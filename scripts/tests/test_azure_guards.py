@@ -96,6 +96,7 @@ def _run_publish_external(
     *,
     drift_after=False,
     smoke_fail=False,
+    after_evidence_failure=False,
     external_exit=0,
     external_side_effect=True,
     callback_side_effect=True,
@@ -114,11 +115,11 @@ def _run_publish_external(
     evidence = ROOT / "artifacts" / "test-publish" / tmp_path.name
     shutil.rmtree(evidence, ignore_errors=True)
     smoke = tmp_path / "smoke.ps1"
-    smoke.write_text(
-        "param($BaseUrl,$AuthMode)\n"
-        + ("throw 'smoke failed'\n" if smoke_fail else "Write-Output 'smoke ok'\n"),
-        encoding="utf-8",
-    )
+    smoke_action = "throw 'smoke failed'\n" if smoke_fail else "Write-Output 'smoke ok'\n"
+    if after_evidence_failure:
+        blocked_path = (evidence / "external-after.private.json").as_posix()
+        smoke_action += f"New-Item -ItemType Directory -Path '{blocked_path}' | Out-Null\n"
+    smoke.write_text("param($BaseUrl,$AuthMode)\n" + smoke_action, encoding="utf-8")
     expected_identity = (
         "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
         "Microsoft.ManagedIdentity/userAssignedIdentities/agent-world-yomote-jpe-identity"
@@ -566,7 +567,8 @@ def test_publish_external_rejects_mutable_image_reference_before_execution(tmp_p
         check=False,
     )
     assert result.returncode != 0
-    assert "ValidatePattern" in result.stderr
+    assert "Cannot validate argument" in result.stderr
+    assert "Image" in result.stderr
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
@@ -579,6 +581,15 @@ def test_publish_external_contains_postcondition_drift(tmp_path, post_drift):
         app_drift_after=post_drift == "app",
         directory_drift_after=post_drift == "directory",
     )
+    assert result.returncode != 0
+    assert calls.count("containerapp ingress enable") == 2
+    assert calls.count("ad app update") == 2
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_publish_external_contains_when_after_evidence_cannot_be_saved(tmp_path):
+    """公開後snapshotを保存できなければ成功扱いせずexternalを閉じる。"""
+    result, calls = _run_publish_external(tmp_path, after_evidence_failure=True)
     assert result.returncode != 0
     assert calls.count("containerapp ingress enable") == 2
     assert calls.count("ad app update") == 2

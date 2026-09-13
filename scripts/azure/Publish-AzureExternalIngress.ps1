@@ -289,9 +289,9 @@ try {
     -AzureCli $AzureCli
   if ((Get-ImmutableContainerState $afterContainer) -cne $beforeComparable) { throw 'Container App immutable state drift' }
   & $SmokeScript -BaseUrl "https://$publicFqdn" -AuthMode entra
+  @{ application = $afterApp; auth = $afterAuth; container = $afterContainer } |
+    ConvertTo-Json -Depth 100 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'external-after.private.json') -Encoding utf8NoBOM
 } catch {
   Restore-Internal $internalFqdn $internalCallback $_.Exception.Message
 }
-@{ application = $afterApp; auth = $afterAuth; container = $afterContainer } |
-  ConvertTo-Json -Depth 100 | Set-Content -LiteralPath (Join-Path $EvidenceDirectory 'external-after.private.json') -Encoding utf8NoBOM
 Write-Output "External ingress publication verified: https://$publicFqdn"
