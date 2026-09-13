@@ -10,7 +10,8 @@ param(
   [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]{36}$')] [string] $CredentialKeyId,
   [Parameter(Mandatory)] [string] $CredentialDisplayName,
   [Parameter(Mandatory)] [string] $CredentialExpiresOn,
-  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]+$')] [string] $KeyVaultSecretVersion
+  [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F-]+$')] [string] $KeyVaultSecretVersion,
+  [switch] $ResumeExistingSecretReference
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,14 +156,54 @@ if ([string]::IsNullOrWhiteSpace([string]$containerSecretsJson)) {
   Assert-JsonRootArray -Json $containerSecretsJson -Label 'Container App secret metadata'
   $containerSecrets = @($containerSecretsJson | ConvertFrom-Json)
 }
-if ($containerSecrets.Count -ne 0) { throw 'Container App secret metadataが0件ではありません。再送しません。' }
+$expectedIdentityId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$AppName-identity"
+$expectedVaultUrl = "https://$keyVaultName.vault.azure.net/secrets/easy-auth-client-secret"
+if ($ResumeExistingSecretReference) {
+  if ($containerSecrets.Count -ne 1 `
+      -or $containerSecrets[0].name -cne 'microsoft-provider-authentication-secret' `
+      -or $containerSecrets[0].keyVaultUrl -cne $expectedVaultUrl `
+      -or $containerSecrets[0].identity -ine $expectedIdentityId) {
+    throw 'Container App secret referenceが承認済みのexact 1件と一致しません。'
+  }
+} elseif ($containerSecrets.Count -ne 0) {
+  throw 'Container App secret metadataが0件ではありません。再送しません。'
+}
 
-& "$PSScriptRoot/Complete-EntraConfiguration.ps1" `
-  -SubscriptionId $SubscriptionId `
-  -ResourceGroupName $ResourceGroupName `
-  -AppName $AppName `
-  -KeyVaultName $keyVaultName `
-  -TenantId $TenantId `
-  -ClientId $ClientId `
-  -ServicePrincipalObjectId $ServicePrincipalObjectId `
-  -AllowedUserObjectId $AllowedUserObjectId
+# The reference metadata alone does not prove that the expected UAMI remains
+# attached. Verify the actual attachment in both remaining-work modes before
+# any secret-reference, assignment, or auth write.
+$identitiesJson = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query identity.userAssignedIdentities --output json
+if ($LASTEXITCODE -ne 0 -or -not $identitiesJson) { throw 'Container App user-assigned identity actualを読み取れません。' }
+try {
+  $identityDocument = [System.Text.Json.JsonDocument]::Parse($identitiesJson)
+  if ($identityDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+    throw 'Container App user-assigned identity JSON root must be an object.'
+  }
+} finally {
+  if ($identityDocument) { $identityDocument.Dispose() }
+}
+$identityProperties = @(($identitiesJson | ConvertFrom-Json).PSObject.Properties)
+if ($identityProperties.Count -ne 1 -or $identityProperties[0].Name -ine $expectedIdentityId) {
+  throw 'Container App user-assigned identityが承認済みのexact 1件と一致しません。'
+}
+
+if ($ResumeExistingSecretReference) {
+  & "$PSScriptRoot/Complete-EntraAssignmentAndAuth.ps1" `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroupName $ResourceGroupName `
+    -AppName $AppName `
+    -TenantId $TenantId `
+    -ClientId $ClientId `
+    -ServicePrincipalObjectId $ServicePrincipalObjectId `
+    -AllowedUserObjectId $AllowedUserObjectId
+} else {
+  & "$PSScriptRoot/Complete-EntraConfiguration.ps1" `
+    -SubscriptionId $SubscriptionId `
+    -ResourceGroupName $ResourceGroupName `
+    -AppName $AppName `
+    -KeyVaultName $keyVaultName `
+    -TenantId $TenantId `
+    -ClientId $ClientId `
+    -ServicePrincipalObjectId $ServicePrincipalObjectId `
+    -AllowedUserObjectId $AllowedUserObjectId
+}

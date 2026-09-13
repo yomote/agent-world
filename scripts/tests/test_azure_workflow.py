@@ -15,6 +15,9 @@ CONFIGURE_ENTRA_SCRIPT = (
 COMPLETE_ENTRA_SCRIPT = (
     Path(__file__).parents[2] / "scripts" / "azure" / "Complete-EntraConfiguration.ps1"
 ).read_text(encoding="utf-8")
+COMPLETE_ENTRA_ASSIGNMENT_SCRIPT = (
+    Path(__file__).parents[2] / "scripts" / "azure" / "Complete-EntraAssignmentAndAuth.ps1"
+).read_text(encoding="utf-8")
 
 
 def test_container_check_is_created_for_every_pull_request():
@@ -126,3 +129,12 @@ def test_entra_completion_avoids_windows_az_cmd_parenthesized_query():
     assert "keys(identity.userAssignedIdentities)" not in COMPLETE_ENTRA_SCRIPT
     assert "--query identity.userAssignedIdentities --output json" in COMPLETE_ENTRA_SCRIPT
     assert "$identityProperties.Count -ne 1" in COMPLETE_ENTRA_SCRIPT
+
+
+def test_entra_assignment_uses_content_type_and_json_file():
+    """Windows az.cmdでJSON本文を崩さず、Graphが要求するContent-Typeを送る。"""
+    assert "Complete-EntraAssignmentAndAuth.ps1" in COMPLETE_ENTRA_SCRIPT
+    assert "--headers Content-Type=application/json" in COMPLETE_ENTRA_ASSIGNMENT_SCRIPT
+    assert '--body "@$assignmentFile"' in COMPLETE_ENTRA_ASSIGNMENT_SCRIPT
+    assert "principalId = $AllowedUserObjectId" in COMPLETE_ENTRA_ASSIGNMENT_SCRIPT
+    assert "resourceId = $ServicePrincipalObjectId" in COMPLETE_ENTRA_ASSIGNMENT_SCRIPT

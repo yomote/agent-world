@@ -45,24 +45,11 @@ $secretReference = "microsoft-provider-authentication-secret=keyvaultref:$vaultU
 $null = & az containerapp secret set --only-show-errors --resource-group $ResourceGroupName --name $AppName --secrets $secretReference --output none
 if ($LASTEXITCODE -ne 0) { throw 'Container App Key Vault secret reference update failed.' }
 
-$assignment = @{ principalId = $AllowedUserObjectId; resourceId = $ServicePrincipalObjectId; appRoleId = '00000000-0000-0000-0000-000000000000' } | ConvertTo-Json -Compress
-$null = & az rest --only-show-errors --method post --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --body $assignment --output none
-if ($LASTEXITCODE -ne 0) { throw '本人のEntra app assignment failed. Auth config was not deployed.' }
-
-$authParameterFile = [System.IO.Path]::GetTempFileName()
-try {
-  @{
-    '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
-    contentVersion = '1.0.0.0'
-    parameters = @{
-      appName = @{ value = $AppName }
-      tenantId = @{ value = $TenantId }
-      clientId = @{ value = $ClientId }
-      allowedPrincipalObjectIds = @{ value = @($AllowedUserObjectId) }
-    }
-  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $authParameterFile -Encoding utf8NoBOM
-  $null = & az deployment group create --only-show-errors --resource-group $ResourceGroupName --template-file "$PSScriptRoot/../../infra/azure/auth.bicep" --parameters "@$authParameterFile" --name agent-world-auth --output none
-  if ($LASTEXITCODE -ne 0) { throw 'Container Apps Entra auth deployment failed.' }
-} finally {
-  Remove-Item -LiteralPath $authParameterFile -Force -ErrorAction SilentlyContinue
-}
+& "$PSScriptRoot/Complete-EntraAssignmentAndAuth.ps1" `
+  -SubscriptionId $SubscriptionId `
+  -ResourceGroupName $ResourceGroupName `
+  -AppName $AppName `
+  -TenantId $TenantId `
+  -ClientId $ClientId `
+  -ServicePrincipalObjectId $ServicePrincipalObjectId `
+  -AllowedUserObjectId $AllowedUserObjectId

@@ -89,6 +89,8 @@ Configureの引数は、resume引数なしのnew create、上記3 IDsだけのpa
 
 credential発行とKey Vault格納の後、Container App secret参照の設定前に停止した場合はcredentialを削除・再発行せず、`Resume-EntraAfterKeyVault.ps1`で残工程だけを再開する。private記録のtenant/client/SP/user、credential key/display/expiry、Key Vault secret versionを入力し、app/SP/callback、assignment必須、credential exact 1件、本人assignment 0件、Easy Auth無効、internal ingress、対象RGで`application=agent-world`のKey Vault exact 1件、同じcredentialを示す有効なsecret version exact 1件、Container App secret参照 0件がすべて一致する場合に限る。scriptはKey Vaultのversion metadataと`az containerapp secret list`の既定metadataだけを使い、`--show-values`やsecret値を取得しない。承認済みUAMIのARM ID exact 1件をJSONから選び、既存Key Vault secretへのversionless参照設定、本人assignment、auth deploymentを各1回進める。actualが不明または各writeが失敗した場合は後続を止め、同じstageを自動再送しない。
 
+Container App secret参照の設定後、本人assignment前に停止した場合は、同じ入力へ`-ResumeExistingSecretReference`を追加する。上記の共通条件に加え、secret metadataがexact 1件で、名前、versionless Key Vault URL、UAMI ARM IDが承認済み値と一致する場合だけ参照設定を省き、本人assignmentとauth deploymentへ進む。assignment bodyはIDだけを含む一時JSONへ保存し、`Content-Type=application/json`と`@file`で渡して終了時に削除する。既存参照の再設定、credential再発行、secret値の取得は行わない。
+
 期限前のrotationでは、一意なdisplay nameで新しいcredentialを`--append`作成し、metadataのkey IDと期限を控え、同じKey Vault secret名を更新する。versionless Key Vault参照の更新反映には最大30分かかり得るため、旧credentialを最低35分は併存させる。その後、新credentialがKey Vaultのlatest versionであるactualと本人loginを確認してから、古いcredentialをkey ID指定で削除する。初回構成時とrotation後は本人user contextでDirectory側も確認する。
 
 ```powershell

@@ -15,6 +15,7 @@ BILLING_CONFIRMATION = ROOT / "scripts" / "azure" / "Assert-AzureBillingCurrency
 ENTRA_RESUME = ROOT / "scripts" / "azure" / "Assert-EntraResumeState.ps1"
 CONFIGURE_ENTRA = ROOT / "scripts" / "azure" / "Configure-Entra.ps1"
 RESUME_AFTER_KEY_VAULT = ROOT / "scripts" / "azure" / "Resume-EntraAfterKeyVault.ps1"
+COMPLETE_ENTRA_ASSIGNMENT = ROOT / "scripts" / "azure" / "Complete-EntraAssignmentAndAuth.ps1"
 BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
 EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
@@ -350,6 +351,7 @@ def _run_resume_after_key_vault(
     vault_root="array",
     ingress_external=False,
     secret_enabled=True,
+    resume_existing_ref=False,
     fail_stage=None,
 ):
     log = tmp_path / "az-after-key-vault.log"
@@ -438,11 +440,19 @@ def _run_resume_after_key_vault(
         separators=(",", ":"),
     )
     container_secrets = (
-        [{"name": "microsoft-provider-authentication-secret"}] if container_secret_exists else []
+        [
+            {
+                "name": "microsoft-provider-authentication-secret",
+                "keyVaultUrl": "https://test-vault.vault.azure.net/secrets/easy-auth-client-secret",
+                "identity": expected_identity,
+            }
+        ]
+        if container_secret_exists or resume_existing_ref
+        else []
     )
     effective_container_root = (
         "array"
-        if container_secret_exists and container_secret_root == "empty"
+        if (container_secret_exists or resume_existing_ref) and container_secret_root == "empty"
         else container_secret_root
     )
     container_secret_payload = {
@@ -456,6 +466,7 @@ def _run_resume_after_key_vault(
         if effective_container_root == "empty"
         else json.dumps(container_secret_payload, separators=(",", ":"))
     )
+    existing_ref_argument = " -ResumeExistingSecretReference" if resume_existing_ref else ""
     wrapper = tmp_path / "run-resume-after-key-vault.ps1"
     wrapper.write_text(
         f"""
@@ -479,6 +490,22 @@ function global:az {{
   }}
   if ($joined -match '^ad app credential list') {{ return '{credential_json}' }}
   if ($joined -match '^rest .*--method post') {{
+    $bodyIndex = [Array]::IndexOf($args, '--body')
+    $headerIndex = [Array]::IndexOf($args, '--headers')
+    if ($bodyIndex -lt 0 -or $headerIndex -lt 0 -or
+        $args[$headerIndex + 1] -ne 'Content-Type=application/json' -or
+        -not $args[$bodyIndex + 1].StartsWith('@')) {{
+      $global:LASTEXITCODE = 2
+      return
+    }}
+    $assignmentPath = $args[$bodyIndex + 1].Substring(1)
+    $assignment = Get-Content -Raw -LiteralPath $assignmentPath | ConvertFrom-Json
+    if ($assignment.principalId -ne '{RESUME_USER_ID}' -or
+        $assignment.resourceId -ne '{RESUME_SP_ID}' -or
+        $assignment.appRoleId -ne '00000000-0000-0000-0000-000000000000') {{
+      $global:LASTEXITCODE = 2
+      return
+    }}
     if ('{fail_stage}' -eq 'assignment') {{ $global:LASTEXITCODE = 1 }}
     return
   }}
@@ -515,7 +542,7 @@ try {{
     -CredentialKeyId {credential_key} `
     -CredentialDisplayName {credential_display} `
     -CredentialExpiresOn '{credential_expiry}' `
-    -KeyVaultSecretVersion {secret_version}
+    -KeyVaultSecretVersion {secret_version}{existing_ref_argument}
 }} catch {{
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
@@ -939,19 +966,31 @@ def test_resume_after_key_vault_completes_only_the_remaining_owned_writes(tmp_pa
         {},
         {
             "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/foreign": {},
+        },
+        {
+            "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
             "Microsoft.ManagedIdentity/userAssignedIdentities/agent-world-yomote-jpe-identity": {},
             "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
             "Microsoft.ManagedIdentity/userAssignedIdentities/foreign": {},
         },
     ],
 )
-def test_resume_after_key_vault_rejects_missing_or_multiple_identities(tmp_path, identities):
-    """UAMIが0件・複数ならsecret refや後続writeを始めない。"""
-    result, calls = _run_resume_after_key_vault(tmp_path, identities=identities)
+@pytest.mark.parametrize("resume_existing_ref", [False, True])
+def test_resume_after_key_vault_rejects_missing_or_multiple_identities(
+    tmp_path, identities, resume_existing_ref
+):
+    """UAMIが0件・別物・複数ならsecret refや後続writeを始めない。"""
+    result, calls = _run_resume_after_key_vault(
+        tmp_path,
+        identities=identities,
+        resume_existing_ref=resume_existing_ref,
+    )
     assert result.returncode != 0
     assert "user-assigned identityが承認済みのexact 1件" in result.stderr
     assert "containerapp secret set" not in calls
     assert "--method post" not in calls
+    assert "deployment group create" not in calls
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
@@ -972,6 +1011,18 @@ def test_resume_after_key_vault_rejects_existing_container_secret_reference(tmp_
     assert "secret metadataが0件ではありません" in result.stderr
     assert "identity.userAssignedIdentities" not in calls
     assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_resume_after_existing_secret_reference_skips_ref_and_completes(tmp_path):
+    """exact ref作成済みstateはrefを再送せずassignment fileとauthだけを実行する。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, resume_existing_ref=True)
+    assert result.returncode == 0, result.stderr
+    assert "containerapp secret set" not in calls
+    assert calls.count("--method post") == 1
+    assert "--headers Content-Type=application/json" in calls
+    assert "--body @" in calls
+    assert calls.count("deployment group create") == 1
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
@@ -1096,6 +1147,96 @@ def test_windows_az_cmd_reproduces_parenthesized_query_and_accepts_safe_query(tm
     assert "[0] was unexpected at this time" in old.stderr
     assert safe.returncode == 0, safe.stderr
     assert "identity.userAssignedIdentities --output json" in safe.stdout
+
+
+@pytest.mark.skipif(
+    PWSH is None or os.name != "nt", reason="Windows az.cmd argument regression requires pwsh"
+)
+def test_windows_az_cmd_receives_assignment_file_and_auth_parameter_array(tmp_path):
+    """残工程のJSONを@fileで渡し、az.cmd越しでも3 IDと本人arrayを崩さない。"""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "fake-az.log"
+    fake_cli = fake_bin / "fake-az.ps1"
+    fake_cli.write_text(
+        f"""
+param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $Remaining)
+$joined = [string]::Join(' ', $Remaining)
+if ($joined -match '^account show') {{
+  Write-Output '{{"id":"sub-1","state":"Enabled","tenantId":"{RESUME_USER_ID}"}}'
+  exit 0
+}}
+if ($joined -match '^rest .*--method post') {{
+  $bodyIndex = [Array]::IndexOf($Remaining, '--body')
+  $headerIndex = [Array]::IndexOf($Remaining, '--headers')
+  if ($bodyIndex -lt 0 -or $headerIndex -lt 0 -or
+      $Remaining[$headerIndex + 1] -ne 'Content-Type=application/json' -or
+      -not $Remaining[$bodyIndex + 1].StartsWith('@')) {{ exit 2 }}
+  $body = Get-Content -Raw -LiteralPath $Remaining[$bodyIndex + 1].Substring(1) | ConvertFrom-Json
+  if ($body.principalId -ne '{RESUME_USER_ID}' -or
+      $body.resourceId -ne '{RESUME_SP_ID}' -or
+      $body.appRoleId -ne '00000000-0000-0000-0000-000000000000') {{ exit 3 }}
+  Add-Content -LiteralPath '{log.as_posix()}' -Value 'ASSIGNMENT_FILE_OK'
+  exit 0
+}}
+if ($joined -match '^deployment group create') {{
+  $parameterIndex = [Array]::IndexOf($Remaining, '--parameters')
+  if ($parameterIndex -lt 0 -or -not $Remaining[$parameterIndex + 1].StartsWith('@')) {{ exit 4 }}
+  $parameterPath = $Remaining[$parameterIndex + 1].Substring(1)
+  $parameters = Get-Content -Raw -LiteralPath $parameterPath | ConvertFrom-Json
+  if ($parameters.parameters.tenantId.value -ne '{RESUME_USER_ID}' -or
+      $parameters.parameters.clientId.value -ne '{RESUME_CLIENT_ID}' -or
+      @($parameters.parameters.allowedPrincipalObjectIds.value).Count -ne 1 -or
+      $parameters.parameters.allowedPrincipalObjectIds.value[0] -ne '{RESUME_USER_ID}') {{ exit 5 }}
+  Add-Content -LiteralPath '{log.as_posix()}' -Value 'AUTH_PARAMETER_ARRAY_OK'
+  exit 0
+}}
+exit 6
+""",
+        encoding="utf-8",
+    )
+    pwsh_executable = str(PWSH).replace("%", "%%")
+    (fake_bin / "az.cmd").write_text(
+        '@echo off\n@if exist "%ComSpec%" (\n'
+        f'  "{pwsh_executable}" -NoProfile -File "%~dp0fake-az.ps1" %*\n'
+        ") else (\n  exit /b 1\n)\n",
+        encoding="ascii",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(COMPLETE_ENTRA_ASSIGNMENT),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+            "-AppName",
+            "agent-world-yomote-jpe",
+            "-TenantId",
+            RESUME_USER_ID,
+            "-ClientId",
+            RESUME_CLIENT_ID,
+            "-ServicePrincipalObjectId",
+            RESUME_SP_ID,
+            "-AllowedUserObjectId",
+            RESUME_USER_ID,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "ASSIGNMENT_FILE_OK",
+        "AUTH_PARAMETER_ARRAY_OK",
+    ]
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
