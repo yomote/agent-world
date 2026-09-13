@@ -1,306 +1,225 @@
-const STATUS_LABELS = {
-  "not-started": "未着手",
+const STATUS = {
   running: "実装中",
+  completed: "完了",
   "review-wait": "レビュー待ち",
   "human-wait": "人の判断待ち",
-  stopped: "停止済み",
-  completed: "完了",
-  // v1 snapshots already stored in Azure remain readable.
-  idle: "turn終了",
-  unknown: "状態不明",
   blocked: "停止中",
+  unknown: "状態不明",
+  stopped: "停止済み",
+  "not-started": "未着手",
 };
-
-const ACTIVITY_LABELS = {
-  "session-created": "session作成",
-  "task-started": "task開始",
-  "task-complete": "turn終了",
-  "structured-item": "構造化activity",
-};
-
-const SOURCE_LABELS = {
-  "codex-event": ["Codex event", "Codex App Server由来の正規化eventです。"],
-  "local-event-record": [
-    "local event記録",
-    "このPCの構造化task event由来です。Codex App Serverへのlive接続ではありません。",
-  ],
-  "ingest-upsert": [
-    "保持付き部分更新",
-    "サーバーが既存行を保持し、認可済みingestの指定項目だけを反映したsnapshotです。",
-  ],
-  "pm-confirmed": [
-    "PM確認snapshot",
-    "PMが確認した時点の報告です。Codex App Serverとは未接続です。",
-  ],
-  fixture: ["fixture", "表示確認用データです。実際のagent稼働を示しません。"],
-};
-
 export function elapsed(iso, now = Date.now()) {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
-  if (seconds < 60) return `${seconds}秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分前`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 48 ? `${hours}時間前` : `${Math.floor(hours / 24)}日前`;
+  const s = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (s < 60) return `${s}秒前`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}分前`;
+  return `${Math.floor(m / 60)}時間前`;
 }
-
-export function sourceDescription(source) {
-  return SOURCE_LABELS[source] || ["不明", "未対応の入力種別です。"];
-}
-
 export function statusDescription(status) {
-  return STATUS_LABELS[status] || status;
+  return STATUS[status] || status || "未取得";
 }
-
-export function summarizeItems(items) {
-  const statuses = new Map();
-  for (const item of items) statuses.set(item.status, (statuses.get(item.status) || 0) + 1);
-  return {
-    total: items.length,
-    statuses: [...statuses.entries()].map(([status, count]) => ({ status, count })),
-  };
+export function capacityMetrics(capacity) {
+  const metric = (label, value, note = "") => ({ label, value: value ?? "未取得", note });
+  return capacity
+    ? [
+        metric("稼働", capacity.running),
+        metric("同時実行上限", capacity.max_concurrent_agents),
+        metric(
+          "空き（実行中差引）",
+          capacity.available,
+          capacity.available === undefined
+            ? "明示供給なし"
+            : "観測時点の上限−実行中。起動可否は保証しない",
+        ),
+      ]
+    : [metric("稼働", null), metric("同時実行上限", null), metric("空き（実行中差引）", null)];
 }
-
-export function activityDescription(item) {
-  if (!item.latest_activity_at) return null;
-  return {
-    label: ACTIVITY_LABELS[item.latest_activity] || item.latest_activity || "種別未取得",
-    observedAt: item.latest_activity_at,
-  };
-}
-
-export function parentDescription(item, items) {
-  if (item.parent_relation === "root") return "依頼元なし（本作業の窓口）";
-  if (item.parent_relation !== "delegated" || !item.parent_agent) return "依頼元未取得";
-  const parent = items.find((candidate) => candidate.agent === item.parent_agent);
-  return parent ? parent.owner_label || parent.agent : `${item.parent_agent}（snapshot外）`;
-}
-
-export function parentSourceDescription(source) {
-  if (source === "runtime-canonical-task-path") return "runtime canonical path観測";
-  if (source === "explicit-delegation") return "明示された委任";
-  return "未取得";
-}
-
-export function relationshipEdges(items) {
-  return items.map((item) => ({
-    agent: item.agent,
-    owner: item.owner_label || item.agent,
-    relation: item.parent_relation || "unknown",
-    parent: parentDescription(item, items),
-    parentAgent: item.parent_agent || null,
+export function buildTree(tree, history = {}, items = []) {
+  if (!tree) return [];
+  const rows = new Map(items.map((item) => [item.agent, item]));
+  const current = tree.nodes.map((node) => ({
+    ...node,
+    kind: "current",
+    item: rows.get(node.agent),
   }));
+  const past = (history.entries || [])
+    .filter((entry) => !current.some((node) => node.agent === entry.agent))
+    .map((entry) => ({ ...entry, kind: "history", item: rows.get(entry.agent) }));
+  return [...current, ...past];
 }
-
-export function capacityDescription(capacity) {
-  if (!capacity) {
-    return {
-      headline: "このセッション：観測時点の実行中 未取得 / 同時実行上限 未取得",
-      note: "runtimeの実行枠snapshotはまだ受信していません。",
-      rows: [],
-    };
-  }
-  const running = capacity.running ?? "未取得";
-  const limit = capacity.max_concurrent_agents ?? "未取得";
-  const rows = [
-    ["対象範囲", capacity.scope],
-    [
-      "実行状態の出所",
-      capacity.state_source === "runtime-list-agents-metadata"
-        ? "実行状態の観測（集計のみ）"
-        : "未取得",
-    ],
-    [
-      "同時実行上限の出所",
-      capacity.limit_source === "runtime-instructions" ? "セッション設定／明示入力" : "未取得",
-    ],
-    [
-      "容量観測",
-      `${new Date(capacity.observed_at).toLocaleString("ja-JP")}（${elapsed(capacity.observed_at)}）`,
-    ],
-  ];
-  if (capacity.total !== null && capacity.total !== undefined) {
-    rows.push(["存在総数", `${capacity.total}（実行中とは別）`]);
-  }
-  for (const [label, value] of [
-    ["idle", capacity.idle],
-    ["completed", capacity.completed],
-  ]) {
-    if (value !== null && value !== undefined) rows.push([`${label}（観測値）`, String(value)]);
-  }
-  return {
-    headline: `このセッション：観測時点の実行中 ${running} / 同時実行上限 ${limit}`,
-    note: "runtimeのturn状態の集計です。タスク件数・進捗・実作業人数とは別です。観測が古い場合も、未取得とは区別して表示します。",
-    rows,
-  };
-}
-
-function text(tag, value, className) {
+const el = (tag, value, className) => {
   const node = document.createElement(tag);
   node.textContent = value;
   if (className) node.className = className;
   return node;
+};
+const meta = (dl, label, value) => dl.append(el("dt", label), el("dd", value ?? "未報告"));
+const label = (node) => node.item?.owner_label || node.agent;
+const request = (node) =>
+  node.item?.instruction_summary ||
+  node.item?.task_label ||
+  node.item?.task ||
+  "公開用の具体依頼は未報告";
+const stage = (node) =>
+  node.kind === "history" ? "履歴・完了" : statusDescription(node.item?.status);
+function positions(nodes, root) {
+  const children = new Map(nodes.map((node) => [node.agent, []]));
+  for (const node of nodes)
+    if (node.parent_agent && children.has(node.parent_agent))
+      children.get(node.parent_agent).push(node);
+  const out = [];
+  let row = 0;
+  const walk = (agent, depth) => {
+    const node = nodes.find((candidate) => candidate.agent === agent);
+    if (!node) return;
+    out.push({ ...node, x: 34 + depth * 250, y: 34 + row++ * 126 });
+    for (const child of children.get(agent) || []) walk(child.agent, depth + 1);
+  };
+  walk(root, 0);
+  for (const node of nodes)
+    if (!out.some((entry) => entry.agent === node.agent)) walk(node.agent, 0);
+  return out;
 }
-
-function metaRow(dl, name, value) {
-  dl.append(text("dt", name));
-  const dd = document.createElement("dd");
-  if (value instanceof Node) dd.append(value);
-  else dd.textContent = value;
-  dl.append(dd);
+function detail(node) {
+  const target = document.querySelector("#node-detail");
+  target.replaceChildren(el("h3", `${label(node)} — ${stage(node)}`));
+  const dl = document.createElement("dl");
+  dl.className = "detail-meta";
+  meta(dl, "依頼", request(node));
+  meta(
+    dl,
+    "現在",
+    node.item?.current_action ||
+      (node.kind === "history" ? "履歴のため現在作業はありません" : "未報告"),
+  );
+  meta(
+    dl,
+    "完了",
+    node.kind === "history" || node.item?.status === "completed" ? "完了" : "未完了",
+  );
+  meta(dl, "残り次手", node.item?.next_action || "未報告");
+  meta(dl, "阻害", node.item?.blocker === null ? "なしと明示" : node.item?.blocker || "未報告");
+  meta(
+    dl,
+    "最終報告",
+    node.item?.summary_updated_at
+      ? `${new Date(node.item.summary_updated_at).toLocaleString("ja-JP")}（${elapsed(node.item.summary_updated_at)}）`
+      : node.last_observed_at
+        ? `${new Date(node.last_observed_at).toLocaleString("ja-JP")}（履歴観測）`
+        : "未報告",
+  );
+  target.append(dl);
 }
-
-function optionalLink(label, url) {
-  if (!url) return "—";
-  const node = text("a", label);
-  node.href = url;
-  node.rel = "noopener noreferrer";
-  return node;
+function renderTree(snapshot) {
+  const svg = document.querySelector("#session-tree");
+  svg.replaceChildren();
+  const tree = snapshot.session_tree;
+  if (!tree) {
+    document.querySelector("#tree-coverage").textContent = "current tree 未取得";
+    document.querySelector("#node-detail").textContent =
+      "このscopeのcurrent session treeは未取得です。";
+    return;
+  }
+  const nodes = positions(buildTree(tree, snapshot.known_history, snapshot.items), tree.root_agent);
+  document.querySelector("#tree-coverage").textContent =
+    `current coverage ${tree.covered_agents.length}/${tree.nodes.length} node`;
+  const width = Math.max(620, ...nodes.map((node) => node.x + 220));
+  const height = Math.max(180, ...nodes.map((node) => node.y + 100));
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  const ns = "http://www.w3.org/2000/svg";
+  const agents = new Map(nodes.map((node) => [node.agent, node]));
+  for (const node of nodes)
+    if (node.parent_agent && agents.has(node.parent_agent)) {
+      const parent = agents.get(node.parent_agent);
+      const line = document.createElementNS(ns, "line");
+      line.setAttribute("x1", parent.x + 206);
+      line.setAttribute("y1", parent.y + 37);
+      line.setAttribute("x2", node.x);
+      line.setAttribute("y2", node.y + 37);
+      line.setAttribute("class", node.kind === "history" ? "tree-line history-line" : "tree-line");
+      svg.append(line);
+    }
+  for (const node of nodes) {
+    const group = document.createElementNS(ns, "g");
+    group.setAttribute("class", `tree-node ${node.kind}`);
+    group.setAttribute("tabindex", "0");
+    group.setAttribute("role", "button");
+    group.setAttribute("aria-label", `${label(node)}、${stage(node)}。詳細を開く`);
+    group.setAttribute("transform", `translate(${node.x} ${node.y})`);
+    const rect = document.createElementNS(ns, "rect");
+    rect.setAttribute("width", "206");
+    rect.setAttribute("height", "76");
+    rect.setAttribute("rx", "10");
+    const title = document.createElementNS(ns, "text");
+    title.setAttribute("x", "12");
+    title.setAttribute("y", "23");
+    title.setAttribute("class", "tree-title");
+    title.textContent = label(node);
+    const task = document.createElementNS(ns, "text");
+    task.setAttribute("x", "12");
+    task.setAttribute("y", "43");
+    task.setAttribute("class", "tree-task");
+    task.textContent = request(node).slice(0, 26);
+    const state = document.createElementNS(ns, "text");
+    state.setAttribute("x", "12");
+    state.setAttribute("y", "63");
+    state.setAttribute("class", "tree-state");
+    state.textContent = stage(node);
+    group.append(rect, title, task, state);
+    group.addEventListener("click", () => detail(node));
+    group.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        detail(node);
+      }
+    });
+    svg.append(group);
+  }
+  detail(nodes[0]);
 }
-
 function render(snapshot) {
-  const [sourceLabel, sourceNote] = sourceDescription(snapshot.source);
-  const notice = document.querySelector(".notice");
-  const hasStaleItem = snapshot.items.some((item) => item.stale);
-  notice.dataset.state = snapshot.stale || hasStaleItem ? "stale" : "live";
+  const source = snapshot.source || "不明";
+  document.querySelector("#source-kind").textContent = source;
+  document.querySelector("#source-note").textContent = "公開snapshotの入力種別です。";
   document.querySelector("#health").textContent = snapshot.stale
     ? `snapshot更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
-    : hasStaleItem
-      ? "snapshotは届いていますが、activityが途絶したsessionがあります。"
-      : "最新snapshotを表示しています。";
-  document.querySelector("#fetched-at").textContent =
-    `${new Date(snapshot.received_at).toLocaleString("ja-JP")}（${elapsed(snapshot.received_at)}）`;
-  document.querySelector("#next-refresh").textContent =
-    `${new Date(snapshot.observed_at).toLocaleString("ja-JP")}（${elapsed(snapshot.observed_at)}）`;
-  document.querySelector("#source-kind").textContent = sourceLabel;
-  document.querySelector("#source-note").textContent = sourceNote;
-
-  const focusMeta = document.querySelector("#focus-meta");
-  focusMeta.replaceChildren();
-  if (snapshot.focus_summary) {
-    metaRow(focusMeta, "作業目的", snapshot.focus_summary.purpose);
-    metaRow(focusMeta, "確認済み進捗", snapshot.focus_summary.progress_summary);
-    metaRow(focusMeta, "阻害", snapshot.focus_summary.blocker || "なし");
-    metaRow(focusMeta, "次の行動", snapshot.focus_summary.next_action);
-    document.querySelector("#focus-updated").textContent =
-      `報告 ${new Date(snapshot.focus_summary.updated_at).toLocaleString("ja-JP")}（${elapsed(snapshot.focus_summary.updated_at)}）`;
-    document.querySelector("#focus-source").textContent =
-      "出典：公開用に明示された今回要約（他の担当行から推測していません）";
-  } else {
-    for (const name of ["作業目的", "確認済み進捗", "阻害", "次の行動"]) {
-      metaRow(focusMeta, name, "未取得");
-    }
-    document.querySelector("#focus-updated").textContent = "報告時刻 未取得";
-    document.querySelector("#focus-source").textContent = "今回要約は未取得です。";
+    : "最新snapshotを表示しています。";
+  document.querySelector("#fetched-at").textContent = new Date(snapshot.received_at).toLocaleString(
+    "ja-JP",
+  );
+  document.querySelector("#next-refresh").textContent = new Date(
+    snapshot.observed_at,
+  ).toLocaleString("ja-JP");
+  const focus = document.querySelector("#focus-meta");
+  focus.replaceChildren();
+  const s = snapshot.focus_summary;
+  for (const [key, value] of [
+    ["作業目的", s?.purpose],
+    ["確認済み進捗", s?.progress_summary],
+    ["阻害", s?.blocker === null ? "なしと明示" : s?.blocker],
+    ["次の行動", s?.next_action],
+  ])
+    meta(focus, key, value || "未報告");
+  document.querySelector("#focus-updated").textContent = s?.updated_at
+    ? `最終報告 ${new Date(s.updated_at).toLocaleString("ja-JP")}（${elapsed(s.updated_at)}）`
+    : "最終報告 未報告";
+  const metrics = document.querySelector("#capacity-metrics");
+  metrics.replaceChildren();
+  for (const value of capacityMetrics(snapshot.runtime_capacity)) {
+    const box = document.createElement("div");
+    box.className = "metric";
+    box.append(el("strong", value.value), el("span", value.label), el("small", value.note));
+    metrics.append(box);
   }
-
-  const relationshipMap = document.querySelector("#relationship-map");
-  relationshipMap.replaceChildren();
-  for (const edge of relationshipEdges(snapshot.items)) {
-    const row = document.createElement("div");
-    row.className = "relationship-row";
-    if (edge.relation === "delegated") {
-      row.append(text("span", edge.parent, "relationship-node"));
-      row.append(text("span", "→", "relationship-arrow"));
-      row.append(text("span", edge.owner, "relationship-node relationship-child"));
-    } else {
-      row.append(text("span", edge.owner, "relationship-node relationship-child"));
-      row.append(
-        text(
-          "span",
-          edge.relation === "root" ? "依頼元なし（本作業の窓口）" : "依頼元未取得",
-          "relationship-note",
-        ),
-      );
-    }
-    relationshipMap.append(row);
-  }
-  if (!snapshot.items.length) {
-    relationshipMap.append(text("p", "関係は未取得です。", "empty"));
-  }
-
-  const capacity = capacityDescription(snapshot.runtime_capacity);
-  document.querySelector("#capacity-headline").textContent = capacity.headline;
-  document.querySelector("#capacity-note").textContent = capacity.note;
-  const capacityMeta = document.querySelector("#capacity-meta");
-  capacityMeta.replaceChildren();
-  for (const [name, value] of capacity.rows) metaRow(capacityMeta, name, value);
-
-  const summary = summarizeItems(snapshot.items);
-  document.querySelector("#task-total").textContent = `表示中のタスク ${summary.total}件`;
-  const statusCounts = document.querySelector("#status-counts");
-  statusCounts.replaceChildren();
-  for (const item of summary.statuses) {
-    statusCounts.append(text("li", `${statusDescription(item.status)} ${item.count}件`));
-  }
-
-  const target = document.querySelector("#work-items");
-  target.replaceChildren();
-  for (const item of snapshot.items) {
-    const owner = item.owner_label || item.agent;
-    const session = item.session_label || item.role;
-    const task = item.task_label || item.task;
-    const card = document.createElement("details");
-    card.className = "card";
-    card.dataset.status = item.status;
-    const cardSummary = document.createElement("summary");
-    cardSummary.className = "card-summary";
-    const top = document.createElement("span");
-    top.className = "card-top";
-    top.append(text("span", session, "issue-number"));
-    top.append(text("span", statusDescription(item.status), "badge"));
-    const heading = text("span", owner, "card-owner");
-    const preview = text("span", item.current_action || "現在作業は未取得", "card-preview");
-    cardSummary.append(top, heading, preview);
-    card.append(cardSummary);
-    const dl = document.createElement("dl");
-    dl.className = "meta";
-    metaRow(dl, "公開指示要約", item.instruction_summary || "未取得");
-    metaRow(dl, "目的・課題", task);
-    metaRow(dl, "依頼元", parentDescription(item, snapshot.items));
-    metaRow(dl, "関係の出所", parentSourceDescription(item.parent_source));
-    metaRow(
-      dl,
-      "関係観測",
-      item.parent_observed_at
-        ? `${new Date(item.parent_observed_at).toLocaleString("ja-JP")}（${elapsed(item.parent_observed_at)}）`
-        : "未取得",
-    );
-    metaRow(dl, "進捗状態", statusDescription(item.status));
-    metaRow(dl, "現在の作業メモ", item.current_action || "未取得");
-    metaRow(dl, "進捗メモ", item.progress_summary || "未取得");
-    metaRow(
-      dl,
-      "メモ更新",
-      item.summary_updated_at
-        ? `${new Date(item.summary_updated_at).toLocaleString("ja-JP")}（${elapsed(item.summary_updated_at)}）`
-        : "未取得",
-    );
-    metaRow(dl, "阻害要因", item.blocker || "未取得");
-    metaRow(
-      dl,
-      "状態観測",
-      `${new Date(item.observed_at).toLocaleString("ja-JP")}（${elapsed(item.observed_at)}）`,
-    );
-    const activity = activityDescription(item);
-    metaRow(
-      dl,
-      "最新activity",
-      activity
-        ? `${activity.label} / ${new Date(activity.observedAt).toLocaleString("ja-JP")}（${elapsed(activity.observedAt)}）`
-        : "未取得",
-    );
-    if (item.stale) metaRow(dl, "鮮度", "activity途絶");
-    metaRow(dl, "次の作業", item.next_action || "未取得");
-    metaRow(dl, "Issue", optionalLink("開く", item.issue_url));
-    metaRow(dl, "PR", optionalLink("開く", item.pr_url));
-    if (item.note) metaRow(dl, "根拠", item.note);
-    card.append(dl);
-    target.append(card);
-  }
-  if (!snapshot.items.length) target.append(text("p", "現在の担当はありません。", "empty"));
+  document.querySelector("#capacity-observed").textContent = snapshot.runtime_capacity
+    ? `容量観測 ${new Date(snapshot.runtime_capacity.observed_at).toLocaleString("ja-JP")}（${elapsed(snapshot.runtime_capacity.observed_at)}）`
+    : "容量観測 未取得";
+  document.querySelector("#capacity-note").textContent =
+    "空きは明示供給された実行中差引だけです。タスク件数や履歴からは計算しません。";
+  renderTree(snapshot);
 }
-
 async function refresh() {
   const button = document.querySelector("#refresh");
   button.disabled = true;
@@ -309,17 +228,12 @@ async function refresh() {
     if (!response.ok) throw new Error(`管理backend HTTP ${response.status}`);
     render(await response.json());
   } catch (error) {
-    document.querySelector(".notice").dataset.state = "error";
     document.querySelector("#health").textContent = `取得失敗: ${error.message}`;
   } finally {
     button.disabled = false;
   }
 }
-
 if (typeof document !== "undefined") {
   document.querySelector("#refresh").addEventListener("click", refresh);
   refresh();
-  setInterval(() => {
-    if (document.visibilityState === "visible") refresh();
-  }, 10_000);
 }

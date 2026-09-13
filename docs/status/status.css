@@ -191,6 +191,121 @@ summary:focus-visible {
   border-radius: 14px;
   background: var(--panel);
 }
+.capacity-top {
+  border-color: #3b7769;
+}
+.capacity-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.metric {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0e141e;
+}
+.metric strong {
+  display: block;
+  font-size: clamp(1.45rem, 5vw, 2.35rem);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.metric span,
+.metric small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.tree-section {
+  margin-bottom: 30px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.tree-scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0b1018;
+}
+.session-tree {
+  display: block;
+  min-width: 620px;
+}
+.tree-line {
+  stroke: #70e1bf;
+  stroke-width: 2;
+}
+.history-line {
+  stroke-dasharray: 6 5;
+  stroke: #8f98a7;
+}
+.tree-node {
+  cursor: pointer;
+  outline: none;
+}
+.tree-node rect {
+  fill: #152032;
+  stroke: #3b7769;
+  stroke-width: 1.5;
+}
+.tree-node.history rect {
+  fill: #171b25;
+  stroke: #8f98a7;
+  stroke-dasharray: 5 4;
+}
+.tree-node:focus rect {
+  stroke: #fff;
+  stroke-width: 3;
+}
+.tree-title {
+  fill: #f4f7fb;
+  font-size: 14px;
+  font-weight: 700;
+}
+.tree-task {
+  fill: #b7c2d4;
+  font-size: 11px;
+}
+.tree-state {
+  fill: #70e1bf;
+  font-size: 11px;
+  font-weight: 700;
+}
+.history .tree-state {
+  fill: #b7c2d4;
+}
+.node-detail {
+  min-height: 120px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #3b7769;
+  border-radius: 12px;
+  background: #10231f;
+}
+.node-detail h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+.detail-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px;
+  margin: 0;
+  font-size: 0.86rem;
+}
+.detail-meta dt {
+  color: var(--muted);
+}
+.detail-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .focus-summary,
 .relationships {
   margin-bottom: 30px;
@@ -552,6 +667,25 @@ footer {
   .capacity-meta {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+  .capacity-metrics {
+    grid-template-columns: 1fr;
+  }
+  .metric {
+    min-height: 76px;
+  }
+  .tree-section {
+    padding: 12px;
+  }
+  .tree-scroll {
+    margin-inline: -1px;
+  }
+  .detail-meta {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .detail-meta dt:not(:first-child) {
+    margin-top: 8px;
   }
   .focus-meta {
     grid-template-columns: 1fr;
