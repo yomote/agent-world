@@ -7,8 +7,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "apps/world/**"
-      - "apps/web/**"
+      - "demos/resident-move/world/**"
+      - "demos/resident-move/web/**"
       - "Dockerfile"
       - ".dockerignore"
       - "package.json"
@@ -63,7 +63,8 @@ jobs:
           git fetch --no-tags --depth=1 origin "${BASE_SHA}"
           set +e
           git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
-            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
+            demos/resident-move/world demos/resident-move/web \
+            Dockerfile .dockerignore package.json package-lock.json \
             requirements-prod.txt .github/workflows/deploy-azure.yml
           diff_status=$?
           set -e
@@ -216,7 +217,8 @@ jobs:
         run: |
           set -euo pipefail
           source_sha="$(git log -1 --format=%H -- \
-            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
+            demos/resident-move/world demos/resident-move/web \
+            Dockerfile .dockerignore package.json package-lock.json \
             requirements-prod.txt infra/azure scripts/azure .github/workflows/deploy-azure.yml)"
           [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
           echo "sha=${source_sha}" >>"${GITHUB_OUTPUT}"

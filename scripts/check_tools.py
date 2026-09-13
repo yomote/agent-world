@@ -28,6 +28,7 @@ def main() -> None:
                 ".lychee.toml",
                 "*.md",
                 "docs/**/*.md",
+                "demos/**/*.md",
                 ".github/**/*.md",
                 "infra/**/*.md",
             ],

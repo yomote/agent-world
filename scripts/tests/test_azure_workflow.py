@@ -3,6 +3,9 @@ from pathlib import Path
 WORKFLOW = (Path(__file__).parents[2] / ".github" / "workflows" / "deploy-azure.yml").read_text(
     encoding="utf-8"
 )
+DRIFT_WORKFLOW = (
+    Path(__file__).parents[2] / ".github" / "workflows" / "drift-azure.yml"
+).read_text(encoding="utf-8")
 ENVIRONMENT_SCRIPT = (
     Path(__file__).parents[2] / "scripts" / "azure" / "Set-GitHubEnvironmentVariables.ps1"
 ).read_text(encoding="utf-8")
@@ -41,6 +44,31 @@ def test_container_comparison_errors_fail_the_required_check():
     assert '0) echo "container=false"' in detection_step
     assert '1) echo "container=true"' in detection_step
     assert 'exit "${diff_status}"' in detection_step
+
+
+def test_resident_demo_changes_select_container_build_and_desired_image():
+    """移動後のdemoだけを変えた時にcontainer検査と配備sourceが古いimageを選ぶ回帰を防ぐ。"""
+    push_trigger = WORKFLOW.split("    paths:", 1)[1].split("  repository_dispatch:", 1)[0]
+    detection_step = WORKFLOW.split("      - name: Detect container input changes", 1)[1].split(
+        "      - name: Build and exercise production container", 1
+    )[0]
+    desired_step = WORKFLOW.split("      - name: Resolve desired deployment source", 1)[1].split(
+        "      - name: Build and push immutable image", 1
+    )[0]
+    drift_image_step = DRIFT_WORKFLOW.split("      - name: Resolve desired immutable image", 1)[
+        1
+    ].split("      - name: Compare declared and actual configuration", 1)[0]
+
+    for demo_path in ("demos/resident-move/world", "demos/resident-move/web"):
+        assert f'"{demo_path}/**"' in push_trigger
+        assert demo_path in detection_step
+        assert demo_path in desired_step
+        assert demo_path in drift_image_step
+    for stale_path in ("apps/world", "apps/web"):
+        assert stale_path not in push_trigger
+        assert stale_path not in detection_step
+        assert stale_path not in desired_step
+        assert stale_path not in drift_image_step
 
 
 def test_image_mutation_requires_explicit_bootstrap_or_image_only_confirmation():
