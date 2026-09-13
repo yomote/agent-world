@@ -14,6 +14,21 @@ az account show
 
 既定は月1,000円目安、本人限定。初回に対象subscriptionの請求通貨とResource GroupのBudget scopeをJPYへ対応付け、確認方法・対象・UTC時刻をprivate JSONへ保存する。本人が確認できるBudget通知先も得るまではBudgetを作らない。現時点の見積は、低頻度本人利用なら[Container Appsの月間無料枠](https://azure.microsoft.com/pricing/details/container-apps/)内、Log Analyticsは[課金アカウントごとの最初の5 GB/月無料枠](https://azure.microsoft.com/pricing/details/monitor/)に対して最大約0.713 GB/月の設定、Key Vaultは少数operationなので、既存無料枠が未消費ならほぼ0円と予想する暫定値である。契約、既存利用、通信、攻撃的traffic、為替で変わり、1,000円以内を保証しない。
 
+private JSONは次のschemaを使う。請求通貨の確認とBudget scopeへの適用確認は証拠と時点が異なるため、2つのmethodとUTC timestampを分ける。値の推測、別subscriptionや別scopeの記録、不正または未来の日時はApply guardが拒否する。実際のIDはprivateファイルだけへ保存する。
+
+```json
+{
+  "schemaVersion": 1,
+  "method": "Azure BillingProperty REST 2024-04-01",
+  "subscriptionId": "<subscription-id>",
+  "budgetScopeResourceId": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>",
+  "currency": "JPY",
+  "currencyConfirmedAtUtc": "<UTC timestamp ending in Z>",
+  "budgetScopeConfirmationMethod": "Azure Portal Budgets list: same-subscription resource-group budgets displayed in JPY; target resource group not created",
+  "budgetScopeConfirmedAtUtc": "<UTC timestamp ending in Z>"
+}
+```
+
 ## imageを用意する
 
 mainのcommit SHAだけをtagに使い、push後のdigestを記録する。

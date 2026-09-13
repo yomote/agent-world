@@ -17,20 +17,39 @@ try {
 }
 
 $expectedScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName"
-$utcPattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$'
-function Test-UtcTimestamp($value) {
-  if ($value -is [datetime]) { return $value.Kind -eq [DateTimeKind]::Utc }
-  if ($value -is [datetimeoffset]) { return $value.Offset -eq [TimeSpan]::Zero }
-  return ([string]$value) -match $utcPattern
+$billingPropertyMethod = 'Azure BillingProperty REST 2024-04-01'
+$budgetScopeMethod = 'Azure Portal Budgets list: same-subscription resource-group budgets displayed in JPY; target resource group not created'
+function Test-PastUtcTimestamp($value) {
+  if ($value -is [datetime]) {
+    if ($value.Kind -ne [DateTimeKind]::Utc) { return $false }
+    $parsed = [DateTimeOffset]$value
+  } elseif ($value -is [datetimeoffset]) {
+    if ($value.Offset -ne [TimeSpan]::Zero) { return $false }
+    $parsed = $value
+  } else {
+    $text = [string]$value
+    if ($text -notmatch 'Z$') { return $false }
+    $parsed = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse(
+        $text,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$parsed
+      )) { return $false }
+    if ($parsed.Offset -ne [TimeSpan]::Zero) { return $false }
+  }
+
+  return $parsed -le [DateTimeOffset]::UtcNow.AddMinutes(5)
 }
-if ($confirmation.schemaVersion -ne 1 `
-    -or [string]::IsNullOrWhiteSpace([string]$confirmation.method) `
-    -or [string]::IsNullOrWhiteSpace([string]$confirmation.budgetScopeConfirmationMethod) `
+if ($confirmation.schemaVersion -isnot [long] `
+    -or $confirmation.schemaVersion -ne 1 `
+    -or ([string]$confirmation.method) -cne $billingPropertyMethod `
+    -or ([string]$confirmation.budgetScopeConfirmationMethod) -cne $budgetScopeMethod `
     -or ([string]$confirmation.currency) -cne 'JPY' `
     -or ([string]$confirmation.subscriptionId) -ine $SubscriptionId `
     -or ([string]$confirmation.budgetScopeResourceId) -ine $expectedScope `
-    -or -not (Test-UtcTimestamp $confirmation.currencyConfirmedAtUtc) `
-    -or -not (Test-UtcTimestamp $confirmation.budgetScopeConfirmedAtUtc)) {
+    -or -not (Test-PastUtcTimestamp $confirmation.currencyConfirmedAtUtc) `
+    -or -not (Test-PastUtcTimestamp $confirmation.budgetScopeConfirmedAtUtc)) {
   throw '請求通貨確認記録が対象subscription、Budget scope、JPY、確認方法、確認時刻と一致しません。'
 }
 

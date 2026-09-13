@@ -79,6 +79,7 @@ def _write_billing_confirmation(
     subscription: str = "sub-1",
     resource_group: str = "rg-agent-world-jpe",
     currency: str = "JPY",
+    **overrides,
 ) -> Path:
     confirmation = tmp_path / "billing-currency-confirmation.private.json"
     confirmation.write_text(
@@ -92,9 +93,13 @@ def _write_billing_confirmation(
                 ),
                 "currency": currency,
                 "currencyConfirmedAtUtc": "2026-09-07T15:09:46.8412110Z",
-                "budgetScopeConfirmationMethod": "Azure Cost Management budget scope",
+                "budgetScopeConfirmationMethod": (
+                    "Azure Portal Budgets list: same-subscription resource-group "
+                    "budgets displayed in JPY; target resource group not created"
+                ),
                 "budgetScopeConfirmedAtUtc": "2026-09-13T00:00:00Z",
             }
+            | overrides
         ),
         encoding="utf-8",
     )
@@ -185,6 +190,80 @@ def test_billing_confirmation_rejects_unapproved_target(tmp_path, mismatch):
         subscription="sub-2" if mismatch == "subscription" else "sub-1",
         resource_group="other-rg" if mismatch == "scope" else "rg-agent-world-jpe",
     )
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(BILLING_CONFIRMATION),
+            "-ConfirmationPath",
+            str(confirmation),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schemaVersion", "1"),
+        ("method", "operator guess"),
+        ("budgetScopeConfirmationMethod", "operator guess"),
+        ("currencyConfirmedAtUtc", "2026-02-31T00:00:00Z"),
+        ("budgetScopeConfirmedAtUtc", "2999-01-01T00:00:00Z"),
+    ],
+)
+def test_billing_confirmation_rejects_invalid_schema_method_or_time(tmp_path, field, value):
+    """型違い、未承認の確認方法、不正・未来時刻を初回証拠として通さない。"""
+    confirmation = _write_billing_confirmation(tmp_path, **{field: value})
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-File",
+            str(BILLING_CONFIRMATION),
+            "-ConfirmationPath",
+            str(confirmation),
+            "-SubscriptionId",
+            "sub-1",
+            "-ResourceGroupName",
+            "rg-agent-world-jpe",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "field",
+    [
+        "method",
+        "budgetScopeConfirmationMethod",
+        "currencyConfirmedAtUtc",
+        "budgetScopeConfirmedAtUtc",
+    ],
+)
+def test_billing_confirmation_rejects_missing_method_or_time(tmp_path, field):
+    """確認方法・時刻が欠けた記録を暗黙の既定値で補わない。"""
+    confirmation = _write_billing_confirmation(tmp_path)
+    record = json.loads(confirmation.read_text(encoding="utf-8"))
+    del record[field]
+    confirmation.write_text(json.dumps(record), encoding="utf-8")
     result = subprocess.run(
         [
             PWSH,
