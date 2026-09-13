@@ -228,35 +228,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.desired.outputs.sha }}
           IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
-        run: |
-          set -euo pipefail
-          image_repository="${IMAGE_REPOSITORY,,}"
-          repository="${image_repository#ghcr.io/}"
-          registry_token="$(curl --fail-with-body --silent --show-error \
-            "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" | jq -r '.token')"
-          test -n "${registry_token}" && test "${registry_token}" != "null"
-          headers_file="$(mktemp)"
-          trap 'rm -f "${headers_file}"' EXIT
-          status="$(curl --silent --show-error --output /dev/null --dump-header "${headers_file}" \
-            --write-out '%{http_code}' -H "Authorization: Bearer ${registry_token}" \
-            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-            "https://ghcr.io/v2/${repository}/manifests/${SOURCE_SHA}")"
-          if test "${status}" = "200"; then
-            digest="$(awk 'BEGIN { IGNORECASE=1 } /^docker-content-digest:/ { gsub("\\r", "", $2); print $2 }' "${headers_file}")"
-            echo "Existing source image found; build and push skipped."
-          elif test "${status}" = "404"; then
-            echo "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-            docker build --pull --tag "${image_repository}:${SOURCE_SHA}" .
-            docker push "${image_repository}:${SOURCE_SHA}"
-            digest="$(docker buildx imagetools inspect "${image_repository}:${SOURCE_SHA}" \
-              --format '{{.Manifest.Digest}}')"
-            docker logout ghcr.io
-          else
-            echo "GHCR manifest lookup failed with HTTP ${status}; image tag was not overwritten." >&2
-            exit 1
-          fi
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "reference=${image_repository}@${digest}" >>"${GITHUB_OUTPUT}"
+        run: python scripts/azure/prepare_ghcr_image.py
 
       - name: Require anonymous GHCR pull
         if: steps.approval.outputs.image_only != 'true'
