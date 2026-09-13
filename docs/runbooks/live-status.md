@@ -57,11 +57,15 @@ work itemは従来のagent / role / taskに加え、owner / session / task label
 
 `runtime_capacity`はtask件数・担当人数と別のoptional snapshotである。画面は「このセッション：実行中 X / 同時実行上限 Y」を表示するが、runtimeのturn状態であり、進捗率・実作業人数・空き枠を示さない。scope、二つのsource、観測時刻と経過時間を併記し、capacity未取得と古い観測を区別する。存在総数は実行中に換算せず、`completed`を`idle` / `running`へ換算しない。会話本文、reasoning、tool引数・結果、local path、raw session ID、secret、token usageは受け付けない。未知fieldと未知sourceはbackendが拒否する。
 
+画面最上部の`focus_summary`は、今回の作業目的、確認済み進捗、阻害、次の行動、要約自身の`updated_at`と`manual-public-summary` sourceを持つoptionalな明示入力である。担当rowや古いactivityから自動合成しない。省略時は「未取得」を表示し、snapshotの`received_at`を要約の更新時刻へ流用しない。
+
+親子・委任関係はwork itemの`parent_relation`を使う。`root`は依頼元なしの作業窓口、`delegated`は`parent_agent`、`parent_source`、`parent_observed_at`が揃った明示関係、`unknown`は未取得である。role名から親を推測しない。snapshot外の親は許容してその旨を表示し、self-parentとsnapshot内の循環は拒否する。`instruction_summary`は内部prompt本文ではなく公開を許可した指示要約で、既存の`summary_updated_at`と同じ公開メモclockで更新する。
+
 writerは検証済みsnapshotを一時fileからrenameして置き換える。履歴は保存せず`artifacts/status/current.json`だけを読む。ブラウザcacheとAPI response cacheは使わない。
 
 Azure版の`PUT /api/status/upsert`は`local-event-record`のrequestを受け、`agent`が一致する完全なwork itemだけを置換し、新しい`agent`は末尾へ追加する。未指定rowと、省略した`runtime_capacity`はserver側で保持する。capacityは非null値を明示した場合だけ置換する。保存snapshotのsourceは`ingest-upsert`となり、保持した手動rowまで新しいeventから自動取得したとは表示しない。古いrow/capacity観測、重複agent、未初期化snapshot、Blob ETag競合は409で停止する。receiptは今回指定した保存済みrow、指定したcapacity、変更有無、opaque revisionだけで、保持した他rowやsnapshot全体をingestへ返さない。同内容は保存時刻を更新せずno-opにする。
 
-itemの状態観測、activity、公開メモとcapacityはそれぞれの時刻を独立したclockとして扱う。同じclockで内容が異なるrequestや、既存のnonnullなclockをnullへ戻すrequestは409にする。`ingest-upsert`が一度保存された後は、後続のfull `PUT /api/status`も既存agentを省略して暗黙削除できず409になる。明示的なrow削除APIはこのscopeに含めない。新しいactivity clockを伴う既存のrunning→unknown stale遷移はfull PUTでも維持する。
+itemの状態観測、activity、公開メモ、親関係、capacity、`focus_summary`はそれぞれの時刻を独立したclockとして扱う。同じclockで内容が異なるrequestや、既存のnonnullなclockをnullへ戻すrequestは409にする。`focus_summary`と親関係はupsertで省略した場合だけ保持され、full PUTでの暗黙消去は拒否する。`ingest-upsert`が一度保存された後は、後続のfull `PUT /api/status`も既存agentを省略して暗黙削除できず409になる。明示的なrow削除APIはこのscopeに含めない。新しいactivity clockを伴う既存のrunning→unknown stale遷移はfull PUTでも維持する。
 
 現在の手動writerは`pm-confirmed`と`fixture`だけを許可する。`codex-event`と`local-event-record`を拒否し、手動入力をevent観測として保存できない。
 

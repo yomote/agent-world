@@ -191,7 +191,8 @@ def test_sync_uses_sanitized_activity_envelope_for_a_long_running_turn(tmp_path)
     result = run(config_path, sessions, output)
 
     assert result.returncode == 0, result.stderr
-    item = json.loads(output.read_text(encoding="utf-8"))["items"][0]
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    item = payload["items"][0]
     assert item["status"] == "running"
     assert item["latest_activity"] == "structured-item"
     assert item["stale"] is False
@@ -233,12 +234,23 @@ def test_sync_can_seed_an_existing_v1_azure_api(tmp_path):
     )
     config_path = tmp_path / "config.json"
     config(config_path)
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    data["focus_summary"] = {
+        "purpose": "旧APIへ送らない要約",
+        "progress_summary": "互換出力を確認",
+        "next_action": "新schema公開を待つ",
+        "updated_at": current,
+        "source": "manual-public-summary",
+    }
+    config_path.write_text(json.dumps(data), encoding="utf-8")
     output = tmp_path / "status.json"
 
     result = run(config_path, sessions, output, compat_v1=True)
 
     assert result.returncode == 0, result.stderr
-    item = json.loads(output.read_text(encoding="utf-8"))["items"][0]
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    item = payload["items"][0]
+    assert "focus_summary" not in payload
     assert item["status"] == "running"
     assert set(item) == {
         "agent",

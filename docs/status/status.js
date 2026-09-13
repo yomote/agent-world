@@ -69,6 +69,29 @@ export function activityDescription(item) {
   };
 }
 
+export function parentDescription(item, items) {
+  if (item.parent_relation === "root") return "依頼元なし（本作業の窓口）";
+  if (item.parent_relation !== "delegated" || !item.parent_agent) return "依頼元未取得";
+  const parent = items.find((candidate) => candidate.agent === item.parent_agent);
+  return parent ? parent.owner_label || parent.agent : `${item.parent_agent}（snapshot外）`;
+}
+
+export function parentSourceDescription(source) {
+  if (source === "runtime-canonical-task-path") return "runtime canonical path観測";
+  if (source === "explicit-delegation") return "明示された委任";
+  return "未取得";
+}
+
+export function relationshipEdges(items) {
+  return items.map((item) => ({
+    agent: item.agent,
+    owner: item.owner_label || item.agent,
+    relation: item.parent_relation || "unknown",
+    parent: parentDescription(item, items),
+    parentAgent: item.parent_agent || null,
+  }));
+}
+
 export function capacityDescription(capacity) {
   if (!capacity) {
     return {
@@ -152,6 +175,50 @@ function render(snapshot) {
   document.querySelector("#source-kind").textContent = sourceLabel;
   document.querySelector("#source-note").textContent = sourceNote;
 
+  const focusMeta = document.querySelector("#focus-meta");
+  focusMeta.replaceChildren();
+  if (snapshot.focus_summary) {
+    metaRow(focusMeta, "作業目的", snapshot.focus_summary.purpose);
+    metaRow(focusMeta, "確認済み進捗", snapshot.focus_summary.progress_summary);
+    metaRow(focusMeta, "阻害", snapshot.focus_summary.blocker || "なし");
+    metaRow(focusMeta, "次の行動", snapshot.focus_summary.next_action);
+    document.querySelector("#focus-updated").textContent =
+      `報告 ${new Date(snapshot.focus_summary.updated_at).toLocaleString("ja-JP")}（${elapsed(snapshot.focus_summary.updated_at)}）`;
+    document.querySelector("#focus-source").textContent =
+      "出典：公開用に明示された今回要約（他の担当行から推測していません）";
+  } else {
+    for (const name of ["作業目的", "確認済み進捗", "阻害", "次の行動"]) {
+      metaRow(focusMeta, name, "未取得");
+    }
+    document.querySelector("#focus-updated").textContent = "報告時刻 未取得";
+    document.querySelector("#focus-source").textContent = "今回要約は未取得です。";
+  }
+
+  const relationshipMap = document.querySelector("#relationship-map");
+  relationshipMap.replaceChildren();
+  for (const edge of relationshipEdges(snapshot.items)) {
+    const row = document.createElement("div");
+    row.className = "relationship-row";
+    if (edge.relation === "delegated") {
+      row.append(text("span", edge.parent, "relationship-node"));
+      row.append(text("span", "→", "relationship-arrow"));
+      row.append(text("span", edge.owner, "relationship-node relationship-child"));
+    } else {
+      row.append(text("span", edge.owner, "relationship-node relationship-child"));
+      row.append(
+        text(
+          "span",
+          edge.relation === "root" ? "依頼元なし（本作業の窓口）" : "依頼元未取得",
+          "relationship-note",
+        ),
+      );
+    }
+    relationshipMap.append(row);
+  }
+  if (!snapshot.items.length) {
+    relationshipMap.append(text("p", "関係は未取得です。", "empty"));
+  }
+
   const capacity = capacityDescription(snapshot.runtime_capacity);
   document.querySelector("#capacity-headline").textContent = capacity.headline;
   document.querySelector("#capacity-note").textContent = capacity.note;
@@ -173,17 +240,32 @@ function render(snapshot) {
     const owner = item.owner_label || item.agent;
     const session = item.session_label || item.role;
     const task = item.task_label || item.task;
-    const card = document.createElement("article");
+    const card = document.createElement("details");
     card.className = "card";
     card.dataset.status = item.status;
-    const top = document.createElement("div");
+    const cardSummary = document.createElement("summary");
+    cardSummary.className = "card-summary";
+    const top = document.createElement("span");
     top.className = "card-top";
     top.append(text("span", session, "issue-number"));
     top.append(text("span", statusDescription(item.status), "badge"));
-    card.append(top, text("h3", owner));
+    const heading = text("span", owner, "card-owner");
+    const preview = text("span", item.current_action || "現在作業は未取得", "card-preview");
+    cardSummary.append(top, heading, preview);
+    card.append(cardSummary);
     const dl = document.createElement("dl");
     dl.className = "meta";
+    metaRow(dl, "公開指示要約", item.instruction_summary || "未取得");
     metaRow(dl, "目的・課題", task);
+    metaRow(dl, "依頼元", parentDescription(item, snapshot.items));
+    metaRow(dl, "関係の出所", parentSourceDescription(item.parent_source));
+    metaRow(
+      dl,
+      "関係観測",
+      item.parent_observed_at
+        ? `${new Date(item.parent_observed_at).toLocaleString("ja-JP")}（${elapsed(item.parent_observed_at)}）`
+        : "未取得",
+    );
     metaRow(dl, "進捗状態", statusDescription(item.status));
     metaRow(dl, "現在の作業メモ", item.current_action || "未取得");
     metaRow(dl, "進捗メモ", item.progress_summary || "未取得");
