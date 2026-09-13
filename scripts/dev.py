@@ -56,13 +56,18 @@ def main() -> int:
             "uvicorn",
             "world.api:app",
             "--app-dir",
-            "apps",
+            "demos/resident-move",
             "--host",
             "127.0.0.1",
             "--port",
             "8000",
         ],
-        [node, "node_modules/vite/bin/vite.js", "--config", "apps/web/vite.config.ts"],
+        [
+            node,
+            "node_modules/vite/bin/vite.js",
+            "--config",
+            "demos/resident-move/web/vite.config.ts",
+        ],
     ]
     children: list[subprocess.Popen] = []
     try:

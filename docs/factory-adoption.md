@@ -36,7 +36,7 @@ npm run iac:check
 ```
 
 - `factory:check`: API契約、lint、format、test、buildを全体180秒の予算で実行する。失敗しても予算内で後続検査を続ける。期限後の検査はnot_runで残し、失敗・未実行があれば終了コード1。結果は `artifacts/factory/report.md` と `report.json`、個別ログ。
-- `docs:check`: lychee 0.24.2。PATH、`LYCHEE_BIN`、または `artifacts/tools/lychee/lychee.exe` を使用する。
+- `docs:check`: root、`docs/`、`demos/`、`.github/`、`infra/` のMarkdownをlychee 0.24.2で検査する。PATH、`LYCHEE_BIN`、または `artifacts/tools/lychee/lychee.exe` を使用する。
 - `iac:check`: Terraform 1.16.1。PATH、`TERRAFORM_BIN`、または `artifacts/tools/terraform/terraform.exe` を使用する。provider取得にはネットワークが必要だが、mock testはGitHubを変更しない。
 - ツール不在や起動失敗はエラー。検査が途中で停止したレポートはrunning/not_runのままとなり、passにはならない。
 

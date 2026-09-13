@@ -14,7 +14,7 @@ Worldの不変条件、開発ループ、既存のCI・外部アクセス予算�
 
 ## 担当境界
 
-- アプリ側: `apps/web/`、`apps/world/`、API生成物、アプリ依存、アプリテスト、起動スクリプト、最初のSliceの設計・起動・検証文書。
+- アプリ側: `demos/resident-move/web/`、`demos/resident-move/world/`、API生成物、アプリ依存、アプリテスト、起動スクリプト、最初のSliceの設計・起動・検証文書。
 - PM検討側: `docs/runbooks/codex-team.md`、開発エージェントの設定と導入記録。AGENTS.mdへの短い入口はアプリ側で追記済み。このhandoffファイルはアプリ側の連絡記録として扱う。
 - CI予算・factory・インフラなど並行作業で追加された内容は、それぞれの担当変更として保持する。
 

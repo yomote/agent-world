@@ -43,7 +43,8 @@ jobs:
           set -euo pipefail
           repository="${IMAGE_REPOSITORY,,}"
           source_sha="$(git log -1 --format=%H -- \
-            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json requirements-prod.txt \
+            demos/resident-move/world demos/resident-move/web \
+            Dockerfile .dockerignore package.json package-lock.json requirements-prod.txt \
             infra/azure scripts/azure .github/workflows/deploy-azure.yml)"
           [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
           digest="$(docker buildx imagetools inspect "${repository}:${source_sha}" \
