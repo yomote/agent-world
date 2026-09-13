@@ -12,6 +12,9 @@ DEPLOY_SCRIPT = (
 CONFIGURE_ENTRA_SCRIPT = (
     Path(__file__).parents[2] / "scripts" / "azure" / "Configure-Entra.ps1"
 ).read_text(encoding="utf-8")
+COMPLETE_ENTRA_SCRIPT = (
+    Path(__file__).parents[2] / "scripts" / "azure" / "Complete-EntraConfiguration.ps1"
+).read_text(encoding="utf-8")
 
 
 def test_container_check_is_created_for_every_pull_request():
@@ -114,3 +117,12 @@ def test_entra_credential_recovery_deletes_exact_orphan_before_new_reset():
     assert (
         "$allCredentials.Count -ne 1 -or $matchingCredentials.Count -ne 1" in CONFIGURE_ENTRA_SCRIPT
     )
+
+
+def test_entra_completion_avoids_windows_az_cmd_parenthesized_query():
+    """Windows az.cmdが解釈するJMESPath括弧を残工程へ再導入しない。"""
+    assert "Complete-EntraConfiguration.ps1" in CONFIGURE_ENTRA_SCRIPT
+    assert "keys(identity.userAssignedIdentities)" not in CONFIGURE_ENTRA_SCRIPT
+    assert "keys(identity.userAssignedIdentities)" not in COMPLETE_ENTRA_SCRIPT
+    assert "--query identity.userAssignedIdentities --output json" in COMPLETE_ENTRA_SCRIPT
+    assert "$identityProperties.Count -ne 1" in COMPLETE_ENTRA_SCRIPT

@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,6 +14,7 @@ APPLY_INPUT_GUARD = ROOT / "scripts" / "azure" / "Assert-AzureApplyInputs.ps1"
 BILLING_CONFIRMATION = ROOT / "scripts" / "azure" / "Assert-AzureBillingCurrencyConfirmation.ps1"
 ENTRA_RESUME = ROOT / "scripts" / "azure" / "Assert-EntraResumeState.ps1"
 CONFIGURE_ENTRA = ROOT / "scripts" / "azure" / "Configure-Entra.ps1"
+RESUME_AFTER_KEY_VAULT = ROOT / "scripts" / "azure" / "Resume-EntraAfterKeyVault.ps1"
 BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
 EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
@@ -196,6 +198,25 @@ def _run_configure_entra_resume(
         {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
         separators=(",", ":"),
     )
+    identity_json = json.dumps(
+        {
+            "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/"
+            "agent-world-yomote-jpe-identity": {}
+        },
+        separators=(",", ":"),
+    )
+    vault_json = json.dumps(
+        [
+            {
+                "name": "test-vault",
+                "id": "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/"
+                "providers/Microsoft.KeyVault/vaults/test-vault",
+                "tags": {"application": "agent-world"},
+            }
+        ],
+        separators=(",", ":"),
+    )
     assignment_projection = "--query value[].{resourceId:resourceId,principalId:principalId}"
     unprojected_assignment = r'{"value":[{"principalDisplayName":"tenant\user"}]}'
     orphan_display = "agent-world-easy-auth-20260913085447-1cdb7362"
@@ -277,9 +298,10 @@ function global:az {{
   if ($joined -match '^rest .*appRoleAssignments') {{ return '{unprojected_assignment}' }}
   if ($joined -match '^containerapp auth show') {{ return '{auth_json}' }}
   if ($joined -match '^ad sp update') {{ $global:LASTEXITCODE = 1; return }}
-  if ($joined -match '^keyvault list') {{ return 'test-vault' }}
-  if ($joined -match '^containerapp show' -and $joined.Contains('keys(identity')) {{
-    return '/identity/id'
+  if ($joined -match '^keyvault list') {{ return '{vault_json}' }}
+  if ($joined -match '^containerapp show' -and
+      $joined.Contains('identity.userAssignedIdentities')) {{
+    return '{identity_json}'
   }}
   if ($joined -match '^account get-access-token') {{ return 'fake-token' }}
   if ($joined -match '^containerapp secret set') {{ return }}
@@ -295,6 +317,195 @@ try {{
     -ResumeTenantId {RESUME_USER_ID} `
     -ResumeClientId {RESUME_CLIENT_ID} `
     -ResumeServicePrincipalObjectId {RESUME_SP_ID}{recovery_arguments}
+}} catch {{
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [PWSH, "-NoProfile", "-File", str(wrapper)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    return result, calls
+
+
+def _run_resume_after_key_vault(
+    tmp_path: Path,
+    *,
+    identities=None,
+    secret_matches=True,
+    vault_count=1,
+    secret_version_count=1,
+    container_secret_exists=False,
+    credential_root="array",
+    secret_version_root="array",
+    container_secret_root="array",
+    vault_root="array",
+    ingress_external=False,
+    secret_enabled=True,
+    fail_stage=None,
+):
+    log = tmp_path / "az-after-key-vault.log"
+    credential_display = "agent-world-easy-auth-20260913090000-abcdef12"
+    credential_key = "66666666-6666-6666-6666-666666666666"
+    credential_expiry = "2027-09-13T09:00:00Z"
+    secret_version = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    expected_identity = (
+        "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/agent-world-yomote-jpe-identity"
+    )
+    if identities is None:
+        identities = {expected_identity: {}}
+    secret_key = credential_key if secret_matches else RESUME_SP_ID
+    credential_entry = {
+        "keyId": credential_key,
+        "displayName": credential_display,
+        "endDateTime": credential_expiry,
+    }
+    credential_payload = {
+        "array": [credential_entry],
+        "scalar": credential_entry,
+        "null": None,
+    }[credential_root]
+    credential_json = json.dumps(credential_payload, separators=(",", ":"))
+    secret_versions = [
+        {
+            "name": "easy-auth-client-secret",
+            "id": f"https://test-vault.vault.azure.net/secrets/easy-auth-client-secret/{secret_version}",
+            "attributes": {"enabled": secret_enabled},
+            "tags": {
+                "entraCredentialKeyId": secret_key,
+                "entraCredentialDisplayName": credential_display,
+                "expiresOn": credential_expiry,
+            },
+        }
+    ] * secret_version_count
+    secret_version_payload = {
+        "array": secret_versions,
+        "scalar": secret_versions[0] if secret_versions else {},
+        "null": None,
+    }[secret_version_root]
+    secret_json = json.dumps(secret_version_payload, separators=(",", ":"))
+    base_secret_json = json.dumps(
+        [
+            {
+                "name": "easy-auth-client-secret",
+                "id": "https://test-vault.vault.azure.net/secrets/easy-auth-client-secret",
+                "attributes": {"enabled": True},
+                "tags": {},
+            }
+        ],
+        separators=(",", ":"),
+    )
+    identity_json = json.dumps(identities, separators=(",", ":"))
+    vaults = [
+        {
+            "name": f"test-vault-{index}" if index else "test-vault",
+            "id": (
+                "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+                f"Microsoft.KeyVault/vaults/{'test-vault-' + str(index) if index else 'test-vault'}"
+            ),
+            "tags": {"application": "agent-world"},
+        }
+        for index in range(vault_count)
+    ]
+    vault_payload = {
+        "array": vaults,
+        "scalar": vaults[0] if vaults else {},
+        "null": None,
+    }[vault_root]
+    vault_json = json.dumps(vault_payload, separators=(",", ":"))
+    account_json = json.dumps({"id": "sub-1", "state": "Enabled"}, separators=(",", ":"))
+    sp_json = json.dumps(
+        {
+            "id": RESUME_SP_ID,
+            "appId": RESUME_CLIENT_ID,
+            "displayName": "agent-world-yomote-jpe-login",
+            "servicePrincipalType": "Application",
+            "appRoleAssignmentRequired": True,
+        },
+        separators=(",", ":"),
+    )
+    auth_json = json.dumps(
+        {"platform": {}, "identityProviders": {"azureActiveDirectory": {}}},
+        separators=(",", ":"),
+    )
+    container_secrets = (
+        [{"name": "microsoft-provider-authentication-secret"}] if container_secret_exists else []
+    )
+    container_secret_payload = {
+        "array": container_secrets,
+        "scalar": {"name": "foreign"},
+        "null": None,
+    }[container_secret_root]
+    container_secrets_json = json.dumps(container_secret_payload, separators=(",", ":"))
+    wrapper = tmp_path / "run-resume-after-key-vault.ps1"
+    wrapper.write_text(
+        f"""
+function global:az {{
+  $joined = [string]::Join(' ', $args)
+  Add-Content -LiteralPath '{log.as_posix()}' -Value $joined
+  $global:LASTEXITCODE = 0
+  if ($joined -match '^account show .*--output json$') {{ return '{account_json}' }}
+  if ($joined -match '^account show .*--query user.type') {{ return 'user' }}
+  if ($joined -match '^account show .*--query tenantId') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^ad signed-in-user show') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^ad app list') {{ return '{RESUME_CLIENT_ID}' }}
+  if ($joined -match '^containerapp show .*properties.configuration.ingress') {{
+    return '{{"fqdn":"internal.example","external":{json.dumps(ingress_external)}}}'
+  }}
+  if ($joined -match '^ad app show') {{
+    return '{{"appId":"{RESUME_CLIENT_ID}","displayName":"agent-world-yomote-jpe-login","signInAudience":"AzureADMyOrg","web":{{"redirectUris":["https://internal.example/.auth/login/aad/callback"],"implicitGrantSettings":{{"enableIdTokenIssuance":true}}}}}}'
+  }}
+  if ($joined -match '^ad sp show') {{
+    return '{sp_json}'
+  }}
+  if ($joined -match '^ad app credential list') {{ return '{credential_json}' }}
+  if ($joined -match '^rest .*--method post') {{
+    if ('{fail_stage}' -eq 'assignment') {{ $global:LASTEXITCODE = 1 }}
+    return
+  }}
+  if ($joined -match '^rest .*appRoleAssignments') {{ return '[]' }}
+  if ($joined -match '^containerapp auth show') {{ return '{auth_json}' }}
+  if ($joined -match '^keyvault list') {{ return '{vault_json}' }}
+  if ($joined -match '^keyvault secret list-versions') {{ return '{secret_json}' }}
+  if ($joined -match '^keyvault secret list') {{ return '{base_secret_json}' }}
+  if ($joined -match '^containerapp show .*properties.configuration.secrets') {{
+    return '{container_secrets_json}'
+  }}
+  if ($joined -match '^containerapp show .*identity.userAssignedIdentities') {{
+    return '{identity_json}'
+  }}
+  if ($joined -match '^containerapp secret set') {{
+    if ('{fail_stage}' -eq 'secret-ref') {{ $global:LASTEXITCODE = 1 }}
+    return
+  }}
+  if ($joined -match '^deployment group create') {{
+    if ('{fail_stage}' -eq 'auth') {{ $global:LASTEXITCODE = 1 }}
+    return
+  }}
+  throw "Unexpected az call: $joined"
+}}
+try {{
+  & '{RESUME_AFTER_KEY_VAULT.as_posix()}' `
+    -SubscriptionId sub-1 `
+    -ResourceGroupName rg-agent-world-jpe `
+    -AppName agent-world-yomote-jpe `
+    -TenantId {RESUME_USER_ID} `
+    -ClientId {RESUME_CLIENT_ID} `
+    -ServicePrincipalObjectId {RESUME_SP_ID} `
+    -AllowedUserObjectId {RESUME_USER_ID} `
+    -CredentialKeyId {credential_key} `
+    -CredentialDisplayName {credential_display} `
+    -CredentialExpiresOn '{credential_expiry}' `
+    -KeyVaultSecretVersion {secret_version}
 }} catch {{
   [Console]::Error.WriteLine($_.Exception.Message)
   exit 1
@@ -691,6 +902,190 @@ def test_configure_entra_stops_when_new_and_foreign_credentials_remain(tmp_path)
     assert "Credential metadataを一意に特定できません" in result.stderr
     assert "containerapp secret set" not in calls
     assert "--method post" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_resume_after_key_vault_completes_only_the_remaining_owned_writes(tmp_path):
+    """既credential/KV metadataを照合し、secret値なしでref・本人assignment・authだけを完了する。"""
+    result, calls = _run_resume_after_key_vault(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "ad app credential reset" not in calls
+    assert "keyvault secret show" not in calls
+    assert "keyvault secret list-versions" in calls
+    assert "keyvault secret show" not in calls
+    assert "containerapp secret list" not in calls
+    assert "properties.configuration.secrets" in calls
+    assert calls.count("containerapp secret set") == 1
+    assert calls.count("--method post") == 1
+    assert calls.count("deployment group create") == 1
+    assert "keys(identity.userAssignedIdentities)" not in calls
+    assert "identity.userAssignedIdentities" in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "identities",
+    [
+        {},
+        {
+            "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/agent-world-yomote-jpe-identity": {},
+            "/subscriptions/sub-1/resourceGroups/rg-agent-world-jpe/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/foreign": {},
+        },
+    ],
+)
+def test_resume_after_key_vault_rejects_missing_or_multiple_identities(tmp_path, identities):
+    """UAMIが0件・複数ならsecret refや後続writeを始めない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, identities=identities)
+    assert result.returncode != 0
+    assert "user-assigned identityが承認済みのexact 1件" in result.stderr
+    assert "containerapp secret set" not in calls
+    assert "--method post" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_resume_after_key_vault_rejects_mismatched_secret_metadata(tmp_path):
+    """KV metadataがcredentialと違えば参照・assignment・authへ進まない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, secret_matches=False)
+    assert result.returncode != 0
+    assert "Key Vault secret metadataが承認済みcredential/versionと一致しません" in result.stderr
+    assert "identity.userAssignedIdentities" not in calls
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_resume_after_key_vault_rejects_existing_container_secret_reference(tmp_path):
+    """ref設定済みまたは結果不明のstateへ同じwriteを再送しない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, container_secret_exists=True)
+    assert result.returncode != 0
+    assert "secret referenceが既に存在します" in result.stderr
+    assert "identity.userAssignedIdentities" not in calls
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("vault_count", [0, 2])
+def test_resume_after_key_vault_rejects_missing_or_multiple_tagged_vaults(tmp_path, vault_count):
+    """対象RGのapplication tag付きVaultが0件・複数なら参照writeを始めない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, vault_count=vault_count)
+    assert result.returncode != 0
+    assert "Key Vaultが承認済みのexact 1件ではありません" in result.stderr
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("secret_version_count", [0, 2])
+def test_resume_after_key_vault_requires_exactly_one_secret_version(tmp_path, secret_version_count):
+    """versionless参照が別versionを指し得る0件・複数versionでは停止する。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, secret_version_count=secret_version_count)
+    assert result.returncode != 0
+    assert "Key Vault secret metadataが承認済みcredential/versionと一致しません" in result.stderr
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize("ingress_external", [0, "false", None])
+def test_resume_after_key_vault_requires_boolean_false_ingress(tmp_path, ingress_external):
+    """数値・文字列・nullのexternalをinternal actualへ暗黙変換しない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, ingress_external=ingress_external)
+    assert result.returncode != 0
+    assert "ingressはinternalのactualが必須" in result.stderr
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_resume_after_key_vault_requires_boolean_true_secret_enabled(tmp_path):
+    """文字列falseをenabled=trueとして扱わず参照write前に停止する。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, secret_enabled="false")
+    assert result.returncode != 0
+    assert "Key Vault secret metadataが承認済みcredential/versionと一致しません" in result.stderr
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("credential_root", "scalar"),
+        ("credential_root", "null"),
+        ("secret_version_root", "scalar"),
+        ("secret_version_root", "null"),
+        ("container_secret_root", "scalar"),
+        ("container_secret_root", "null"),
+        ("vault_root", "scalar"),
+        ("vault_root", "null"),
+    ],
+)
+def test_resume_after_key_vault_rejects_non_array_collection_roots(tmp_path, argument, value):
+    """collectionのscalar/nullを1件または0件へ丸めず全write前に停止する。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, **{argument: value})
+    assert result.returncode != 0
+    assert "JSON root is unknown" in result.stderr
+    assert "containerapp secret set" not in calls
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    ("fail_stage", "expected_post_count", "expected_auth_count"),
+    [("secret-ref", 0, 0), ("assignment", 1, 0), ("auth", 1, 1)],
+)
+def test_resume_after_key_vault_stops_at_each_unknown_write(
+    tmp_path, fail_stage, expected_post_count, expected_auth_count
+):
+    """残工程のwrite失敗を後続成功へ丸めず、同じ処理を再送しない。"""
+    result, calls = _run_resume_after_key_vault(tmp_path, fail_stage=fail_stage)
+    assert result.returncode != 0
+    assert calls.count("containerapp secret set") == 1
+    assert calls.count("--method post") == expected_post_count
+    assert calls.count("deployment group create") == expected_auth_count
+
+
+@pytest.mark.skipif(
+    PWSH is None or os.name != "nt", reason="Windows az.cmd argument regression requires pwsh"
+)
+def test_windows_az_cmd_reproduces_parenthesized_query_and_accepts_safe_query(tmp_path):
+    """az.cmdのbatch blockで旧keys(...)が壊れ、安全なJSON queryはargvを通ることを固定する。"""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "az.cmd").write_text(
+        '@echo off\n@if exist "%ComSpec%" (\n  echo %*\n) else (\n  exit /b 1\n)\n',
+        encoding="ascii",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    old = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-Command",
+            "az containerapp show --query 'keys(identity.userAssignedIdentities)[0]' --output tsv",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+    safe = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-Command",
+            "az containerapp show --query identity.userAssignedIdentities --output json",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+    assert old.returncode != 0
+    assert "[0] was unexpected at this time" in old.stderr
+    assert safe.returncode == 0, safe.stderr
+    assert "identity.userAssignedIdentities --output json" in safe.stdout
 
 
 @pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")

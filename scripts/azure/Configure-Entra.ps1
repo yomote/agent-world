@@ -148,9 +148,19 @@ try {
   Remove-Variable credentialMetadataJson -ErrorAction SilentlyContinue
   Remove-Variable matchingCredentials -ErrorAction SilentlyContinue
 }
-$keyVaultName = & az keyvault list --only-show-errors --resource-group $ResourceGroupName --query "[?tags.application=='agent-world'].name | [0]" --output tsv
-$identityId = & az containerapp show --only-show-errors --resource-group $ResourceGroupName --name $AppName --query 'keys(identity.userAssignedIdentities)[0]' --output tsv
-if (-not $keyVaultName -or -not $identityId) { throw "Bicep managed Key Vault or app identity was not found." }
+$keyVaultsJson = & az keyvault list --only-show-errors --resource-group $ResourceGroupName --output json
+if ($LASTEXITCODE -ne 0 -or -not $keyVaultsJson) { throw "Bicep managed Key Vault actualを読み取れません。" }
+try {
+  $keyVaultDocument = [System.Text.Json.JsonDocument]::Parse($keyVaultsJson)
+  if ($keyVaultDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
+    throw "Bicep managed Key Vault JSON root must be an array."
+  }
+} finally {
+  if ($keyVaultDocument) { $keyVaultDocument.Dispose() }
+}
+$keyVaults = @($keyVaultsJson | ConvertFrom-Json | Where-Object { $_.tags.application -ceq 'agent-world' })
+if ($keyVaults.Count -ne 1 -or -not $keyVaults[0].name) { throw "Bicep managed Key Vaultがexact 1件ではありません。" }
+$keyVaultName = $keyVaults[0].name
 $vaultUri = "https://$keyVaultName.vault.azure.net"
 $accessToken = & az account get-access-token --only-show-errors --resource https://vault.azure.net --query accessToken --output tsv
 if ($LASTEXITCODE -ne 0 -or -not $accessToken) { throw "Key Vault access token acquisition failed." }
@@ -173,32 +183,16 @@ try {
   Remove-Variable clientSecret -ErrorAction SilentlyContinue
   Remove-Variable accessToken -ErrorAction SilentlyContinue
 }
-$secretReference = "microsoft-provider-authentication-secret=keyvaultref:$vaultUri/secrets/easy-auth-client-secret,identityref:$identityId"
-$null = & az containerapp secret set --only-show-errors --resource-group $ResourceGroupName --name $AppName --secrets $secretReference --output none
-if ($LASTEXITCODE -ne 0) { throw "Container App Key Vault secret reference update failed." }
-
-$assignment = @{ principalId = $AllowedUserObjectId; resourceId = $servicePrincipalId; appRoleId = '00000000-0000-0000-0000-000000000000' } | ConvertTo-Json -Compress
-$null = & az rest --only-show-errors --method post --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --body $assignment --output none
-if ($LASTEXITCODE -ne 0) { throw "本人のEntra app assignment failed. Auth config was not deployed." }
-
 $tenantId = & az account show --query tenantId --output tsv
-$authParameterFile = [System.IO.Path]::GetTempFileName()
-try {
-  @{
-    '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
-    contentVersion = '1.0.0.0'
-    parameters = @{
-      appName = @{ value = $AppName }
-      tenantId = @{ value = $tenantId }
-      clientId = @{ value = $clientId }
-      allowedPrincipalObjectIds = @{ value = @($AllowedUserObjectId) }
-    }
-  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $authParameterFile -Encoding utf8NoBOM
-  $null = & az deployment group create --only-show-errors --resource-group $ResourceGroupName --template-file "$PSScriptRoot/../../infra/azure/auth.bicep" --parameters "@$authParameterFile" --name agent-world-auth --output none
-  if ($LASTEXITCODE -ne 0) { throw "Container Apps Entra auth deployment failed." }
-} finally {
-  Remove-Item -LiteralPath $authParameterFile -Force -ErrorAction SilentlyContinue
-}
+& "$PSScriptRoot/Complete-EntraConfiguration.ps1" `
+  -SubscriptionId $SubscriptionId `
+  -ResourceGroupName $ResourceGroupName `
+  -AppName $AppName `
+  -KeyVaultName $keyVaultName `
+  -TenantId $tenantId `
+  -ClientId $clientId `
+  -ServicePrincipalObjectId $servicePrincipalId `
+  -AllowedUserObjectId $AllowedUserObjectId
 Write-Output "Entra configured: clientId=$clientId allowedUserObjectId=$AllowedUserObjectId redirectUri=$redirectUri"
 Write-Output "Credential metadata: keyId=$credentialKeyId displayName=$credentialDisplayName expiresOn=$credentialExpiresOn"
 Write-Output "Client secret value was stored only in Key Vault and was not printed. Rotate before expiry."
