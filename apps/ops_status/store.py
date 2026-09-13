@@ -153,6 +153,38 @@ def status_response(snapshot: StatusSnapshot, now: datetime | None = None) -> St
     current = now or datetime.now(UTC)
     received = snapshot.received_at.astimezone(UTC)
     age_seconds = max(0, int((current - received).total_seconds()))
+    registry = snapshot.request_registry
+    active_runtime_bound = bool(registry and registry.active_front_desk.runtime_session_id)
+    runtime_binding_verified = False
+    public_registry = registry
+    if registry is not None:
+        active = registry.active_front_desk
+        if active.runtime_session_id is not None:
+            expected_digest = (
+                f"sha256:{hashlib.sha256(active.runtime_session_id.encode()).hexdigest()}"
+            )
+            binding = snapshot.runtime_binding
+            runtime_binding_verified = bool(
+                binding
+                and binding.registry_generation == registry.generation
+                and binding.front_desk_alias == active.alias
+                and binding.runtime_session_digest == expected_digest
+            )
+        public_registry = registry.model_copy(
+            update={
+                "active_front_desk": active.model_copy(
+                    update={"runtime_session_id": None, "runtime_observed_at": None}
+                )
+            }
+        )
+    payload = snapshot.model_dump()
+    payload["request_registry"] = public_registry
+    # raw runtime IDもそのdigestもoperator向けGETへ広げない。
+    payload["runtime_binding"] = None
     return StatusResponse(
-        **snapshot.model_dump(), stale=age_seconds > STALE_AFTER_SECONDS, age_seconds=age_seconds
+        **payload,
+        stale=age_seconds > STALE_AFTER_SECONDS,
+        age_seconds=age_seconds,
+        active_runtime_bound=active_runtime_bound,
+        runtime_binding_verified=runtime_binding_verified,
     )

@@ -308,6 +308,16 @@ class FrontDeskClaim(BaseModel):
         return self
 
 
+class StatusRuntimeBinding(BaseModel):
+    """runtime由来statusをactive Front Desk claimへ結び付ける。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    registry_generation: int = Field(ge=1)
+    front_desk_alias: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    runtime_session_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 class RegistryHandover(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -414,6 +424,7 @@ class StatusSnapshot(BaseModel):
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
     request_registry: RequestRegistrySnapshot | None = None
+    runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")
     def check_parent_cycles(self) -> "StatusSnapshot":
@@ -440,6 +451,8 @@ class StatusSnapshot(BaseModel):
 class StatusResponse(StatusSnapshot):
     stale: bool
     age_seconds: int
+    active_runtime_bound: bool = False
+    runtime_binding_verified: bool = False
 
 
 class StatusUpsertRequest(BaseModel):
@@ -453,6 +466,7 @@ class StatusUpsertRequest(BaseModel):
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")
     def check_targets(self) -> "StatusUpsertRequest":
@@ -509,3 +523,4 @@ class StatusUpsertReceipt(BaseModel):
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    runtime_binding: StatusRuntimeBinding | None = None

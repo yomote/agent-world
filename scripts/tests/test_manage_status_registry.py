@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from scripts.manage_status_registry import (
     mark_claimed,
     prepare,
     read_registry,
+    root_runtime_session_id,
 )
 from scripts.sync_status_from_local_events import snapshot_payload
 
@@ -71,6 +73,30 @@ def test_prepare_is_canonical_and_claim_verifies_digest(tmp_path):
     assert restored["workers_started"] is False
     assert restored["requests"][0]["request_id"] == "request-64"
     assert read_registry(registry_path)["active_front_desk"]["alias"] == "front-desk-1"
+
+
+def test_root_runtime_binding_uses_thread_id_and_rejects_child_or_missing_provenance():
+    """child自身のsession IDをactive Front Deskとしてclaimする回帰を防ぐ。"""
+    root = "11111111-1111-4111-8111-111111111111"
+    child = "22222222-2222-4222-8222-222222222222"
+    assert (
+        root_runtime_session_id(
+            {"CODEX_THREAD_ID": root, "CODEX_SESSION_ID": child},
+            "/root/pm/front_desk_sync",
+        )
+        == root
+    )
+    with pytest.raises(ValueError, match="distinct session ID"):
+        root_runtime_session_id(
+            {"CODEX_THREAD_ID": root, "CODEX_SESSION_ID": root}, "/root/pm/worker"
+        )
+    with pytest.raises(ValueError, match="top-level root runtime"):
+        root_runtime_session_id(
+            {"CODEX_THREAD_ID": "not-a-uuid", "CODEX_SESSION_ID": child},
+            "/root/pm/worker",
+        )
+    with pytest.raises(ValueError, match="canonical task path"):
+        root_runtime_session_id({"CODEX_THREAD_ID": root, "CODEX_SESSION_ID": child}, "/root")
 
 
 def test_claim_rejects_tampered_or_wrong_successor(tmp_path):
@@ -318,6 +344,11 @@ def test_mark_claimed_requires_success_receipt_before_disabling_locator(tmp_path
         "claim_marked": True,
         "generation": 6,
         "active_front_desk": "front-desk-2",
+        "runtime_binding": {
+            "registry_generation": 6,
+            "front_desk_alias": "front-desk-2",
+            "runtime_session_digest": "sha256:" + hashlib.sha256(b"runtime-new").hexdigest(),
+        },
         "workers_started": False,
     }
     marker = json.loads(

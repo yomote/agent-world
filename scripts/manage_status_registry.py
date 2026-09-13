@@ -5,11 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import UUID
 
 ALIAS = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -460,6 +463,13 @@ def mark_claimed(
         "claim_marked": True,
         "generation": receipt["generation"],
         "active_front_desk": active["alias"],
+        "runtime_binding": {
+            "registry_generation": receipt["generation"],
+            "front_desk_alias": active["alias"],
+            "runtime_session_digest": (
+                f"sha256:{hashlib.sha256(claimed_runtime.encode()).hexdigest()}"
+            ),
+        },
         "workers_started": False,
     }
 
@@ -516,6 +526,34 @@ def claim(artifact_path: Path, actor: str, observed_at: str, runtime_session_id:
     }
 
 
+def root_runtime_session_id(environment: Mapping[str, str], canonical_task_path: str) -> str:
+    """child自身ではなく、継承されたtop-level rootのruntime IDを返す。"""
+    thread_id = environment.get("CODEX_THREAD_ID", "")
+    child_id = environment.get("CODEX_SESSION_ID", "")
+    try:
+        UUID(thread_id)
+    except ValueError as error:
+        raise ValueError("CODEX_THREAD_ID must identify the top-level root runtime") from error
+    try:
+        UUID(child_id)
+    except ValueError as error:
+        raise ValueError("CODEX_SESSION_ID must identify the delegated worker") from error
+    if thread_id == child_id:
+        raise ValueError("root claim must run from a delegated worker with a distinct session ID")
+    if not re.fullmatch(r"/root(?:/[a-z0-9_]+)+", canonical_task_path):
+        raise ValueError("root claim needs delegated runtime canonical task path metadata")
+    return thread_id
+
+
+def claim_root(artifact_path: Path, actor: str, observed_at: str, canonical_task_path: str) -> dict:
+    return claim(
+        artifact_path,
+        actor,
+        observed_at,
+        root_runtime_session_id(os.environ, canonical_task_path),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -548,6 +586,12 @@ def main() -> None:
     claim_parser.add_argument("--observed-at", required=True)
     claim_parser.add_argument("--runtime-session-id", required=True)
     claim_parser.add_argument("--output", type=Path, required=True)
+    claim_root_parser = subparsers.add_parser("claim-root")
+    claim_root_parser.add_argument("--bundle", type=Path, required=True)
+    claim_root_parser.add_argument("--actor", required=True)
+    claim_root_parser.add_argument("--observed-at", required=True)
+    claim_root_parser.add_argument("--canonical-task-path", required=True)
+    claim_root_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "read":
         result = read_registry(args.registry)
@@ -559,8 +603,10 @@ def main() -> None:
         result = mark_claimed(args.locator, args.claim_payload, args.receipt, args.project_root)
     elif args.command == "prepare":
         result = prepare(args.registry, args.successor, args.observed_at)
-    else:
+    elif args.command == "claim":
         result = claim(args.bundle, args.actor, args.observed_at, args.runtime_session_id)
+    else:
+        result = claim_root(args.bundle, args.actor, args.observed_at, args.canonical_task_path)
     args.output.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

@@ -8,7 +8,9 @@ registry更新は既存Status.Ingest principalの`PUT /api/status/requests/upser
 
 各変更はBlob ETagとregistry `generation`の両方を検査する。指定された`request_id`だけをmergeし、他の依頼を保持する。同一内容はrevision、generation、`updated_at`を更新しない。Issue観測、公開報告、runtime接続は別時計で退行、nonnullからnull、同時刻の異内容を409にする。`scope_id`はregistry内で一意とし、同じagent aliasを複数依頼に含めても`request_id`と`scope_id`で表示内容を分離する。
 
-handoverはprepareとclaimに分ける。prepareはactive Front Deskとworker状態を変えず、後継logical alias、generation、bundle digestをready状態へ保存する。claimはnamed successor、expected generation、digestの全一致時だけactive Front Deskを移す。runtime IDは新context開始後にclaimへ明示して結び、logical aliasと混同しない。claim時、未完依頼は`handover-waiting`かつ`record-only`へ移し、旧runtimeを現在接続済みに見せない。進捗・証跡は保持し、workerを自動dispatchしない。
+handoverはprepareとclaimに分ける。prepareはactive Front Deskとworker状態を変えず、後継logical alias、generation、bundle digestをready状態へ保存する。claimはnamed successor、expected generation、digestの全一致時だけactive Front Deskを移す。runtime IDは新context開始後にruntime metadataから検証してclaimへ結び、logical aliasと混同しない。claimと同じBlob ETag CASで旧rootのcurrent items、capacity、focus、treeを無効化し、完了履歴は別記録として保持する。未完依頼は`handover-waiting`かつ`record-only`へ移し、進捗・証跡を保持したままworkerの明示dispatchを待つ。
+
+claim後のstatus更新はclaim済みgeneration、active alias、root runtime IDのSHA-256 digestをserver側で照合する。partial upsertとfull PUTの両方へ適用し、bindingのない保存済みschema version 1は読めてもcurrent表示へは使わない。公開GETはraw runtime IDとdigestを除き、alias、generation、binding検証結果だけを返す。
 
 ## Bundleの決定形式
 
@@ -18,4 +20,4 @@ receiptは今回提出したrequest、generation、opaque revisionを返す。ac
 
 ## トレードオフ
 
-同一Ingest principal内のaliasはsecurity identityではないため、悪意あるpublisherの偽装は防げない。一方、既存認可範囲を広げず、事故による二重claimと古い窓口の更新をCASで止められる。workerの再接続は明示dispatchが必要で、handover直後に自動再開しない。
+同一Ingest principal内のalias、`CODEX_THREAD_ID`文字列、canonical task pathはsecurity identityではないため、悪意あるpublisherの偽装やAPIによるroot真正性の証明はできない。runtime metadataでrootとchildの取り違えを止め、既存Status.Ingest認証、generationとBlob ETag CAS、成功receiptのexact照合を信頼境界とする。これにより既存認可範囲を広げず、事故による二重claim、古い窓口の更新、旧current表示の復活を止める。workerの再接続は明示dispatchが必要で、handover直後に自動再開しない。

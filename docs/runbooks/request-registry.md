@@ -44,7 +44,7 @@ locatorにtoken、cookie、certificate、会話本文を入れない。`context_
 
 `local_handover_candidate=true`はlocal artifactの整合だけを示す。server側のactive owner、generation、ready状態は未確認で、owner移転やworker起動を意味しない。claim payloadはlocatorの`registry_source_commit`を固定したclean detached checkoutから生成する。primary workspaceがdirtyならcheckout/resetせず、存在しない専用pathへ`git worktree add --detach <new-path> <registry_source_commit>`で作る。
 
-locatorなしは「引継なし」と表示する。別project、既claim、不一致、読取失敗、他のactive owner、接続状態不明はFront Deskの受付を維持したまま受取りを保留する。新しいrootのruntime session IDを得てから既存の`claim`手順へ進み、payloadを1回だけ送る。409、422、503、timeout、結果不明では再送せず、locatorも変更しない。
+locatorなしは「引継なし」と表示する。別project、既claim、不一致、読取失敗、他のactive owner、接続状態不明はFront Deskの受付を維持したまま受取りを保留する。workerはruntime metadataの`CODEX_THREAD_ID`と自身の`CODEX_SESSION_ID`が異なり、canonical task pathが新rootから委任されたchildを示すことを確認してから`claim-root`へ進む。ユーザーがruntime IDを転記したりCLIを実行したりする手順にはしない。payloadを1回だけ送り、409、422、503、timeout、結果不明では再送せず、locatorも変更しない。
 
 成功receiptでgeneration、active Front Desk、runtime ID、accepted handover、digestを確認したworkerだけがlocal markerを更新する。送信したclaim payloadも渡し、receiptのruntime IDをexact照合する。
 
@@ -74,9 +74,11 @@ operatorが取得済みのregistry JSONから公開用の復元一覧を確認�
 
    `python scripts/manage_status_registry.py boot --bundle handover.json --output boot.json`
 
-   `python scripts/manage_status_registry.py claim --bundle handover.json --actor front-desk-next --runtime-session-id <new-runtime-id> --observed-at <ISO8601> --output claim.json`
+   `python scripts/manage_status_registry.py claim-root --bundle handover.json --actor front-desk-next --canonical-task-path <delegated-worker-path> --observed-at <ISO8601> --output claim.json`
 
 5. claim payloadを1回送る。stale generation、別successor、digest不一致、二重claimは409で停止する。旧workerを再起動せず、registryにあるIssue、次手、証跡を復元して明示dispatchを待つ。
-6. 新contextのruntime IDが得られた後、logical Front Desk aliasとの対応を公開報告で更新する。prepare bundleへ未知のruntime IDを作らない。
+6. 成功receiptのgeneration、active alias、runtime ID、from/to、digest、`changed=true`を送信payloadとexact照合する。成功時だけmarkerを保存して明示dispatchへ進む。status publisherはそのgeneration、alias、runtime IDのSHA-256 digestを`runtime_binding`として毎回送り、raw runtime IDは公開GETや画面へ出さない。prepare bundleへ未知のruntime IDを作らない。
+
+`CODEX_THREAD_ID`とcanonical task pathの検査はruntimeが渡したmetadataの取り違えを防ぐためのprovenance検査であり、APIがrootの真正性を暗号学的に証明するものではない。API側の信頼境界は既存Status.Ingest認証、registry CAS、成功receiptのexact照合である。
 
 未完依頼が0件ならその事実を表示し、dry-run用の架空依頼を本番registryに作らない。dry-runはsnapshotの隔離copyでprepare/claimを検証し、本番active ownerを移さない。
