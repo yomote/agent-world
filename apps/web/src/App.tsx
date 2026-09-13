@@ -239,7 +239,7 @@ export default function App() {
         )}
       </section>
       <footer className="page-footer">
-        <span>LLMなし · メモリ内World · 再起動でリセット</span>
+        <span>メモリ内World · 休止や再起動でAの位置と履歴はリセット</span>
         <span>World Simulator is authoritative.</span>
       </footer>
     </main>

@@ -18,7 +18,7 @@ CIはローカル検証を終えた変更を確認するために使う。Agent�
 
 設定は [ci.yml](../../.github/workflows/ci.yml)。1回につき1job、実行時間は最大10分。npm/pipのダウンロードキャッシュを利用する。別PRは別グループであり、リポジトリ全体の同時実行数や時間あたりの起動回数を制限する設定ではない。連続pushのたびにworkflow自体は作られるため、pushをまとめる運用も必要になる。
 
-工場機能の追加後もこの実行予算を維持する。check job内でAPI契約・lint・format・test・build、lycheeのローカルリンク検査、Terraformのfmt/validate/mock testを行う。各検査の結果を集約し、失敗・未実行があれば最後のstepでjobを失敗させる。途中で失敗した場合もsummaryとartifactへ取得済みの結果を残す。GitHub設定の必須チェック名も `check` とし、[Terraform](../../infra/github/README.md)のテストでCI名との一致を確認する。GitHubへのplan/applyはPRのCIからは行わない。
+工場機能の追加後もこの実行予算を維持する。check job内でAPI契約・lint・format・test・build、lycheeのローカルリンク検査、Terraformのfmt/validate/mock testを行う。各検査の結果を集約し、失敗・未実行があれば最後のstepでjobを失敗させる。途中で失敗した場合もsummaryとartifactへ取得済みの結果を残す。GitHub設定の必須チェック名は `check`と`container-check`とし、[Terraform](../../infra/github/README.md)のテストで両workflowのjob名との一致を確認する。GitHubへのplan/applyはPRのCIからは行わない。
 
 工場runnerは全検査を合わせて180秒までとし、残り時間を各コマンドの期限として渡す。使い切ったら後続をnot_runで記録して終了する。これにより複数のハングを順番に待ってレポート保存前にjob期限へ達することを防ぐ。依存の取得やrunner自体の停止でGitHub側の期限が切れた場合、artifact保存は保証できないため、GitHubのtimed_out/cancelledを結果として扱う。
 

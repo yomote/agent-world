@@ -1,0 +1,320 @@
+name: Deploy Azure
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [main]
+    paths:
+      - "apps/world/**"
+      - "apps/web/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "package.json"
+      - "package-lock.json"
+      - "requirements-prod.txt"
+      - "infra/azure/**"
+      - "scripts/azure/**"
+      - ".github/workflows/deploy-azure.yml"
+  repository_dispatch:
+    types: [agent-world-merged]
+  workflow_dispatch:
+    inputs:
+      image_only:
+        description: Build and push the current main image without Azure deployment
+        required: true
+        default: false
+        type: boolean
+      confirm_image_publish:
+        description: For image-only mode, enter publish-ghcr-image
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  container-check:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: azure-container-check-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect container input changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          set +e
+          git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
+            requirements-prod.txt .github/workflows/deploy-azure.yml
+          diff_status=$?
+          set -e
+          case "${diff_status}" in
+            0) echo "container=false" >>"${GITHUB_OUTPUT}" ;;
+            1) echo "container=true" >>"${GITHUB_OUTPUT}" ;;
+            *) echo "Container input comparison failed with exit ${diff_status}." >&2; exit "${diff_status}" ;;
+          esac
+
+      - name: Build and exercise production container
+        if: steps.changes.outputs.container == 'true'
+        shell: bash
+        env:
+          CONTAINER_NAME: agent-world-pr-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          docker build --pull --tag agent-world-pr-check .
+          docker run --detach --rm --publish 127.0.0.1:8000:8000 \
+            --name "${CONTAINER_NAME}" agent-world-pr-check
+          cleanup() { docker rm --force "${CONTAINER_NAME}" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/healthz | jq -e '.status == "ok"' >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if test "${ready}" != "true"; then
+            docker logs "${CONTAINER_NAME}"
+            exit 1
+          fi
+          curl --fail --silent --show-error http://127.0.0.1:8000/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:8000/api/world | jq -e '.world_id and .revision == 0' >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/api/not-found)" = "404"
+
+      - name: Record skipped container build
+        if: steps.changes.outputs.container == 'false'
+        shell: bash
+        run: echo "No production-container input changed; the required check completed without a rebuild." >>"${GITHUB_STEP_SUMMARY}"
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: azure-production
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    concurrency:
+      group: deploy-azure-production
+      cancel-in-progress: false
+    steps:
+      - name: Validate source event
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          PUSH_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPOSITORY}"
+          main_sha="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${api}/git/ref/heads/main" | jq -r '.object.sha')"
+
+          case "${EVENT_NAME}" in
+            repository_dispatch)
+              pr_number="$(jq -er '.pr_number' <<<"${EVENT_PAYLOAD}")"
+              pr_head="$(jq -er '.head_sha' <<<"${EVENT_PAYLOAD}")"
+              merge_sha="$(jq -er '.merge_commit_sha' <<<"${EVENT_PAYLOAD}")"
+              [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]
+              [[ "${pr_head}" =~ ^[0-9a-f]{40}$ ]]
+              [[ "${merge_sha}" =~ ^[0-9a-f]{40}$ ]]
+              pr="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                "${api}/pulls/${pr_number}")"
+              test "$(jq -r '.merged' <<<"${pr}")" = "true"
+              test "$(jq -r '.head.sha' <<<"${pr}")" = "${pr_head}"
+              test "$(jq -r '.merge_commit_sha' <<<"${pr}")" = "${merge_sha}"
+              comparison="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                "${api}/compare/${merge_sha}...${main_sha}")"
+              test "$(jq -r '.merge_base_commit.sha' <<<"${comparison}")" = "${merge_sha}"
+              ;;
+            push)
+              [[ "${PUSH_SHA}" =~ ^[0-9a-f]{40}$ ]]
+              comparison="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                "${api}/compare/${PUSH_SHA}...${main_sha}")"
+              test "$(jq -r '.merge_base_commit.sha' <<<"${comparison}")" = "${PUSH_SHA}"
+              ;;
+            workflow_dispatch)
+              ;;
+            *) exit 64 ;;
+          esac
+          echo "sha=${main_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Require approved deployment mode
+        id: approval
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMAGE_ONLY: ${{ inputs.image_only }}
+          IMAGE_CONFIRMATION: ${{ inputs.confirm_image_publish }}
+          DEPLOY_ENABLED: ${{ vars.AZURE_DEPLOY_ENABLED }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+          AZURE_AUTH_MODE: ${{ vars.AZURE_AUTH_MODE }}
+          AZURE_BUDGET_CURRENCY: ${{ vars.AZURE_BUDGET_CURRENCY }}
+          AZURE_BUDGET_CONTACT_EMAILS_JSON: ${{ vars.AZURE_BUDGET_CONTACT_EMAILS_JSON }}
+        run: |
+          set -euo pipefail
+          image_only=false
+          if test "${EVENT_NAME}" = "workflow_dispatch" && test "${IMAGE_ONLY}" = "true"; then
+            test "${IMAGE_CONFIRMATION}" = "publish-ghcr-image"
+            image_only=true
+          else
+            test "${DEPLOY_ENABLED}" = "true"
+            for value in \
+              "${AZURE_CLIENT_ID}" "${AZURE_TENANT_ID}" "${AZURE_SUBSCRIPTION_ID}" \
+              "${AZURE_RESOURCE_GROUP}" "${AZURE_CONTAINER_APP}"; do
+              test -n "${value}"
+            done
+            test "${AZURE_AUTH_MODE}" = "entra"
+            test "${AZURE_BUDGET_CURRENCY}" = "JPY"
+            jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and test("^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$"))' \
+              <<<"${AZURE_BUDGET_CONTACT_EMAILS_JSON}" >/dev/null
+          fi
+          echo "image_only=${image_only}" >>"${GITHUB_OUTPUT}"
+
+      - name: Check out exact main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve desired deployment source
+        id: desired
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git log -1 --format=%H -- \
+            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json \
+            requirements-prod.txt infra/azure scripts/azure .github/workflows/deploy-azure.yml)"
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=${source_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build and push immutable image
+        id: image
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.desired.outputs.sha }}
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          image_repository="${IMAGE_REPOSITORY,,}"
+          repository="${image_repository#ghcr.io/}"
+          registry_token="$(curl --fail-with-body --silent --show-error \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull" | jq -r '.token')"
+          test -n "${registry_token}" && test "${registry_token}" != "null"
+          headers_file="$(mktemp)"
+          trap 'rm -f "${headers_file}"' EXIT
+          status="$(curl --silent --show-error --output /dev/null --dump-header "${headers_file}" \
+            --write-out '%{http_code}' -H "Authorization: Bearer ${registry_token}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/${repository}/manifests/${SOURCE_SHA}")"
+          if test "${status}" = "200"; then
+            digest="$(awk 'BEGIN { IGNORECASE=1 } /^docker-content-digest:/ { gsub("\\r", "", $2); print $2 }' "${headers_file}")"
+            echo "Existing source image found; build and push skipped."
+          elif test "${status}" = "404"; then
+            echo "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+            docker build --pull --tag "${image_repository}:${SOURCE_SHA}" .
+            docker push "${image_repository}:${SOURCE_SHA}"
+            digest="$(docker buildx imagetools inspect "${image_repository}:${SOURCE_SHA}" \
+              --format '{{.Manifest.Digest}}')"
+            docker logout ghcr.io
+          else
+            echo "GHCR manifest lookup failed with HTTP ${status}; image tag was not overwritten." >&2
+            exit 1
+          fi
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "reference=${image_repository}@${digest}" >>"${GITHUB_OUTPUT}"
+
+      - name: Require anonymous GHCR pull
+        if: steps.approval.outputs.image_only != 'true'
+        shell: pwsh
+        run: ./scripts/azure/Test-GhcrPublic.ps1 -Image '${{ steps.image.outputs.reference }}'
+
+      - name: Record approved image preparation
+        if: steps.approval.outputs.image_only == 'true'
+        shell: bash
+        run: |
+          echo "### GHCR image prepared" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- image: \`${{ steps.image.outputs.reference }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- Azure deployment: not attempted" >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Sign in to Azure with OIDC
+        if: steps.approval.outputs.image_only != 'true'
+        uses: Azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy image once
+        if: steps.approval.outputs.image_only != 'true'
+        id: deploy
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP_NAME: ${{ vars.AZURE_CONTAINER_APP }}
+          IMAGE: ${{ steps.image.outputs.reference }}
+        run: |
+          set -euo pipefail
+          test -n "${RESOURCE_GROUP}" && test -n "${APP_NAME}"
+          current_image="$(az containerapp show --only-show-errors --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" --query 'properties.template.containers[0].image' --output tsv)"
+          if test "${current_image}" = "${IMAGE}"; then
+            echo "Image already deployed; skipping revision update."
+          else
+            az containerapp update --only-show-errors --resource-group "${RESOURCE_GROUP}" \
+              --name "${APP_NAME}" --image "${IMAGE}" --output none
+          fi
+          fqdn="$(az containerapp show --only-show-errors --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}" --query 'properties.configuration.ingress.fqdn' --output tsv)"
+          test -n "${fqdn}"
+          echo "url=https://${fqdn}" >>"${GITHUB_OUTPUT}"
+
+      - name: Verify HTTPS and authorization boundary
+        if: steps.approval.outputs.image_only != 'true'
+        shell: pwsh
+        run: ./scripts/azure/Test-AzureSmoke.ps1 -BaseUrl '${{ steps.deploy.outputs.url }}' -AuthMode '${{ vars.AZURE_AUTH_MODE }}'
+
+      - name: Record deployment
+        if: steps.approval.outputs.image_only != 'true'
+        shell: bash
+        run: |
+          echo "### Azure deployment" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- main snapshot: \`${{ steps.source.outputs.sha }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- desired source: \`${{ steps.desired.outputs.sha }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- image: \`${{ steps.image.outputs.reference }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- URL: ${{ steps.deploy.outputs.url }}" >>"${GITHUB_STEP_SUMMARY}"
+          echo "- smoke: HTTPS health and ${{ vars.AZURE_AUTH_MODE }} boundary passed" >>"${GITHUB_STEP_SUMMARY}"

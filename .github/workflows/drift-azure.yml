@@ -1,0 +1,93 @@
+name: Azure cost and drift
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-cost-drift
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: azure-production
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Sign in to Azure with OIDC
+        uses: Azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve desired immutable image
+        id: image
+        shell: bash
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          repository="${IMAGE_REPOSITORY,,}"
+          source_sha="$(git log -1 --format=%H -- \
+            apps/world apps/web Dockerfile .dockerignore package.json package-lock.json requirements-prod.txt \
+            infra/azure scripts/azure .github/workflows/deploy-azure.yml)"
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
+          digest="$(docker buildx imagetools inspect "${repository}:${source_sha}" \
+            --format '{{.Manifest.Digest}}')"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "reference=${repository}@${digest}" >>"${GITHUB_OUTPUT}"
+          echo "source=${source_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Compare declared and actual configuration
+        shell: pwsh
+        env:
+          CONTACTS_JSON: ${{ vars.AZURE_BUDGET_CONTACT_EMAILS_JSON }}
+          PRINCIPALS_JSON: ${{ vars.AZURE_ALLOWED_PRINCIPAL_IDS_JSON }}
+        run: |
+          $contacts = if ($env:CONTACTS_JSON) { @($env:CONTACTS_JSON | ConvertFrom-Json) } else { @() }
+          $principals = if ($env:PRINCIPALS_JSON) { @($env:PRINCIPALS_JSON | ConvertFrom-Json) } else { @() }
+          ./scripts/azure/Test-AzureDrift.ps1 `
+            -SubscriptionId '${{ vars.AZURE_SUBSCRIPTION_ID }}' `
+            -ResourceGroupName '${{ vars.AZURE_RESOURCE_GROUP }}' `
+            -Location '${{ vars.AZURE_LOCATION }}' `
+            -AppName '${{ vars.AZURE_CONTAINER_APP }}' `
+            -Image '${{ steps.image.outputs.reference }}' `
+            -BudgetStartDate '${{ vars.AZURE_BUDGET_START_DATE }}' `
+            -BudgetAmount '${{ vars.AZURE_BUDGET_AMOUNT }}' `
+            -BudgetContactEmails $contacts `
+            -AuthMode '${{ vars.AZURE_AUTH_MODE }}' `
+            -AllowedPrincipalObjectIds $principals `
+            -EntraClientId '${{ vars.AZURE_ENTRA_CLIENT_ID }}' `
+            -TenantId '${{ vars.AZURE_TENANT_ID }}' `
+            -OperatorPrincipalObjectId '${{ vars.AZURE_OPERATOR_PRINCIPAL_ID }}'
+
+      - name: Check month-to-date cost
+        shell: pwsh
+        run: |
+          ./scripts/azure/Get-AzureCost.ps1 `
+            -SubscriptionId '${{ vars.AZURE_SUBSCRIPTION_ID }}' `
+            -ResourceGroupName '${{ vars.AZURE_RESOURCE_GROUP }}' `
+            -BudgetAmount '${{ vars.AZURE_BUDGET_AMOUNT }}' `
+            -ExpectedCurrency '${{ vars.AZURE_BUDGET_CURRENCY }}' `
+            -AlertPercent 50
+
+      - name: Record unchanged state
+        shell: bash
+        run: |
+          echo "Azure core/auth drift: none" >>"${GITHUB_STEP_SUMMARY}"
+          echo "Desired deployment source: \`${{ steps.image.outputs.source }}\`" >>"${GITHUB_STEP_SUMMARY}"
+          echo "Cost threshold: below 50%; budget alerts are not a hard cap" >>"${GITHUB_STEP_SUMMARY}"
