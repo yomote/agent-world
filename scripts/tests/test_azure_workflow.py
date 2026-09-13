@@ -110,3 +110,7 @@ def test_entra_credential_recovery_deletes_exact_orphan_before_new_reset():
     assert (
         "$allCredentials = @($credentialMetadataJson | ConvertFrom-Json)" in CONFIGURE_ENTRA_SCRIPT
     )
+    assert "--years 1 --append --output json" in CONFIGURE_ENTRA_SCRIPT
+    assert (
+        "$allCredentials.Count -ne 1 -or $matchingCredentials.Count -ne 1" in CONFIGURE_ENTRA_SCRIPT
+    )

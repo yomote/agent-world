@@ -32,6 +32,7 @@ $ingress = $ingressJson | ConvertFrom-Json
 $fqdn = $ingress.fqdn
 if (-not $fqdn) { throw "Container App ingress FQDNを確認できません。" }
 $displayName = "$AppName-login"
+$servicePrincipalAssignmentRequired = $false
 $existing = @(& az ad app list --display-name $displayName --query '[].appId' --output tsv --only-show-errors)
 if ($LASTEXITCODE -ne 0) { throw "Entra app registration lookup failed." }
 
@@ -49,6 +50,7 @@ if ($resumeValues.Count -eq 3) {
   if ($LASTEXITCODE -ne 0 -or -not $applicationJson) { throw 'Resume app actualを読み取れません。' }
   $servicePrincipalJson = & az ad sp show --only-show-errors --id $ResumeClientId --output json
   if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalJson) { throw 'Resume service principal actualを読み取れません。' }
+  $servicePrincipalActual = $servicePrincipalJson | ConvertFrom-Json
   $credentialsJson = & az ad app credential list --only-show-errors --id $ResumeClientId --output json
   if ($LASTEXITCODE -ne 0 -or -not $credentialsJson) { throw 'Resume credential actualを読み取れません。' }
   $assignmentsJson = & az rest --only-show-errors --method get --uri "https://graph.microsoft.com/v1.0/users/$AllowedUserObjectId/appRoleAssignments" --query 'value[].{resourceId:resourceId,principalId:principalId}' --output json
@@ -60,7 +62,7 @@ if ($resumeValues.Count -eq 3) {
   try {
     @{
       application = $applicationJson | ConvertFrom-Json
-      servicePrincipal = $servicePrincipalJson | ConvertFrom-Json
+      servicePrincipal = $servicePrincipalActual
       credentials = @($credentialsJson | ConvertFrom-Json)
       assignments = @($assignmentsJson | ConvertFrom-Json)
       auth = $authJson | ConvertFrom-Json
@@ -83,6 +85,7 @@ if ($resumeValues.Count -eq 3) {
   }
   $clientId = $ResumeClientId
   $servicePrincipalId = $ResumeServicePrincipalObjectId
+  $servicePrincipalAssignmentRequired = [bool]$servicePrincipalActual.appRoleAssignmentRequired
   if ($ResumeOrphanCredentialKeyId) {
     & az ad app credential delete --only-show-errors --id $clientId --key-id $ResumeOrphanCredentialKeyId
     if ($LASTEXITCODE -ne 0) { throw 'Orphan credential deletion failed or is unknown. New credential was not created.' }
@@ -98,7 +101,7 @@ if ($resumeValues.Count -eq 3) {
   $servicePrincipalId = & az ad sp create --only-show-errors --id $clientId --query id --output tsv
   if ($LASTEXITCODE -ne 0 -or -not $servicePrincipalId) { throw "Entra service principal creation failed." }
 }
-if (-not $ResumeOrphanCredentialKeyId) {
+if (-not $ResumeOrphanCredentialKeyId -and -not $servicePrincipalAssignmentRequired) {
   & az ad sp update --only-show-errors --id $servicePrincipalId --set appRoleAssignmentRequired=true --output none
   if ($LASTEXITCODE -ne 0) { throw "Entra assignment requirement update failed." }
 }
@@ -108,7 +111,7 @@ $credentialKeyId = $null
 $credentialExpiresOn = $null
 $clientSecret = $null
 try {
-  $credentialJson = & az ad app credential reset --only-show-errors --id $clientId --display-name $credentialDisplayName --years 1 --output json
+  $credentialJson = & az ad app credential reset --only-show-errors --id $clientId --display-name $credentialDisplayName --years 1 --append --output json
   if ($LASTEXITCODE -ne 0 -or -not $credentialJson) { throw "Entra client secret creation failed." }
   $clientSecret = ($credentialJson | ConvertFrom-Json).password
   if (-not $clientSecret) {
@@ -125,7 +128,7 @@ try {
   }
   $allCredentials = @($credentialMetadataJson | ConvertFrom-Json)
   $matchingCredentials = @($allCredentials | Where-Object displayName -eq $credentialDisplayName)
-  if ($matchingCredentials.Count -ne 1) {
+  if ($allCredentials.Count -ne 1 -or $matchingCredentials.Count -ne 1) {
     throw "Credential metadataを一意に特定できません。actualを確認してください: clientId=$clientId displayName=$credentialDisplayName"
   }
   $credentialKeyId = $matchingCredentials[0].keyId
