@@ -16,6 +16,8 @@ import {
   sourceDescription,
   statusDescription,
   summarizeItems,
+  treePanDistance,
+  treePanState,
   treeLayout,
 } from "../../docs/status/status.js";
 
@@ -305,4 +307,29 @@ test("refreshでfocused agentが消えた場合も先頭fallbackへfocusする",
   // focused node消失時にbodyへfocusが落ちてkeyboard操作を失う回帰を防ぐ。
   const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
   assert.match(source, /\(restored \|\| selectedGroup\)\?\.focus\(\{ preventScroll: true \}\)/);
+});
+
+test("tree panは左右方向と両端のdisabledをscroll寸法だけで決める", () => {
+  // 横長treeを動かせず、端でも無効状態が更新されない回帰を防ぐ。
+  assert.deepEqual(treePanState(0, 366, 900), {
+    leftDisabled: true,
+    rightDisabled: false,
+  });
+  assert.deepEqual(treePanState(534, 366, 900), {
+    leftDisabled: false,
+    rightDisabled: true,
+  });
+  assert.equal(treePanDistance(366, -1), -256);
+  assert.equal(treePanDistance(366, 1), 256);
+});
+
+test("tree pan controlsを同じscroll containerへ接続する", async () => {
+  // mouseとnative button keyboard操作の正規UI経路が配線から消える回帰を防ぐ。
+  const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  assert.match(html, /id="tree-pan-left"[^>]*type="button"[^>]*aria-label="ツリー図を左へ移動"/s);
+  assert.match(html, /id="tree-pan-right"[^>]*type="button"[^>]*aria-label="ツリー図を右へ移動"/s);
+  assert.match(source, /#tree-pan-left"\)\.addEventListener\("click", \(\) => panTree\(-1\)\)/);
+  assert.match(source, /#tree-pan-right"\)\.addEventListener\("click", \(\) => panTree\(1\)\)/);
+  assert.match(source, /#tree-scroll"\)\.addEventListener\("scroll", updateTreePanControls\)/);
 });

@@ -244,7 +244,34 @@ export function selectedAgentAfterRefresh(nodes, preferredAgent) {
   return nodes[0]?.agent || null;
 }
 
+export function treePanState(scrollLeft, clientWidth, scrollWidth) {
+  const max = Math.max(0, scrollWidth - clientWidth);
+  return {
+    leftDisabled: scrollLeft <= 0,
+    rightDisabled: scrollLeft >= max - 1,
+  };
+}
+
+export function treePanDistance(clientWidth, direction) {
+  return (direction < 0 ? -1 : 1) * Math.max(220, Math.floor(clientWidth * 0.7));
+}
+
 let selectedAgent = null;
+
+function updateTreePanControls() {
+  const scroll = document.querySelector("#tree-scroll");
+  const state = treePanState(scroll.scrollLeft, scroll.clientWidth, scroll.scrollWidth);
+  document.querySelector("#tree-pan-left").disabled = state.leftDisabled;
+  document.querySelector("#tree-pan-right").disabled = state.rightDisabled;
+}
+
+function panTree(direction) {
+  const scroll = document.querySelector("#tree-scroll");
+  scroll.scrollBy({
+    left: treePanDistance(scroll.clientWidth, direction),
+    behavior: "smooth",
+  });
+}
 
 function text(tag, value, className) {
   const node = document.createElement(tag);
@@ -372,6 +399,7 @@ function renderTree(snapshot) {
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("width", width);
   svg.setAttribute("height", height);
+  updateTreePanControls();
   const ns = "http://www.w3.org/2000/svg";
   for (const parent of nodes) {
     const children = nodes.filter((node) => node.parent_agent === parent.agent);
@@ -548,6 +576,9 @@ async function refresh() {
 
 if (typeof document !== "undefined") {
   document.querySelector("#refresh").addEventListener("click", refresh);
+  document.querySelector("#tree-pan-left").addEventListener("click", () => panTree(-1));
+  document.querySelector("#tree-pan-right").addEventListener("click", () => panTree(1));
+  document.querySelector("#tree-scroll").addEventListener("scroll", updateTreePanControls);
   refresh();
   setInterval(() => {
     if (document.visibilityState === "visible") refresh();
