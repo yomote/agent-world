@@ -35,6 +35,8 @@
 - `handover-ready`が検証できない、別のactive ownerがいる、generation・digestが不一致、通信結果が不明、またはCAS競合の場合は停止してユーザーへ説明する。旧rootやchildが自動claimせず、保存済みworkerを自動再起動しない。
 - 新しいroot自身のruntime session IDを得た後、claim payloadを1回だけ送信し、成功receiptでactive owner移転を確認してから、必要なworkerだけを明示dispatchする。
 
+Front Deskは開始時と作業の節目に、`git rev-parse --path-format=absolute --git-common-dir` の下にある `codex/pm-routine/reports/latest.md` を、存在すれば読む。取得時刻と未観測を含む読取り専用棚卸しとして扱い、ここからclaim、worker再起動、外部投稿を行わない。
+
 ## CIと外部アクセスの予算
 
 - 編集・検証はローカルで進め、pushは意味のある変更単位にまとめる。編集中のPRはDraftを基本とし、CIを動かすためだけの空commit・連続push・自動再実行ループを作らない。
