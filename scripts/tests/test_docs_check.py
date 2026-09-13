@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 CHECK_TOOLS = (Path(__file__).parents[1] / "check_tools.py").read_text(encoding="utf-8")
 
 
