@@ -5,10 +5,34 @@ import {
   activityDescription,
   capacityDescription,
   elapsed,
+  parentDescription,
+  parentSourceDescription,
+  relationshipEdges,
   sourceDescription,
   statusDescription,
   summarizeItems,
 } from "../../docs/status/status.js";
+
+test("親子関係は明示値だけを使いroot・未知・snapshot外を区別する", () => {
+  // role名から親を推測したり、欠損parentでrenderを止める回帰を防ぐ。
+  const items = [
+    { agent: "root", owner_label: "窓口", parent_relation: "root" },
+    { agent: "child", owner_label: "実装", parent_relation: "delegated", parent_agent: "root" },
+    { agent: "outside-child", parent_relation: "delegated", parent_agent: "outside" },
+    { agent: "unknown", parent_relation: "unknown" },
+  ];
+  assert.equal(parentDescription(items[0], items), "依頼元なし（本作業の窓口）");
+  assert.equal(parentDescription(items[1], items), "窓口");
+  assert.equal(parentDescription(items[2], items), "outside（snapshot外）");
+  assert.equal(parentDescription(items[3], items), "依頼元未取得");
+  assert.equal(relationshipEdges(items).length, 4);
+  assert.equal(
+    parentSourceDescription("runtime-canonical-task-path"),
+    "runtime canonical path観測",
+  );
+  assert.equal(parentSourceDescription("explicit-delegation"), "明示された委任");
+  assert.equal(parentSourceDescription(undefined), "未取得");
+});
 
 test("runtime capacityはtask件数と別に実行中と上限を表示する", () => {
   // taskカードの件数を実行中agent数へ混ぜる回帰を防ぐ。
