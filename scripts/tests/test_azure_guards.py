@@ -16,6 +16,7 @@ ENTRA_RESUME = ROOT / "scripts" / "azure" / "Assert-EntraResumeState.ps1"
 CONFIGURE_ENTRA = ROOT / "scripts" / "azure" / "Configure-Entra.ps1"
 RESUME_AFTER_KEY_VAULT = ROOT / "scripts" / "azure" / "Resume-EntraAfterKeyVault.ps1"
 COMPLETE_ENTRA_ASSIGNMENT = ROOT / "scripts" / "azure" / "Complete-EntraAssignmentAndAuth.ps1"
+TEST_ENTRA_DIRECTORY = ROOT / "scripts" / "azure" / "Test-EntraDirectory.ps1"
 BUDGET_EMAILS = ROOT / "scripts" / "azure" / "Assert-BudgetContactEmails.ps1"
 EXTERNAL_DEPLOYMENT_FAILURE = (
     ROOT / "scripts" / "azure" / "Resolve-AzureExternalDeploymentFailure.ps1"
@@ -25,6 +26,68 @@ PWSH = shutil.which("pwsh")
 RESUME_CLIENT_ID = "11111111-1111-1111-1111-111111111111"
 RESUME_SP_ID = "22222222-2222-2222-2222-222222222222"
 RESUME_USER_ID = "33333333-3333-3333-3333-333333333333"
+
+
+def _run_entra_directory(
+    tmp_path: Path, assignment_payload
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Run the external-ingress directory guard without contacting Azure."""
+    log = tmp_path / "entra-directory-az.log"
+    assignment_json = json.dumps(assignment_payload, separators=(",", ":"))
+    wrapper = tmp_path / "run-entra-directory.ps1"
+    wrapper.write_text(
+        f"""
+function global:az {{
+  $joined = [string]::Join(' ', $args)
+  Add-Content -LiteralPath '{log.as_posix()}' -Value $joined
+  $global:LASTEXITCODE = 0
+  if ($joined -match '^account show .*--output json$') {{
+    return '{{"id":"sub-1","state":"Enabled","tenantId":"{RESUME_USER_ID}"}}'
+  }}
+  if ($joined -match '^account show .*--query user.type') {{ return 'user' }}
+  if ($joined -match '^account show .*--query tenantId') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^ad signed-in-user show') {{ return '{RESUME_USER_ID}' }}
+  if ($joined -match '^ad app show') {{
+    return '{{"signInAudience":"AzureADMyOrg","web":{{"redirectUris":["https://internal.example/.auth/login/aad/callback"],"implicitGrantSettings":{{"enableIdTokenIssuance":true}}}}}}'
+  }}
+  if ($joined -match '^containerapp show') {{ return 'internal.example' }}
+  if ($joined -match '^ad sp show') {{
+    return '{{"id":"{RESUME_SP_ID}","appRoleAssignmentRequired":true}}'
+  }}
+  if ($joined -match '^rest ' -and
+      $joined.Contains('--query value[].{{resourceId:resourceId,principalId:principalId}}')) {{
+    return '{assignment_json}'
+  }}
+  if ($joined -match '^rest ') {{
+    return '{{"value":[{{"principalDisplayName":"tenant\\user"}}]}}'
+  }}
+  throw "Unexpected az call: $joined"
+}}
+try {{
+  & '{TEST_ENTRA_DIRECTORY.as_posix()}' `
+    -SubscriptionId sub-1 `
+    -ResourceGroupName rg-agent-world-jpe `
+    -AppName agent-world-yomote-jpe `
+    -TenantId {RESUME_USER_ID} `
+    -EntraClientId {RESUME_CLIENT_ID} `
+    -AllowedPrincipalObjectIds @('{RESUME_USER_ID}')
+}} catch {{
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}}
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [PWSH, "-NoProfile", "-File", str(wrapper)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    calls = log.read_text(encoding="utf-8") if log.exists() else ""
+    return result, calls
 
 
 def _resource_ids(subscription: str, group: str, app: str) -> list[str]:
@@ -41,6 +104,55 @@ def _resource_ids(subscription: str, group: str, app: str) -> list[str]:
         f"{base}/providers/Microsoft.OperationalInsights/workspaces/{app}-logs",
         f"{base}/providers/Microsoft.Consumption/budgets/{app}-monthly",
     ]
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_directory_projects_ids_instead_of_parsing_display_names(tmp_path):
+    """表示名にbackslashを含むfull Graph応答を読まず、必要ID projectionだけを検査する。"""
+    payload = [
+        {"resourceId": RESUME_SP_ID, "principalId": RESUME_USER_ID},
+        {
+            "resourceId": "44444444-4444-4444-4444-444444444444",
+            "principalId": RESUME_USER_ID,
+        },
+    ]
+    result, calls = _run_entra_directory(tmp_path, payload)
+    assert result.returncode == 0, result.stderr
+    assert "--query value[].{resourceId:resourceId,principalId:principalId}" in calls
+    assert calls.count("rest --only-show-errors") == 1
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+def test_entra_directory_rejects_foreign_assignment(tmp_path):
+    """本人に別app assignmentしかないstateを対象assignmentありへ丸めない。"""
+    result, _ = _run_entra_directory(
+        tmp_path,
+        [
+            {
+                "resourceId": "44444444-4444-4444-4444-444444444444",
+                "principalId": RESUME_USER_ID,
+            }
+        ],
+    )
+    assert result.returncode != 0
+    assert "Allowed user is not assigned" in result.stderr
+
+
+@pytest.mark.skipif(PWSH is None, reason="PowerShell guard test requires pwsh")
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"resourceId": RESUME_SP_ID, "principalId": RESUME_USER_ID},
+        [{"resourceId": RESUME_SP_ID}],
+        [{"resourceId": "not-a-guid", "principalId": RESUME_USER_ID}],
+    ],
+)
+def test_entra_directory_rejects_unknown_projection_shape(tmp_path, payload):
+    """null/scalar/ID欠損をassignment無しまたは一致へ暗黙変換しない。"""
+    result, _ = _run_entra_directory(tmp_path, payload)
+    assert result.returncode != 0
+    assert "projection JSON is unknown" in result.stderr
 
 
 def _run_plan_guard(
@@ -1147,6 +1259,38 @@ def test_windows_az_cmd_reproduces_parenthesized_query_and_accepts_safe_query(tm
     assert "[0] was unexpected at this time" in old.stderr
     assert safe.returncode == 0, safe.stderr
     assert "identity.userAssignedIdentities --output json" in safe.stdout
+
+
+@pytest.mark.skipif(
+    PWSH is None or os.name != "nt", reason="Windows az.cmd argument regression requires pwsh"
+)
+def test_windows_az_cmd_preserves_entra_assignment_id_projection(tmp_path):
+    """Directory guardのID-only JMESPathがWindows batch経由でも同じargvとして届く。"""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "az.cmd").write_text(
+        '@echo off\n@if exist "%ComSpec%" (\n  echo %*\n) else (\n  exit /b 1\n)\n',
+        encoding="ascii",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    result = subprocess.run(
+        [
+            PWSH,
+            "-NoProfile",
+            "-Command",
+            "az rest --method get --query "
+            "'value[].{resourceId:resourceId,principalId:principalId}' --output json",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "value[].{resourceId:resourceId,principalId:principalId}" in result.stdout
 
 
 @pytest.mark.skipif(
