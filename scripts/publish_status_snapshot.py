@@ -92,6 +92,21 @@ def snapshot_digest(snapshot: Any) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def status_upsert_payload(snapshot: Any) -> bytes:
+    """full snapshotからregistryを保持するpartial upsertだけを生成する。"""
+    fields = {
+        "source",
+        "items",
+        "runtime_capacity",
+        "focus_summary",
+        "session_tree",
+        "known_history",
+        "runtime_binding",
+    }
+    payload = snapshot.model_dump(mode="json", include=fields, exclude_none=True)
+    return json.dumps(payload, ensure_ascii=False).encode()
+
+
 def publish_if_new(
     args: argparse.Namespace,
     token_provider: Callable[[str, str], str] = azure_cli_token,
@@ -103,10 +118,11 @@ def publish_if_new(
     state = read_state(args.state)
     if state.get("outcome") in {"attempting", "unknown"}:
         raise RuntimeError("previous write result is unknown; inspect actual before continuing")
-    payload = args.snapshot.read_bytes()
-    snapshot = StatusSnapshot.model_validate_json(payload)
+    snapshot = StatusSnapshot.model_validate_json(args.snapshot.read_bytes())
     if snapshot.source != "local-event-record":
         raise ValueError("only local-event-record snapshots can be published")
+    if snapshot.runtime_binding is None:
+        raise ValueError("successful Front Desk claim marker binding is required before publish")
     observed_at = snapshot.observed_at.isoformat()
     digest = snapshot_digest(snapshot)
     if state.get("last_confirmed_digest") == digest:
@@ -120,6 +136,7 @@ def publish_if_new(
             return False
 
     token = token_provider(args.audience, args.ingest_client_id)
+    payload = status_upsert_payload(snapshot)
     attempt = {
         "last_attempted_observed_at": observed_at,
         "attempted_at": datetime.now(UTC).isoformat(),
@@ -129,11 +146,11 @@ def publish_if_new(
     write_state(args.state, attempt)
     try:
         response_status = sender(
-            f"{args.base_url.rstrip('/')}/api/status",
+            f"{args.base_url.rstrip('/')}/api/status/upsert",
             token,
             payload,
         )
-        if response_status != 204:
+        if response_status != 200:
             raise RuntimeError(f"unexpected HTTP status {response_status}")
     except Exception:
         write_state(args.state, {**attempt, "outcome": "unknown"})

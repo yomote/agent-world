@@ -277,7 +277,26 @@ export function selectedRequestAfterRefresh(registry, preferredRequestId) {
   );
 }
 
+export function runtimeBindingMatchesActiveFrontDesk(snapshot) {
+  if (!snapshot.active_runtime_bound) return true;
+  return snapshot.runtime_binding_verified === true;
+}
+
+export function activeRuntimeSnapshot(snapshot) {
+  if (runtimeBindingMatchesActiveFrontDesk(snapshot)) return snapshot;
+  return {
+    ...snapshot,
+    items: [],
+    runtime_capacity: null,
+    focus_summary: null,
+    session_tree: null,
+    known_history: null,
+    runtime_binding_confirmed: false,
+  };
+}
+
 export function requestScopedSnapshot(snapshot, request) {
+  snapshot = activeRuntimeSnapshot(snapshot);
   if (!request) return snapshot;
   const members = new Set(request.member_agents || []);
   const currentNodes = (snapshot.session_tree?.nodes || []).filter((node) =>
@@ -558,7 +577,11 @@ function renderRequestRegistry(snapshot) {
   metaRow(
     registryMeta,
     "active runtime binding",
-    registry.active_front_desk.runtime_session_id || "未取得",
+    snapshot.active_runtime_bound
+      ? snapshot.runtime_binding_verified
+        ? "確認済み（識別子は非公開）"
+        : "未確認（旧runtime表示を保留）"
+      : "未取得",
   );
   metaRow(
     registryMeta,
@@ -900,25 +923,29 @@ function renderFocus(snapshot, request) {
 }
 
 function render(snapshot) {
-  latestSnapshot = snapshot;
-  const selectedRequest = renderRequestRegistry(snapshot);
-  const [sourceLabel, sourceNote] = sourceDescription(snapshot.source);
+  const runtimeSnapshot = activeRuntimeSnapshot(snapshot);
+  latestSnapshot = runtimeSnapshot;
+  const selectedRequest = renderRequestRegistry(runtimeSnapshot);
+  const [sourceLabel, sourceNote] = sourceDescription(runtimeSnapshot.source);
   const notice = document.querySelector(".notice");
-  const hasStaleItem = snapshot.items.some((item) => item.stale);
-  notice.dataset.state = snapshot.stale || hasStaleItem ? "stale" : "live";
-  document.querySelector("#health").textContent = snapshot.stale
-    ? `snapshot更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
-    : hasStaleItem
-      ? "snapshotは届いていますが、activityが途絶したsessionがあります。"
-      : "最新snapshotを表示しています。";
+  const bindingMismatch = runtimeSnapshot.runtime_binding_confirmed === false;
+  const hasStaleItem = runtimeSnapshot.items.some((item) => item.stale);
+  notice.dataset.state = snapshot.stale || hasStaleItem || bindingMismatch ? "stale" : "live";
+  document.querySelector("#health").textContent = bindingMismatch
+    ? "active Front Deskは確認済みですが、このrootのruntime statusは未確認です。旧rootの表示は適用していません。"
+    : snapshot.stale
+      ? `snapshot更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
+      : hasStaleItem
+        ? "snapshotは届いていますが、activityが途絶したsessionがあります。"
+        : "最新snapshotを表示しています。";
   document.querySelector("#fetched-at").textContent = dated(snapshot.received_at);
   document.querySelector("#next-refresh").textContent = dated(snapshot.observed_at);
   document.querySelector("#source-kind").textContent = sourceLabel;
   document.querySelector("#source-note").textContent = sourceNote;
 
-  renderFocus(snapshot, selectedRequest);
+  renderFocus(runtimeSnapshot, selectedRequest);
 
-  const capacity = capacityDescription(snapshot.runtime_capacity);
+  const capacity = capacityDescription(runtimeSnapshot.runtime_capacity);
   const metrics = document.querySelector("#capacity-metrics");
   metrics.replaceChildren();
   for (const metric of capacity.metrics) {
@@ -928,14 +955,15 @@ function render(snapshot) {
     if (metric.note) box.append(text("small", metric.note));
     metrics.append(box);
   }
-  document.querySelector("#capacity-observed").textContent = snapshot.runtime_capacity?.observed_at
-    ? `容量観測 ${dated(snapshot.runtime_capacity.observed_at)}`
+  document.querySelector("#capacity-observed").textContent = runtimeSnapshot.runtime_capacity
+    ?.observed_at
+    ? `容量観測 ${dated(runtimeSnapshot.runtime_capacity.observed_at)}`
     : "容量観測 未取得";
   document.querySelector("#capacity-note").textContent = capacity.note;
   const capacityMeta = document.querySelector("#capacity-meta");
   capacityMeta.replaceChildren();
   for (const [name, value] of capacity.rows) metaRow(capacityMeta, name, value);
-  renderTreeArea(snapshot, selectedRequest);
+  renderTreeArea(runtimeSnapshot, selectedRequest);
 }
 
 async function refresh() {

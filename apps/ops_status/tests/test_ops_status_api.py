@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -275,7 +276,28 @@ def test_request_registry_rejects_independent_clock_conflicts_and_keeps_noop_gen
 def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
     """二重claim、別successor、暗黙worker再開を防ぐ。"""
     now = datetime.now(UTC)
-    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    data = snapshot(now)
+    data["runtime_capacity"] = {
+        "scope": "old root",
+        "observed_at": now.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 1,
+    }
+    data["focus_summary"] = {
+        "purpose": "旧root",
+        "progress_summary": "旧進捗",
+        "next_action": "旧次手",
+        "updated_at": now.isoformat(),
+        "source": "manual-public-summary",
+    }
+    data["session_tree"] = session_tree(now)
+    data["known_history"] = known_history(now)
+    data["runtime_binding"] = {
+        "registry_generation": 1,
+        "front_desk_alias": "front-desk-1",
+        "runtime_session_digest": "sha256:" + "c" * 64,
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
     client = TestClient(create_app(store))
     record = request_record("request-64", now)
     initialize = {
@@ -326,7 +348,223 @@ def test_handover_requires_exact_bundle_and_does_not_restart_recorded_workers():
     stored = store.value.request_registry.requests[0]
     assert stored.runtime_connection == "record-only"
     assert stored.lifecycle == "handover-waiting"
+    assert store.value.items == []
+    assert store.value.runtime_capacity is None
+    assert store.value.focus_summary is None
+    assert store.value.session_tree is None
+    assert store.value.known_history == StatusSnapshot.model_validate(data).known_history
+    assert store.value.runtime_binding is None
     assert client.put("/api/status/requests/upsert", json=claim).status_code == 409
+
+
+def test_status_after_claim_requires_the_active_root_runtime_binding():
+    """旧publisherやchildがclaim後のcurrent runtime表示を復活させる回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    record = request_record("request-82", now)
+    initialize = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [record],
+    }
+    assert client.put("/api/status/requests/upsert", json=initialize).status_code == 200
+    digest = "sha256:" + "b" * 64
+    prepared_at = now + timedelta(minutes=1)
+    prepare = {
+        **initialize,
+        "action": "prepare-handover",
+        "expected_generation": 1,
+        "observed_at": prepared_at.isoformat(),
+        "requests": [],
+        "successor_front_desk": "front-desk-2",
+        "bundle_digest": digest,
+    }
+    assert client.put("/api/status/requests/upsert", json=prepare).status_code == 200
+    claim = {
+        **prepare,
+        "action": "claim-handover",
+        "expected_generation": 2,
+        "actor_front_desk": "front-desk-2",
+        "actor_runtime_session_id": "runtime-root-new",
+        "observed_at": (prepared_at + timedelta(minutes=1)).isoformat(),
+    }
+    assert client.put("/api/status/requests/upsert", json=claim).status_code == 200
+    item = snapshot(prepared_at + timedelta(minutes=2))["items"][0]
+
+    missing = client.put(
+        "/api/status/upsert", json={"source": "local-event-record", "items": [item]}
+    )
+    wrong = client.put(
+        "/api/status/upsert",
+        json={
+            "source": "local-event-record",
+            "items": [item],
+            "runtime_binding": {
+                "registry_generation": 3,
+                "front_desk_alias": "front-desk-2",
+                "runtime_session_digest": "sha256:" + hashlib.sha256(b"runtime-child").hexdigest(),
+            },
+        },
+    )
+    assert missing.status_code == 409
+    assert wrong.status_code == 409
+    assert store.value.items == []
+
+    binding = {
+        "registry_generation": 3,
+        "front_desk_alias": "front-desk-2",
+        "runtime_session_digest": "sha256:" + hashlib.sha256(b"runtime-root-new").hexdigest(),
+    }
+    accepted = client.put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [item], "runtime_binding": binding},
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["runtime_binding"] == binding
+    assert store.value.runtime_binding is not None
+    assert store.value.runtime_binding.runtime_session_digest == binding["runtime_session_digest"]
+
+    public = client.get("/api/status")
+    assert public.status_code == 200
+    assert public.json()["active_runtime_bound"] is True
+    assert public.json()["runtime_binding_verified"] is True
+    assert "runtime_session_id" not in public.json()["request_registry"]["active_front_desk"]
+    assert "runtime_binding" not in public.json()
+
+    changed_request = store.value.request_registry.requests[0].model_dump(mode="json")
+    changed_request["progress_summary"] = "claim後の通常更新"
+    changed_request["report_updated_at"] = (prepared_at + timedelta(minutes=3)).isoformat()
+    registry_update = {
+        "source": "manual-public-registry",
+        "action": "update",
+        "expected_generation": 3,
+        "actor_front_desk": "front-desk-2",
+        "observed_at": (prepared_at + timedelta(minutes=3)).isoformat(),
+        "requests": [changed_request],
+    }
+    updated_registry = client.put("/api/status/requests/upsert", json=registry_update)
+    assert updated_registry.status_code == 200
+    assert updated_registry.json()["generation"] == 4
+
+    later_item = snapshot(prepared_at + timedelta(minutes=4))["items"][0]
+    still_accepted = client.put(
+        "/api/status/upsert",
+        json={
+            "source": "local-event-record",
+            "items": [later_item],
+            "runtime_binding": binding,
+        },
+    )
+    assert still_accepted.status_code == 200
+    assert store.value.request_registry.active_front_desk.claim_generation == 3
+
+
+def test_full_put_cannot_reinject_status_without_the_claimed_root_binding():
+    """full PUTでbinding検証を迂回して旧root表示を戻す回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    initialize = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [request_record("request-82", now)],
+    }
+    assert client.put("/api/status/requests/upsert", json=initialize).status_code == 200
+    prepared_at = now + timedelta(minutes=1)
+    prepare = {
+        **initialize,
+        "action": "prepare-handover",
+        "expected_generation": 1,
+        "observed_at": prepared_at.isoformat(),
+        "requests": [],
+        "successor_front_desk": "front-desk-2",
+        "bundle_digest": "sha256:" + "d" * 64,
+    }
+    assert client.put("/api/status/requests/upsert", json=prepare).status_code == 200
+    claim = {
+        **prepare,
+        "action": "claim-handover",
+        "expected_generation": 2,
+        "actor_front_desk": "front-desk-2",
+        "actor_runtime_session_id": "runtime-root-new",
+        "observed_at": (prepared_at + timedelta(minutes=1)).isoformat(),
+    }
+    assert client.put("/api/status/requests/upsert", json=claim).status_code == 200
+
+    incoming = store.value.model_dump(mode="json")
+    incoming["source"] = "local-event-record"
+    incoming["observed_at"] = (prepared_at + timedelta(minutes=2)).isoformat()
+    incoming["received_at"] = (prepared_at + timedelta(minutes=2)).isoformat()
+    incoming["items"] = snapshot(prepared_at + timedelta(minutes=2))["items"]
+
+    rejected = client.put("/api/status", json=incoming)
+    assert rejected.status_code == 409
+    assert store.value.items == []
+
+    incoming["runtime_binding"] = {
+        "registry_generation": 3,
+        "front_desk_alias": "front-desk-2",
+        "runtime_session_digest": "sha256:" + hashlib.sha256(b"runtime-root-new").hexdigest(),
+    }
+    accepted = client.put("/api/status", json=incoming)
+    assert accepted.status_code == 204
+    assert store.value.items
+
+
+def test_legacy_snapshot_with_unverified_runtime_binding_remains_readable():
+    """保存済みv1を503にせず、current runtimeだけをfail-closedにする。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["request_registry"] = {
+        "generation": 1,
+        "active_front_desk": {
+            "alias": "front-desk-1",
+            "claimed_at": now.isoformat(),
+            "runtime_session_id": "legacy-runtime",
+            "runtime_observed_at": now.isoformat(),
+        },
+        "updated_at": now.isoformat(),
+        "source": "manual-public-registry",
+        "requests": [request_record("request-legacy", now)],
+        "handover": {
+            "state": "accepted",
+            "from_front_desk": "front-desk-old",
+            "to_front_desk": "front-desk-1",
+            "bundle_digest": "sha256:" + "e" * 64,
+            "prepared_at": (now - timedelta(minutes=1)).isoformat(),
+            "accepted_at": now.isoformat(),
+            "resume_policy": "explicit-dispatch-required",
+        },
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    client = TestClient(create_app(store))
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    assert response.json()["active_runtime_bound"] is True
+    assert response.json()["runtime_binding_verified"] is False
+    assert "runtime_session_id" not in response.json()["request_registry"]["active_front_desk"]
+
+    binding = {
+        "registry_generation": 1,
+        "front_desk_alias": "front-desk-1",
+        "runtime_session_digest": "sha256:" + hashlib.sha256(b"legacy-runtime").hexdigest(),
+    }
+    item = snapshot(now + timedelta(minutes=1))["items"][0]
+    accepted = client.put(
+        "/api/status/upsert",
+        json={"source": "local-event-record", "items": [item], "runtime_binding": binding},
+    )
+    assert accepted.status_code == 200
+    assert client.get("/api/status").json()["runtime_binding_verified"] is True
 
 
 def test_full_and_status_upsert_preserve_request_registry():

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import secrets
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from .models import (
     RequestRegistryUpdate,
     RuntimeCapacitySnapshot,
     StatusResponse,
+    StatusRuntimeBinding,
     StatusSnapshot,
     StatusUpsertReceipt,
     StatusUpsertRequest,
@@ -266,6 +268,7 @@ def apply_registry_update(
             active_front_desk=FrontDeskClaim(
                 alias=update.actor_front_desk,
                 claimed_at=update.observed_at,
+                claim_generation=1,
                 runtime_session_id=update.actor_runtime_session_id,
                 runtime_observed_at=(
                     update.observed_at if update.actor_runtime_session_id is not None else None
@@ -333,6 +336,7 @@ def apply_registry_update(
         active = FrontDeskClaim(
             alias=update.actor_front_desk,
             claimed_at=update.observed_at,
+            claim_generation=current.generation + 1,
             runtime_session_id=update.actor_runtime_session_id,
             runtime_observed_at=(
                 update.observed_at if update.actor_runtime_session_id is not None else None
@@ -384,6 +388,38 @@ def apply_registry_update(
     ), True
 
 
+def require_active_runtime_binding(
+    registry: RequestRegistrySnapshot | None, binding: StatusRuntimeBinding | None
+) -> None:
+    """handover後のstatusをclaim済みroot以外から受け取らない。"""
+    if registry is None or registry.active_front_desk.runtime_session_id is None:
+        if binding is not None:
+            raise HTTPException(status_code=409, detail="active Front Desk runtime is not bound")
+        return
+    active = registry.active_front_desk
+    expected_digest = f"sha256:{hashlib.sha256(active.runtime_session_id.encode()).hexdigest()}"
+    legacy_claim = (
+        active.claim_generation is None
+        and registry.handover is not None
+        and registry.handover.state == "accepted"
+        and registry.handover.to_front_desk == active.alias
+        and registry.handover.accepted_at == active.claimed_at
+    )
+    generation_matches = binding is not None and (
+        binding.registry_generation == active.claim_generation
+        or (legacy_claim and binding.registry_generation <= registry.generation)
+    )
+    if (
+        binding is None
+        or not generation_matches
+        or binding.front_desk_alias != active.alias
+        or binding.runtime_session_digest != expected_digest
+    ):
+        raise HTTPException(
+            status_code=409, detail="status update does not match the active Front Desk runtime"
+        )
+
+
 def principal_allowed(request: Request, expected_environment_key: str) -> bool:
     if os.environ.get("AGENT_WORLD_STATUS_REQUIRE_AUTH") != "true":
         return True
@@ -430,7 +466,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/status", response_model=StatusResponse)
+    @app.get("/api/status", response_model=StatusResponse, response_model_exclude_none=True)
     def get_status(response: Response) -> StatusResponse:
         response.headers["Cache-Control"] = "no-store"
         try:
@@ -457,6 +493,8 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
             else:
                 current_revision = current_version.revision
+            if current is not None:
+                require_active_runtime_binding(current.request_registry, snapshot.runtime_binding)
             if snapshot.request_registry is not None and (
                 current is None or current.request_registry is None
             ):
@@ -507,6 +545,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
 
             current = current_version.snapshot
+            require_active_runtime_binding(current.request_registry, update.runtime_binding)
             current_agents = [item.agent for item in current.items]
             if len(current_agents) != len(set(current_agents)):
                 raise HTTPException(status_code=409, detail="status snapshot has duplicate agents")
@@ -564,6 +603,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             merged_focus = update.focus_summary if focus_supplied else current.focus_summary
             merged_tree = update.session_tree if tree_supplied else current.session_tree
             merged_history = update.known_history if history_supplied else current.known_history
+            merged_binding = update.runtime_binding or current.runtime_binding
             observation_times = [current.observed_at, *(item.observed_at for item in update.items)]
             if capacity_supplied and update.runtime_capacity is not None:
                 observation_times.append(update.runtime_capacity.observed_at)
@@ -586,6 +626,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     session_tree=merged_tree,
                     known_history=merged_history,
                     request_registry=current.request_registry,
+                    runtime_binding=merged_binding,
                 )
             except ValidationError as error:
                 raise HTTPException(status_code=422, detail="merged snapshot is invalid") from error
@@ -618,6 +659,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             focus_summary=stored.focus_summary if focus_supplied else None,
             session_tree=stored.session_tree if tree_supplied else None,
             known_history=stored.known_history if history_supplied else None,
+            runtime_binding=stored.runtime_binding if update.runtime_binding is not None else None,
         )
 
     @app.put(
@@ -639,12 +681,23 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             registry, changed = apply_registry_update(current.request_registry, update)
             if changed:
                 try:
+                    runtime_reset = update.action == "claim-handover"
                     merged = current.model_copy(
                         update={
                             "source": "ingest-upsert",
                             "observed_at": max(current.observed_at, update.observed_at),
                             "received_at": datetime.now(UTC),
                             "request_registry": registry,
+                            # claimと同じBlob CASで旧rootのruntime表示を無効化する。
+                            "items": [] if runtime_reset else current.items,
+                            "runtime_capacity": (
+                                None if runtime_reset else current.runtime_capacity
+                            ),
+                            "focus_summary": None if runtime_reset else current.focus_summary,
+                            "session_tree": None if runtime_reset else current.session_tree,
+                            # 完了履歴はcurrent runtimeとは別の記録として保持する。
+                            "known_history": current.known_history,
+                            "runtime_binding": None if runtime_reset else current.runtime_binding,
                         }
                     )
                     revision = snapshots.write_if_revision(merged, current_version.revision)

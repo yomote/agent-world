@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  activeRuntimeSnapshot,
   activityDescription,
   buildTree,
   capacityDescription,
@@ -25,6 +26,7 @@ import {
   treePanDistance,
   treePanState,
   treeLayout,
+  runtimeBindingMatchesActiveFrontDesk,
 } from "../../docs/status/status.js";
 
 test("親子関係は明示値だけを使いroot・未知・snapshot外を区別する", () => {
@@ -251,7 +253,7 @@ test("旧refresh・stale・focus・時計・linkとkeyboard操作を実装に保
   // tree置換時に利用者が確認していた表示意味と操作を消す回帰を防ぐ。
   const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
   for (const fragment of [
-    'notice.dataset.state = snapshot.stale || hasStaleItem ? "stale" : "live"',
+    "notice.dataset.state = snapshot.stale || hasStaleItem || bindingMismatch",
     'document.visibilityState === "visible"',
     "10_000",
     "focus-source",
@@ -267,12 +269,12 @@ test("旧refresh・stale・focus・時計・linkとkeyboard操作を実装に保
   }
 });
 
-test("asset queryはJS/CSSを同じv6へ更新し図だけpan可能にする", async () => {
+test("asset queryはJS/CSSを同じv7へ更新し図だけpan可能にする", async () => {
   // 旧cacheの片方だけが残ることと390px page overflowの再発を防ぐ。
   const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../../docs/status/status.css", import.meta.url), "utf8");
-  assert.match(html, /status\.css\?v=6/);
-  assert.match(html, /status\.js\?v=6/);
+  assert.match(html, /status\.css\?v=7/);
+  assert.match(html, /status\.js\?v=7/);
   assert.match(css, /\.tree-scroll\s*{[^}]*overflow:\s*auto/s);
   assert.match(css, /width:\s*calc\(100vw - 24px\)/);
 });
@@ -492,6 +494,37 @@ test("accepted handover後はclaimより古いconnected観測を引継確認待�
     requestConnectionDescription(refreshed, current, registry, "2026-09-13T04:06:00Z"),
     /現在接続を確認/,
   );
+});
+
+test("active Front Desk binding不一致では旧rootのruntime表示をすべて隠す", () => {
+  // claim成功とstatus更新の間や旧publisher到着時に旧treeがcurrentへ戻る回帰を防ぐ。
+  const claimed = {
+    ...registrySnapshot,
+    active_runtime_bound: true,
+    runtime_binding_verified: false,
+    request_registry: {
+      generation: 4,
+      active_front_desk: {
+        alias: "front-desk-next",
+      },
+      requests: [request64],
+    },
+  };
+  assert.equal(runtimeBindingMatchesActiveFrontDesk(claimed), false);
+  const hidden = activeRuntimeSnapshot(claimed);
+  assert.deepEqual(hidden.items, []);
+  assert.equal(hidden.runtime_capacity, null);
+  assert.equal(hidden.focus_summary, null);
+  assert.equal(hidden.session_tree, null);
+  assert.equal(hidden.known_history, null);
+  assert.equal(hidden.runtime_binding_confirmed, false);
+
+  const current = {
+    ...claimed,
+    runtime_binding_verified: true,
+  };
+  assert.equal(runtimeBindingMatchesActiveFrontDesk(current), true);
+  assert.equal(activeRuntimeSnapshot(current), current);
 });
 
 test("handover待ちとreconnectableを稼働扱いせず明示dispatch必要と示す", () => {

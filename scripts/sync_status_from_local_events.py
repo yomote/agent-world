@@ -1,8 +1,10 @@
 """構造化されたlocal Codex event記録だけから管理statusを更新する。"""
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -19,6 +21,14 @@ CONFIG_KEYS = {
     "focus_summary",
     "session_tree",
     "known_history",
+}
+CLAIM_MARKER_KEYS = {
+    "schema_version",
+    "locator_digest",
+    "bundle_digest",
+    "generation",
+    "active_front_desk",
+    "runtime_session_id",
 }
 AGENT_KEYS = {
     "agent_path",
@@ -52,6 +62,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--sessions", type=Path, default=Path.home() / ".codex" / "sessions")
     parser.add_argument("--output", type=Path, default=Path("artifacts/status/current.json"))
+    parser.add_argument(
+        "--claim-marker",
+        type=Path,
+        default=Path(".codex/handoff-claim.local.json"),
+    )
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--interval", type=float, default=10.0)
     parser.add_argument(
@@ -64,6 +79,39 @@ def parse_args() -> argparse.Namespace:
 
 def parse_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def runtime_binding_from_claim_marker(
+    marker_path: Path, expected_root_thread_id: str | None = None
+) -> dict[str, Any] | None:
+    """成功claim markerをstatus用の非公開digest bindingへ変換する。"""
+    if not marker_path.exists():
+        return None
+    marker = json.loads(marker_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(marker, dict) or set(marker) != CLAIM_MARKER_KEYS:
+        raise ValueError("claim marker has an unexpected schema")
+    generation = marker.get("generation")
+    alias = marker.get("active_front_desk")
+    runtime_session_id = marker.get("runtime_session_id")
+    if marker.get("schema_version") != 1 or not isinstance(generation, int) or generation < 1:
+        raise ValueError("claim marker has an invalid generation")
+    if not isinstance(alias, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", alias):
+        raise ValueError("claim marker has an invalid Front Desk alias")
+    if not isinstance(runtime_session_id, str) or not runtime_session_id:
+        raise ValueError("claim marker has no root runtime identity")
+    if expected_root_thread_id is not None and runtime_session_id != expected_root_thread_id:
+        raise ValueError("claim marker does not match the configured root thread")
+    for key in ("locator_digest", "bundle_digest"):
+        value = marker.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            raise ValueError(f"claim marker has an invalid {key}")
+    return {
+        "registry_generation": generation,
+        "front_desk_alias": alias,
+        "runtime_session_digest": (
+            f"sha256:{hashlib.sha256(runtime_session_id.encode()).hexdigest()}"
+        ),
+    }
 
 
 def read_meta(path: Path) -> dict[str, Any] | None:
@@ -277,6 +325,7 @@ def snapshot_payload(snapshot: Any, compat_v1: bool) -> dict[str, Any]:
     payload.pop("session_tree", None)
     payload.pop("known_history", None)
     payload.pop("request_registry", None)
+    payload.pop("runtime_binding", None)
     return payload
 
 
@@ -315,6 +364,9 @@ def sync_once(args: argparse.Namespace, config: dict[str, Any], reader: EventRea
             "focus_summary": config.get("focus_summary"),
             "session_tree": config.get("session_tree"),
             "known_history": config.get("known_history"),
+            "runtime_binding": runtime_binding_from_claim_marker(
+                args.claim_marker, config["root_thread_id"]
+            ),
         }
     )
     payload = snapshot_payload(snapshot, args.compat_v1)
