@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .models import (
+    RuntimeCapacitySnapshot,
     StatusResponse,
     StatusSnapshot,
     StatusUpsertReceipt,
@@ -26,17 +27,74 @@ from .store import (
 )
 
 
-def reject_older_item(previous: WorkItem, incoming: WorkItem) -> None:
+def reject_older_item(
+    previous: WorkItem,
+    incoming: WorkItem,
+    *,
+    allow_same_observation_transition: bool = False,
+) -> None:
     if incoming.observed_at < previous.observed_at:
         raise HTTPException(status_code=409, detail=f"older observation for agent {incoming.agent}")
-    for field, label in (
-        ("latest_activity_at", "activity"),
-        ("summary_updated_at", "summary"),
+    observed_fields = {
+        "observed_at",
+        "latest_activity",
+        "latest_activity_at",
+        "current_action",
+        "progress_summary",
+        "summary_updated_at",
+    }
+    newer_activity = incoming.latest_activity_at is not None and (
+        previous.latest_activity_at is None
+        or incoming.latest_activity_at > previous.latest_activity_at
+    )
+    if (
+        incoming.observed_at == previous.observed_at
+        and previous.model_dump(exclude=observed_fields)
+        != incoming.model_dump(exclude=observed_fields)
+        and not (allow_same_observation_transition and newer_activity)
     ):
-        previous_time = getattr(previous, field)
-        incoming_time = getattr(incoming, field)
-        if previous_time is not None and (incoming_time is None or incoming_time < previous_time):
-            raise HTTPException(status_code=409, detail=f"older {label} for agent {incoming.agent}")
+        raise HTTPException(
+            status_code=409, detail=f"ambiguous observation for agent {incoming.agent}"
+        )
+
+    previous_activity = (previous.latest_activity, previous.latest_activity_at)
+    incoming_activity = (incoming.latest_activity, incoming.latest_activity_at)
+    if previous_activity != incoming_activity and (
+        incoming.latest_activity_at is None
+        or (
+            previous.latest_activity_at is not None
+            and incoming.latest_activity_at <= previous.latest_activity_at
+        )
+    ):
+        raise HTTPException(status_code=409, detail=f"older activity for agent {incoming.agent}")
+
+    previous_summary = (
+        previous.current_action,
+        previous.progress_summary,
+        previous.summary_updated_at,
+    )
+    incoming_summary = (
+        incoming.current_action,
+        incoming.progress_summary,
+        incoming.summary_updated_at,
+    )
+    if previous_summary != incoming_summary and (
+        incoming.summary_updated_at is None
+        or (
+            previous.summary_updated_at is not None
+            and incoming.summary_updated_at <= previous.summary_updated_at
+        )
+    ):
+        raise HTTPException(status_code=409, detail=f"older summary for agent {incoming.agent}")
+
+
+def reject_older_capacity(
+    previous: RuntimeCapacitySnapshot, incoming: RuntimeCapacitySnapshot
+) -> None:
+    if incoming.observed_at < previous.observed_at:
+        raise HTTPException(status_code=409, detail="older runtime capacity observation")
+    if incoming.observed_at == previous.observed_at and incoming != previous:
+        raise HTTPException(status_code=409, detail="ambiguous runtime capacity observation")
 
 
 def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot) -> None:
@@ -48,8 +106,8 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
     for previous in current.items:
         replacement = incoming_by_agent.get(previous.agent)
         if replacement is not None:
-            reject_older_item(previous, replacement)
-        elif incoming.observed_at <= current.observed_at:
+            reject_older_item(previous, replacement, allow_same_observation_transition=True)
+        elif current.source == "ingest-upsert" or incoming.observed_at <= current.observed_at:
             raise HTTPException(
                 status_code=409, detail=f"stale full snapshot omits agent {previous.agent}"
             )
@@ -58,8 +116,7 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
             raise HTTPException(
                 status_code=409, detail="full snapshot cannot clear runtime capacity"
             )
-        if incoming.runtime_capacity.observed_at < current.runtime_capacity.observed_at:
-            raise HTTPException(status_code=409, detail="older runtime capacity observation")
+        reject_older_capacity(current.runtime_capacity, incoming.runtime_capacity)
 
 
 def principal_allowed(request: Request, expected_environment_key: str) -> bool:
@@ -187,9 +244,8 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 capacity_supplied
                 and update.runtime_capacity is not None
                 and current.runtime_capacity is not None
-                and update.runtime_capacity.observed_at < current.runtime_capacity.observed_at
             ):
-                raise HTTPException(status_code=409, detail="older runtime capacity observation")
+                reject_older_capacity(current.runtime_capacity, update.runtime_capacity)
 
             replacements = {item.agent: item for item in update.items}
             merged_items = [replacements.pop(item.agent, item) for item in current.items]

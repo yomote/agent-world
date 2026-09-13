@@ -113,6 +113,12 @@ class StatusUpsertRequest(BaseModel):
             raise ValueError("runtime_capacity cannot be null when supplied")
         if not self.items and not capacity_supplied:
             raise ValueError("upsert needs an item or runtime_capacity")
+        for item in self.items:
+            if (item.latest_activity is None) != (item.latest_activity_at is None):
+                raise ValueError("upsert activity and its timestamp must be supplied together")
+            has_summary = item.current_action is not None or item.progress_summary is not None
+            if has_summary != (item.summary_updated_at is not None):
+                raise ValueError("upsert summary and its timestamp must be supplied together")
         return self
 
 

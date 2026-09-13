@@ -253,6 +253,7 @@ def test_ingest_upsert_preserves_other_rows_and_omitted_capacity():
     store = MemoryStore(StatusSnapshot.model_validate(data))
     updated = snapshot(current)["items"][0]
     updated["current_action"] = "部分更新を検証"
+    updated["summary_updated_at"] = current.isoformat()
 
     response = TestClient(create_app(store)).put(
         "/api/status/upsert",
@@ -379,11 +380,56 @@ def test_ingest_upsert_does_not_clear_or_rewind_independent_item_clocks(clock, i
         incoming[clock] = (current - timedelta(seconds=1)).isoformat()
         if clock == "latest_activity_at":
             incoming["latest_activity"] = "structured-item"
+        else:
+            incoming["current_action"] = "古い公開メモ"
 
     response = TestClient(create_app(store)).put(
         "/api/status/upsert",
         json={"source": "local-event-record", "items": [incoming]},
     )
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+
+@pytest.mark.parametrize("target", ["item", "activity", "summary", "capacity"])
+def test_ingest_upsert_rejects_different_content_at_the_same_target_clock(target):
+    """同一clockの異なる観測を到着順だけで上書きする回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    item = data["items"][0]
+    item.update(
+        {
+            "latest_activity": "task-started",
+            "latest_activity_at": current.isoformat(),
+            "current_action": "現行メモ",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    data["runtime_capacity"] = {
+        "scope": "root session tree",
+        "observed_at": current.isoformat(),
+        "state_source": "runtime-list-agents-metadata",
+        "running": 4,
+        "total": 4,
+    }
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    payload = {"source": "local-event-record"}
+    if target == "capacity":
+        changed_capacity = data["runtime_capacity"].copy()
+        changed_capacity["running"] = 3
+        payload["runtime_capacity"] = changed_capacity
+    else:
+        changed_item = item.copy()
+        if target == "item":
+            changed_item["status"] = "completed"
+        elif target == "activity":
+            changed_item["latest_activity"] = "task-complete"
+        else:
+            changed_item["current_action"] = "同時刻の別メモ"
+        payload["items"] = [changed_item]
+
+    response = TestClient(create_app(store)).put("/api/status/upsert", json=payload)
 
     assert response.status_code == 409
     assert store.write_count == 0
@@ -411,6 +457,35 @@ def test_full_ingest_cannot_sequentially_erase_upsert_summary_at_same_observatio
     assert response.status_code == 409
     assert store.write_count == 0
     assert store.value.items[0].current_action == "server部分更新を実装"
+
+
+def test_newer_full_ingest_cannot_implicitly_delete_an_upsert_row():
+    """global観測時刻だけ新しいfull PUTが部分更新済みrowを消す回帰を防ぐ。"""
+    current = datetime.now(UTC)
+    data = snapshot(current)
+    data["source"] = "ingest-upsert"
+    data["items"].append(
+        {
+            "agent": "upsert-only-owner",
+            "role": "実装担当",
+            "task": "保持が必要な公開メモ",
+            "status": "running",
+            "observed_at": current.isoformat(),
+            "current_action": "実データを供給",
+            "summary_updated_at": current.isoformat(),
+        }
+    )
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    delayed = snapshot(current + timedelta(seconds=1))
+    delayed["source"] = "local-event-record"
+
+    response = TestClient(create_app(store)).put("/api/status", json=delayed)
+
+    assert response.status_code == 409
+    assert [item.agent for item in store.value.items] == [
+        "management-status-owner",
+        "upsert-only-owner",
+    ]
 
 
 def test_full_ingest_cannot_clear_or_rewind_capacity():
@@ -451,6 +526,7 @@ def test_ingest_upsert_reports_store_conflict_without_retrying():
     data = snapshot(current)
     updated = snapshot(current)["items"][0]
     updated["current_action"] = "競合する更新"
+    updated["summary_updated_at"] = current.isoformat()
     store = ConflictingStore(StatusSnapshot.model_validate(data))
 
     response = TestClient(create_app(store)).put(
