@@ -6,13 +6,13 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 2026-09-13の再開時点で、PR #14はcurrent main `1b245335cee6b9298dd165cb5166fddb85457783`から19 commits遅れ、GitHubで`CONFLICTING`だった。Azure公開対象をcurrent mainへ合わせるため同SHAをbranchへ統合した。競合は`apps/world/api.py`と`apps/world/tests/test_api.py`の2ファイルだけで、mainの共有Event historyとPR #14のhealth / production static配信を両方保持した。mainから入った管理status層は変更していない。
 
-最初の固定後にmainへ入った非機能の文書・構成図2 commitsも競合なしで統合し、今回のpreflight基点を`c94baa8ce49b129aa988948fc27ef0d3b49007e6`に固定した。以後のmain更新はPR #14のmergeabilityまたはdeploy対象へ影響する場合だけ追加統合する。
+最初の固定後にmainへ入った非機能の文書・構成図と管理status更新も競合なしで統合し、今回のpreflight基点を`04a4bc2078e705c556f44e8b2a94d006665aa184`、統合commitを`6ab5b9804d9ebca94a962d9cc3bdf38c21d9f95e`に固定した。管理statusの10 filesはmainの内容をそのまま保持し、Azure / World / infra差分は変更していない。以後のmain更新はPR #14のmergeabilityまたはdeploy対象へ影響する場合だけ追加統合する。
 
 必須check `container-check`が無関係なPRで生成されない問題は、`Deploy Azure` workflowをmain向けの全PRで起動し、production containerへの入力が変わった場合だけbuildする方式へ修正した。無関係なReady PRでも同じcheck名が軽量に成功する。Draftのskipは受入証跡にしない。
 
 ## 独立レビュー依頼packet
 
-- base: `origin/main` (`c94baa8ce49b129aa988948fc27ef0d3b49007e6`、今回のpreflight固定基点)
+- base: `origin/main` (`04a4bc2078e705c556f44e8b2a94d006665aa184`、今回のpreflight固定基点)
 - review対象: PR #14のcurrent head。過去review SHAは履歴であり、修正後SHAへ再reviewする
 - 重点観点:
   - main向けの全Ready PRで`container-check`が生成されるか
@@ -30,18 +30,18 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 ### 対象と上限
 
-| 項目               | 固定する値                                                                                                                                                 |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Azure subscription | 現在確認済みのEnabled subscription `omote-dev-subscription` 1件。実行時にIDとsigned-in userを再照合する                                                    |
-| Region             | Japan East                                                                                                                                                 |
-| Resource Group     | `rg-agent-world-jpe`（既存RGを流用しない）                                                                                                                 |
-| Container App      | `agent-world-yomote-jpe`を候補とする。専用managed environment作成前はname availability APIを使えないため、初回what-ifとapply直前のRG不存在で衝突を検査する |
-| Capacity           | 0.25 vCPU / 0.5 GiB、min replica 0、max replica 1、uvicorn worker 1                                                                                        |
-| 公開範囲           | `/healthz`のみ匿名。UIと`/api/*`はEntra login必須                                                                                                          |
-| 利用者             | 実行時にlogin中の本人Entra object ID 1件だけ                                                                                                               |
-| Image              | Public `ghcr.io/yomote/agent-world`のcurrent main SHAをbuildし、解決済みdigestを固定                                                                       |
-| GitHub OIDC        | `azure-production` environment、subjectは同environment、専用RGのContributorだけ。client secretなし                                                         |
-| Budget             | 推奨packetでは実請求通貨と通知先を確認する。通貨がJPYなら月1,000円、50% actual / 80% forecast / 100% actual通知を初回applyに含める。現在は両方未確認       |
+| 項目               | 固定する値                                                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Azure subscription | 現在確認済みのEnabled subscription `omote-dev-subscription` 1件。実行時にIDとsigned-in userを再照合する                                                                                 |
+| Region             | Japan East                                                                                                                                                                              |
+| Resource Group     | `rg-agent-world-jpe`（既存RGを流用しない）                                                                                                                                              |
+| Container App      | `agent-world-yomote-jpe`を候補とする。専用managed environment作成前はname availability APIを使えないため、初回what-ifとapply直前のRG不存在で衝突を検査する                              |
+| Capacity           | 0.25 vCPU / 0.5 GiB、min replica 0、max replica 1、uvicorn worker 1                                                                                                                     |
+| 公開範囲           | `/healthz`のみ匿名。UIと`/api/*`はEntra login必須                                                                                                                                       |
+| 利用者             | 実行時にlogin中の本人Entra object ID 1件だけ                                                                                                                                            |
+| Image              | Public `ghcr.io/yomote/agent-world`のcurrent main SHAをbuildし、解決済みdigestを固定                                                                                                    |
+| GitHub OIDC        | `azure-production` environment、subjectは同environment、専用RGのContributorだけ。client secretなし                                                                                      |
+| Budget             | 請求通貨はJPYと確認済み。通知先は本人が指定済みだが実addressはprivate入力としてpublic repositoryに記録しない。月1,000円、50% actual / 80% forecast / 100% actual通知を初回applyに含める |
 
 作成対象は次のとおり。Resource Group外の既存resourceを変更しない。
 
@@ -60,9 +60,9 @@ PR #14のアプリ、Container Apps IaC、Entra本人限定認証、OIDC、cost 
 
 匿名公開されるのはGHCR imageと`/healthz`だけである。Container AppのUIと`/api/*`はHTTPSとEntra本人認証を必須にする。Key Vaultのpublic networkは有効だが、data planeはRBACで上記2主体だけに限定する。
 
-既存の暫定見積は、低頻度の本人利用、Container AppsとLog Analyticsの契約上の無料枠が他resourceに消費されていないことを前提に「ほぼ0円」である。請求通貨と当月実績を取得できておらず、価格計算による月額は未検証である。契約、既存利用、通信、traffic、為替で変わる。
+既存の暫定見積は、低頻度の本人利用、Container AppsとLog Analyticsの契約上の無料枠が他resourceに消費されていないことを前提に「ほぼ0円」である。請求通貨はJPYと確認済みだが当月実績は未取得で、価格計算による月額は未検証である。契約、既存利用、通信、traffic、為替で変わる。
 
-Budgetは通知でありhard capではない。Budget未作成は金額通知もないことを意味する。max replica 1、min 0、Log Analytics日次上限で急増を抑えるが、1,000円以内は保証しない。初回公開後は実測costを記録し、通貨と通知先が確定するまでBudgetを「設定済み」と報告しない。
+Budgetは通知でありhard capではない。Budget未作成は金額通知もないことを意味する。max replica 1、min 0、Log Analytics日次上限で急増を抑えるが、1,000円以内は保証しない。初回公開後は実測costを記録し、Budgetのactual作成と通知を確認するまで「設定済み」と報告しない。
 
 ### 実行済みと未実行
 
@@ -78,11 +78,11 @@ Budgetは通知でありhard capではない。Budget未作成は金額通知も
 | Azure / Entra / OIDC / role assignment / GitHub environment variableの書き込み | **未実行**                                                                                  |
 | Internet公開 / smartphone確認                                                  | **未実行**                                                                                  |
 
-### 承認前に残る本人判断
+### 確定済み入力とApply停止条件
 
-本人から必要な未回答は、Budget通知を受け取るメールアドレスである。
+本人がBudget通知先を指定済みである。実addressはpublic Issue / PR / commitに記録せず、最終what-ifとapplyのprivate parameterだけに渡す。
 
-Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの既定値も1000で一致する。この金額は既決の目安であってhard capではない。推奨案は、実請求通貨と通知先を確認し、通貨がJPYなら月1,000円のBudgetを同じapplyに含められるまでresource作成を保留する。JPYは確認済みの実請求通貨ではない。Cost Managementが再び429になる、実通貨がJPYでない、または通知先が得られない場合は初回apply前に停止し、金額を勝手に読み替えたりBudgetなしで公開したりしない。
+Issue #8は月1,000円を設計上の目安としており、ADR 0006とBicepの既定値も1000で一致する。この金額は既決の目安であってhard capではない。請求通貨JPYは`docs/runbooks/azure-management-status.md`に記録された同一subscriptionのBillingProperty確認を根拠とする。Apply scriptはCost Managementを1回再確認し、429、認証失敗、JPY不一致、または通知先不備で初回apply前に停止する。金額を勝手に読み替えたりBudgetなしで公開したりしない。
 
 2026-09-06の照会は429後に既定の60秒・120秒待機とread retry上限を使い切ったが、応答の`Retry-After` / reset値は証跡に残っていない。2026-09-13 01:44 JSTは別taskから1週間経過し明示resumeされた新preflightとしてsubscription scopeを1回だけ照会した。再び429だったため、今回のshared budgetはrequests 1、retries 0で停止した。Azure CLIの安全な出力には今回も`Retry-After` / reset値がなく、次回再開時刻は確定していない。
 
