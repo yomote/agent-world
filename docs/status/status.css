@@ -25,6 +25,13 @@ body {
   margin: 0;
   min-width: 320px;
 }
+main {
+  display: flex;
+  flex-direction: column;
+}
+.capacity-top {
+  order: -1;
+}
 a {
   color: #8cc8ff;
   text-underline-offset: 0.2em;

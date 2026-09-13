@@ -18,6 +18,11 @@ export function elapsed(iso, now = Date.now()) {
 export function statusDescription(status) {
   return STATUS[status] || status || "未取得";
 }
+export function sourceDescription(source) {
+  return source === "fixture"
+    ? ["fixture", "表示確認用データです。実際のagent稼働を示しません。"]
+    : [source || "不明", "公開snapshotの入力種別です。"];
+}
 export function capacityMetrics(capacity) {
   const metric = (label, value, note = "") => ({ label, value: value ?? "未取得", note });
   return capacity
@@ -94,8 +99,8 @@ function detail(node) {
   );
   meta(
     dl,
-    "完了",
-    node.kind === "history" || node.item?.status === "completed" ? "完了" : "未完了",
+    "確認済み成果",
+    node.item?.progress_summary || (node.kind === "history" ? "完了記録" : "未報告"),
   );
   meta(dl, "残り次手", node.item?.next_action || "未報告");
   meta(dl, "阻害", node.item?.blocker === null ? "なしと明示" : node.item?.blocker || "未報告");
@@ -130,17 +135,32 @@ function renderTree(snapshot) {
   svg.setAttribute("height", height);
   const ns = "http://www.w3.org/2000/svg";
   const agents = new Map(nodes.map((node) => [node.agent, node]));
-  for (const node of nodes)
-    if (node.parent_agent && agents.has(node.parent_agent)) {
-      const parent = agents.get(node.parent_agent);
+  for (const parent of nodes) {
+    const children = nodes.filter((node) => node.parent_agent === parent.agent);
+    if (!children.length) continue;
+    const trunkX = parent.x + 226;
+    const yValues = children.map((child) => child.y + 37);
+    const style = children.every((child) => child.kind === "history")
+      ? "tree-line history-line"
+      : "tree-line";
+    const segment = (x1, y1, x2, y2) => {
       const line = document.createElementNS(ns, "line");
-      line.setAttribute("x1", parent.x + 206);
-      line.setAttribute("y1", parent.y + 37);
-      line.setAttribute("x2", node.x);
-      line.setAttribute("y2", node.y + 37);
-      line.setAttribute("class", node.kind === "history" ? "tree-line history-line" : "tree-line");
+      line.setAttribute("x1", x1);
+      line.setAttribute("y1", y1);
+      line.setAttribute("x2", x2);
+      line.setAttribute("y2", y2);
+      line.setAttribute("class", style);
       svg.append(line);
-    }
+    };
+    segment(parent.x + 206, parent.y + 37, trunkX, parent.y + 37);
+    segment(
+      trunkX,
+      Math.min(parent.y + 37, ...yValues),
+      trunkX,
+      Math.max(parent.y + 37, ...yValues),
+    );
+    for (const child of children) segment(trunkX, child.y + 37, child.x, child.y + 37);
+  }
   for (const node of nodes) {
     const group = document.createElementNS(ns, "g");
     group.setAttribute("class", `tree-node ${node.kind}`);
@@ -180,9 +200,9 @@ function renderTree(snapshot) {
   detail(nodes[0]);
 }
 function render(snapshot) {
-  const source = snapshot.source || "不明";
+  const [source, sourceNote] = sourceDescription(snapshot.source);
   document.querySelector("#source-kind").textContent = source;
-  document.querySelector("#source-note").textContent = "公開snapshotの入力種別です。";
+  document.querySelector("#source-note").textContent = sourceNote;
   document.querySelector("#health").textContent = snapshot.stale
     ? `snapshot更新停止の可能性があります（受信から${snapshot.age_seconds}秒）。`
     : "最新snapshotを表示しています。";

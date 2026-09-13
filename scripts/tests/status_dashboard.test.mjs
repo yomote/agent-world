@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTree, capacityMetrics, statusDescription } from "../../docs/status/status.js";
+import {
+  buildTree,
+  capacityMetrics,
+  elapsed,
+  sourceDescription,
+  statusDescription,
+} from "../../docs/status/status.js";
 
 test("current treeは可変nodeを全て描画対象にし、履歴を人数へ混ぜない", () => {
   // 固定人数や履歴nodeをcurrent稼働として数える回帰を防ぐ。
@@ -35,4 +41,10 @@ test("状態ラベルは役割名から推測しない", () => {
   // agent名や親子関係を実行状態に変換する回帰を防ぐ。
   assert.equal(statusDescription("running"), "実装中");
   assert.equal(statusDescription("completed"), "完了");
+});
+
+test("sourceと時計はfixtureや未来時刻を実稼働へ偽装しない", () => {
+  // 入力種別や欠損時刻をactivityとして推測する回帰を防ぐ。
+  assert.match(sourceDescription("fixture")[1], /実際のagent稼働を示しません/);
+  assert.equal(elapsed("2026-09-13T01:00:01Z", Date.parse("2026-09-13T01:00:00Z")), "0秒前");
 });
