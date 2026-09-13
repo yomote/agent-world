@@ -9,6 +9,9 @@ ENVIRONMENT_SCRIPT = (
 DEPLOY_SCRIPT = (
     Path(__file__).parents[2] / "scripts" / "azure" / "Deploy-AzureCore.ps1"
 ).read_text(encoding="utf-8")
+CONFIGURE_ENTRA_SCRIPT = (
+    Path(__file__).parents[2] / "scripts" / "azure" / "Configure-Entra.ps1"
+).read_text(encoding="utf-8")
 
 
 def test_container_check_is_created_for_every_pull_request():
@@ -84,3 +87,13 @@ def test_external_auth_failure_triggers_single_containment_path():
     assert "az deployment sub create @common --name $deploymentName" in DEPLOY_SCRIPT
     assert "-DeploymentName $deploymentName" in DEPLOY_SCRIPT
     assert "POST-APPLY AUTH FAILURE" in DEPLOY_SCRIPT
+
+
+def test_entra_resume_validates_partial_state_before_any_followup_write():
+    """既存app/SP resumeはactual guard後だけassignment更新へ進み、再作成しない。"""
+    resume_branch = CONFIGURE_ENTRA_SCRIPT.index("if ($resumeValues.Count -eq 3)")
+    guard = CONFIGURE_ENTRA_SCRIPT.index("Assert-EntraResumeState.ps1", resume_branch)
+    create_branch = CONFIGURE_ENTRA_SCRIPT.index("az ad app create", resume_branch)
+    update = CONFIGURE_ENTRA_SCRIPT.index("az ad sp update", create_branch)
+
+    assert resume_branch < guard < create_branch < update

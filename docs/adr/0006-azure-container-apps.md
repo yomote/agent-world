@@ -17,6 +17,8 @@ Azure Resource Managerの宣言とactualを直接比較でき、共有state back
 
 GitHub Actionsはenvironment subjectのOIDCで専用Resource GroupだけのContributorを使う。imageは公開GHCRのdigestで参照し、ACRの固定費とregistry credentialを持たない。本人限定時はsingle-tenant Entra registration、enterprise app assignment必須、Easy Authの本人object ID allowlistを重ねる。client secretはKey Vaultだけに保存し、GitHubへ渡さない。
 
+Entra app/SP作成直後のGraph伝播失敗では全体を再送しない。既存app/SPとtenant、callback、credential・assignment・auth不在を照合できる専用resume modeだけを許可し、別対象や途中副作用があれば停止する。
+
 Log Analyticsは30日保持、0.023 GB/日のingestion safeguard、アプリのaccess log無効化を使う。Budgetは50% actual、80% forecast、100% actualで通知する。Budgetもログの日次上限も課金のhard capではなく、日次cost検査を併用する。
 
 請求通貨は初回に対象subscriptionとResource GroupのBudget scopeを対応付けて確認し、方法・対象・通貨・UTC確認時刻をrepository外のprivate JSONへ保存する。coreや認証設定の通常applyはこの記録が対象subscription、Budget scope、JPYと一致することだけをローカル検査し、Cost Management Queryを呼ばない。subscription、Budget scope、請求契約を変更するときは初回確認を更新する。費用実績の取得はdeploy guardから分離して低頻度に行う。
