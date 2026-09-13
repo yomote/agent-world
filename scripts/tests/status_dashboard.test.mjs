@@ -12,6 +12,7 @@ import {
   parentSourceDescription,
   relationshipEdges,
   sessionTreeDescription,
+  selectedAgentAfterRefresh,
   sourceDescription,
   statusDescription,
   summarizeItems,
@@ -290,4 +291,12 @@ test("容量metricはruntime turn観測でtask数・進捗・実作業人数と�
   assert.match(description.note, /runtime turn状態/);
   assert.match(description.note, /タスク件数・進捗・実作業人数とは別/);
   assert.match(description.note, /起動できることは保証しません/);
+});
+
+test("refresh後は同じagentの選択を復元し、消えたagentだけ先頭へ戻す", () => {
+  // 10秒refreshのSVG再生成で選択対象とkeyboard focusの復元先を失う回帰を防ぐ。
+  const nodes = [{ agent: "front" }, { agent: "worker" }];
+  assert.equal(selectedAgentAfterRefresh(nodes, "worker"), "worker");
+  assert.equal(selectedAgentAfterRefresh(nodes, "completed-worker"), "front");
+  assert.equal(selectedAgentAfterRefresh([], "worker"), null);
 });

@@ -239,6 +239,13 @@ export function treeLayout(nodes, rootAgent) {
   return placed;
 }
 
+export function selectedAgentAfterRefresh(nodes, preferredAgent) {
+  if (preferredAgent && nodes.some((node) => node.agent === preferredAgent)) return preferredAgent;
+  return nodes[0]?.agent || null;
+}
+
+let selectedAgent = null;
+
 function text(tag, value, className) {
   const node = document.createElement(tag);
   node.textContent = value;
@@ -328,6 +335,7 @@ function renderTree(snapshot) {
   const svg = document.querySelector("#session-tree");
   const detail = document.querySelector("#node-detail");
   const treeMeta = document.querySelector("#tree-meta");
+  const focusedAgent = document.activeElement?.closest?.(".tree-node")?.dataset.agent || null;
   svg.replaceChildren();
   treeMeta.replaceChildren();
   const description = sessionTreeDescription(snapshot.session_tree);
@@ -397,6 +405,7 @@ function renderTree(snapshot) {
     }
   }
   const select = (group, node) => {
+    selectedAgent = node.agent;
     for (const candidate of svg.querySelectorAll(".tree-node"))
       candidate.classList.remove("selected");
     group.classList.add("selected");
@@ -411,6 +420,7 @@ function renderTree(snapshot) {
     );
     group.setAttribute("tabindex", "0");
     group.setAttribute("role", "button");
+    group.dataset.agent = node.agent;
     group.setAttribute("aria-label", `${nodeLabel(node)}、${nodeStage(node)}。詳細を開く`);
     group.setAttribute("transform", `translate(${node.x} ${node.y})`);
     const rect = document.createElementNS(ns, "rect");
@@ -433,7 +443,10 @@ function renderTree(snapshot) {
     state.setAttribute("class", "tree-state");
     state.textContent = `${node.kind === "history" ? "履歴 / " : "current / "}${nodeStage(node)}`;
     group.append(rect, title, task, state);
-    group.addEventListener("click", () => select(group, node));
+    group.addEventListener("click", () => {
+      group.focus({ preventScroll: true });
+      select(group, node);
+    });
     group.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
@@ -442,9 +455,19 @@ function renderTree(snapshot) {
     });
     svg.append(group);
   }
-  const first = svg.querySelector(".tree-node");
-  first?.classList.add("selected");
-  renderDetail(nodes[0], snapshot.items);
+  selectedAgent = selectedAgentAfterRefresh(nodes, selectedAgent);
+  const selectedNode = nodes.find((node) => node.agent === selectedAgent) || nodes[0];
+  const selectedGroup = [...svg.querySelectorAll(".tree-node")].find(
+    (group) => group.dataset.agent === selectedNode.agent,
+  );
+  selectedGroup?.classList.add("selected");
+  renderDetail(selectedNode, snapshot.items);
+  if (focusedAgent) {
+    const restored = [...svg.querySelectorAll(".tree-node")].find(
+      (group) => group.dataset.agent === focusedAgent,
+    );
+    restored?.focus({ preventScroll: true });
+  }
 }
 
 function render(snapshot) {
