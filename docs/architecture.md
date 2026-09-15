@@ -70,3 +70,31 @@ random実行は停止可能。停止時にすでに送信済みのActionがあ�
 Event永続化、欠落のない配信、WebSocket、Action実行の冪等性、認証、World設定の実行時変更は対象外。event_idによる表示の重複排除は、Action再実行の抑止ではない。APIに同一action_idを再送すればもう一度評価される。現在のUIは自動再送しない。複数自律Resident・一時グループ・God Agentは概念上の将来像に留める。
 
 技術参照: [Vite](https://vite.dev/guide/)、[Phaser](https://docs.phaser.io/phaser/getting-started/installation)、[FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/)。
+
+## 物流MVP
+
+明示された拡張scopeとして、既存A/moveと独立した物流Scenarioを同じWorld serviceへ追加する。`LogisticsSimulator`だけが倉庫在庫・期内処理残、注文充足、トラック利用、採用計画を更新する。Actorはreadonly観測からplan artifactを提案し、human operatorの採用とdispatcher serviceのActionは常にSimulatorの検証を通る。
+
+```mermaid
+flowchart LR
+  Observation[物流World観測] --> Planner[Pure rule Actor]
+  Planner --> Plan[Plan artifact v1 / v2]
+  Plan --> Operator[OperatorCapabilities: 採用]
+  Plan --> Dispatcher[DispatchCapabilities: 配送要求]
+  Operator --> Simulator[LogisticsSimulator]
+  Dispatcher --> Simulator
+  Simulator --> State[在庫・能力・注文・トラック]
+  Simulator --> Event[typed Event + 相関]
+```
+
+APIは`GET /api/logistics/world`、`POST /api/logistics/scenario/reset`、`POST /api/logistics/plans/accept`、`POST /api/logistics/actions`。Scenario resetは毎回新しい`world_id`を発行する。successだけがrevisionと業務状態を更新し、domain failureとauthz deniedは状態を変えない。同一`action_id`は同じEventとState snapshotを返す。
+
+principalとcapabilityの制約、比較解釈は[ADR 0006](adr/0006-logistics-scenario-and-local-capabilities.md)を正典とする。
+
+### 実際のオーケストレーション
+
+このMVPのorchestratorはReact hostから呼ぶ`runLogisticsScenario`である。A/B/Cのボタンを1回押すと、`Scenario reset → pure rule planner → operator capabilityによるplan採用 → dispatcher capabilityによるshipment rowの直列実行 → actual集計`を順番に行う。plan採用は別画面で人間が再確認するcheckpointではなく、選んだScenarioボタンの処理内で自動実行する。
+
+方策は`nearest-warehouse-v1`と`role-team-v1`の2つで、LLMを使わない。後者は`allocateInventory → scheduleWarehouseCapacity → assignFleet → coordinateDueDates`という4つのpure role関数を直列実行し、前段の型付きartifactを次段のinputとして渡す。需要・在庫、能力配分、車両割当、期限内数量の実出力からhandoff表示を作る。これらは独立Agent processではなく、並列の会話も行わない。
+
+物流UIはReactのDOM cardで描画し、Phaserは既存A/moveのgridだけを担当する。World stateと採用plan、Action IDの確定結果cacheはserver processのmemory、結果artifactと表示Event一覧はbrowser tabのmemoryにだけ保持する。永続DBとserver Event履歴APIはない。通常UIはA/B/Cの成功・domain failureを操作できるが、認可拒否、stale revision、重複Actionの故障注入はAPI/Simulator testで検証する。
