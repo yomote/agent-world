@@ -7,6 +7,7 @@ const reasonLabels: Record<LogisticsEvent["reason"], string> = {
   plan_accepted: "計画を採用",
   shipment_dispatched: "配送を確定",
   authz_denied: "認可拒否",
+  action_id_conflict: "Action IDが別要求で使用済み",
   stale_revision: "観測revisionが古い",
   wrong_world: "別Worldの計画",
   plan_mismatch: "採用計画と不一致",
@@ -136,7 +137,10 @@ export function LogisticsLab() {
             <div className="run-title">
               <div>
                 <span className="artifact-state">
-                  plan v{run.plan.version} · proposed → accepted
+                  plan v{run.plan.version} · proposed →{" "}
+                  {run.acceptance === "auto_accepted"
+                    ? "auto-accepted"
+                    : `not accepted (${reasonLabels[run.acceptanceReason]})`}
                 </span>
                 <h3>{run.label}</h3>
               </div>

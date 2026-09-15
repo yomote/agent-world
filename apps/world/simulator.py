@@ -112,6 +112,14 @@ class Principal:
     roles: frozenset[str]
 
 
+@dataclass(frozen=True)
+class CachedLogisticsResult:
+    principal_id: str
+    operation: Literal["accept_logistics_plan", "dispatch_shipment"]
+    action_json: str
+    result: LogisticsActionResult
+
+
 LOCAL_PRINCIPALS = {
     "human-operator": Principal("human-operator", "human", frozenset({"scenario_operator"})),
     "allocator": Principal("allocator", "agent", frozenset({"inventory_allocator"})),
@@ -144,7 +152,7 @@ class LogisticsSimulator:
         self._lock = Lock()
         self._state = self._new_state(truck_count=1)
         self._plans: dict[tuple[UUID, int], LogisticsPlan] = {}
-        self._results: dict[UUID, LogisticsActionResult] = {}
+        self._results: dict[UUID, CachedLogisticsResult] = {}
 
     @staticmethod
     def _new_state(truck_count: int) -> LogisticsWorldState:
@@ -188,11 +196,13 @@ class LogisticsSimulator:
 
     def accept_plan(self, principal_id: str, action: AcceptPlanAction) -> LogisticsActionResult:
         with self._lock:
-            cached = self._results.get(action.action_id)
-            if cached is not None:
-                return cached.model_copy(deep=True)
             principal = resolve_local_principal(principal_id)
             role = next(iter(principal.roles), "unknown") if principal else "unknown"
+            cached = self._cached_result_or_conflict(
+                principal_id, principal, role, "accept_logistics_plan", action
+            )
+            if cached is not None:
+                return cached
             reason: str | None = None
             status: Literal["success", "domain_failure", "authz_denied"] = "success"
             if not authorize(principal, "accept_plan", f"logistics:{self._state.world_id}:plan"):
@@ -234,16 +244,18 @@ class LogisticsSimulator:
                 action.plan.plan_id,
                 action.plan.version,
             )
-            self._results[action.action_id] = result
+            self._cache_result(principal_id, "accept_logistics_plan", action, result)
             return result.model_copy(deep=True)
 
     def dispatch(self, principal_id: str, action: DispatchShipmentAction) -> LogisticsActionResult:
         with self._lock:
-            cached = self._results.get(action.action_id)
-            if cached is not None:
-                return cached.model_copy(deep=True)
             principal = resolve_local_principal(principal_id)
             role = next(iter(principal.roles), "unknown") if principal else "unknown"
+            cached = self._cached_result_or_conflict(
+                principal_id, principal, role, "dispatch_shipment", action
+            )
+            if cached is not None:
+                return cached
             status: Literal["success", "domain_failure", "authz_denied"] = "success"
             reason: str = "shipment_dispatched"
             plan = self._plans.get((action.plan_id, action.plan_version))
@@ -283,6 +295,13 @@ class LogisticsSimulator:
             elif action.expected_revision != self._state.revision:
                 status, reason = "domain_failure", "stale_revision"
             elif self._state.accepted_plan is None or plan is None or row is None:
+                status, reason = "domain_failure", "plan_mismatch"
+            elif (
+                self._state.accepted_plan.run_id != action.run_id
+                or self._state.accepted_plan.decision_id != action.decision_id
+                or plan.run_id != action.run_id
+                or plan.decision_id != action.decision_id
+            ):
                 status, reason = "domain_failure", "plan_mismatch"
             elif (
                 row.truck_id != action.truck_id
@@ -356,8 +375,60 @@ class LogisticsSimulator:
                 action.row_id,
                 action.quantity if status == "success" else 0,
             )
-            self._results[action.action_id] = result
+            self._cache_result(principal_id, "dispatch_shipment", action, result)
             return result.model_copy(deep=True)
+
+    def _cache_result(
+        self,
+        principal_id: str,
+        operation: Literal["accept_logistics_plan", "dispatch_shipment"],
+        action: AcceptPlanAction | DispatchShipmentAction,
+        result: LogisticsActionResult,
+    ) -> None:
+        self._results[action.action_id] = CachedLogisticsResult(
+            principal_id=principal_id,
+            operation=operation,
+            action_json=action.model_dump_json(),
+            result=result,
+        )
+
+    def _cached_result_or_conflict(
+        self,
+        principal_id: str,
+        principal: Principal | None,
+        role: str,
+        operation: Literal["accept_logistics_plan", "dispatch_shipment"],
+        action: AcceptPlanAction | DispatchShipmentAction,
+    ) -> LogisticsActionResult | None:
+        cached = self._results.get(action.action_id)
+        if cached is None:
+            return None
+        if (
+            cached.principal_id == principal_id
+            and cached.operation == operation
+            and cached.action_json == action.model_dump_json()
+        ):
+            return cached.result.model_copy(deep=True)
+        plan_id = action.plan.plan_id if isinstance(action, AcceptPlanAction) else action.plan_id
+        plan_version = (
+            action.plan.version if isinstance(action, AcceptPlanAction) else action.plan_version
+        )
+        row_id = None if isinstance(action, AcceptPlanAction) else action.row_id
+        return self._result(
+            principal_id,
+            principal.kind if principal else "unknown",
+            role,
+            action.action_id,
+            action.run_id,
+            action.decision_id,
+            action.actor_id,
+            operation,
+            "domain_failure",
+            "action_id_conflict",
+            plan_id,
+            plan_version,
+            row_id,
+        )
 
     def _valid_plan_shape(self, plan: LogisticsPlan) -> bool:
         row_ids = {row.row_id for row in plan.rows}

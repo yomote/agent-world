@@ -81,11 +81,16 @@ def make_plan(simulator: LogisticsSimulator, team: bool = False) -> LogisticsPla
     )
 
 
-def accept(simulator: LogisticsSimulator, plan: LogisticsPlan, principal="human-operator"):
+def accept(
+    simulator: LogisticsSimulator,
+    plan: LogisticsPlan,
+    principal="human-operator",
+    action_id=None,
+):
     return simulator.accept_plan(
         principal,
         AcceptPlanAction(
-            action_id=uuid4(),
+            action_id=action_id or uuid4(),
             run_id=plan.run_id,
             decision_id=plan.decision_id,
             actor_id="scenario-operator",
@@ -96,26 +101,34 @@ def accept(simulator: LogisticsSimulator, plan: LogisticsPlan, principal="human-
     )
 
 
-def dispatch(simulator: LogisticsSimulator, plan: LogisticsPlan, index: int, action_id=None):
+def make_dispatch_action(
+    simulator: LogisticsSimulator,
+    plan: LogisticsPlan,
+    index: int,
+    action_id=None,
+    run_id=None,
+    decision_id=None,
+) -> DispatchShipmentAction:
     row = plan.rows[index]
-    return simulator.dispatch(
-        "dispatcher",
-        DispatchShipmentAction(
-            action_id=action_id or uuid4(),
-            run_id=plan.run_id,
-            decision_id=plan.decision_id,
-            actor_id="logistics-dispatcher",
-            type="dispatch_shipment",
-            expected_revision=simulator.observe().revision,
-            plan_id=plan.plan_id,
-            plan_version=plan.version,
-            row_id=row.row_id,
-            truck_id=row.truck_id,
-            warehouse_id=row.warehouse_id,
-            store_id=row.store_id,
-            quantity=row.quantity,
-        ),
+    return DispatchShipmentAction(
+        action_id=action_id or uuid4(),
+        run_id=run_id or plan.run_id,
+        decision_id=decision_id or plan.decision_id,
+        actor_id="logistics-dispatcher",
+        type="dispatch_shipment",
+        expected_revision=simulator.observe().revision,
+        plan_id=plan.plan_id,
+        plan_version=plan.version,
+        row_id=row.row_id,
+        truck_id=row.truck_id,
+        warehouse_id=row.warehouse_id,
+        store_id=row.store_id,
+        quantity=row.quantity,
     )
+
+
+def dispatch(simulator: LogisticsSimulator, plan: LogisticsPlan, index: int, action_id=None):
+    return simulator.dispatch("dispatcher", make_dispatch_action(simulator, plan, index, action_id))
 
 
 def test_same_initial_conditions_show_capacity_bottleneck_and_team_improvement():
@@ -184,11 +197,59 @@ def test_duplicate_action_returns_original_event_without_double_consumption():
     plan = make_plan(simulator, team=True)
     accept(simulator, plan)
     action_id = uuid4()
-    first = dispatch(simulator, plan, 0, action_id)
+    action = make_dispatch_action(simulator, plan, 0, action_id)
+    first = simulator.dispatch("dispatcher", action)
     state_after_first = simulator.observe()
-    duplicate = dispatch(simulator, plan, 0, action_id)
+    duplicate = simulator.dispatch("dispatcher", action)
     assert duplicate == first
     assert simulator.observe() == state_after_first
+
+
+def test_action_id_reuse_with_different_payload_or_principal_is_conflict():
+    """同じIDへ別要求を載せ、最初のsuccessを誤って返す回帰を防ぐ。"""
+    simulator = LogisticsSimulator()
+    assert simulator.reset("human-operator", 3) is not None
+    plan = make_plan(simulator, team=True)
+    accept(simulator, plan)
+    action_id = uuid4()
+    first_action = make_dispatch_action(simulator, plan, 0, action_id)
+    assert simulator.dispatch("dispatcher", first_action).event.status == "success"
+    state_after_first = simulator.observe()
+
+    different_row = make_dispatch_action(simulator, plan, 1, action_id)
+    payload_conflict = simulator.dispatch("dispatcher", different_row)
+    assert payload_conflict.event.reason == "action_id_conflict"
+    principal_conflict = simulator.dispatch("allocator", first_action)
+    assert principal_conflict.event.reason == "action_id_conflict"
+    assert simulator.observe() == state_after_first
+
+
+def test_action_id_cannot_cross_accept_and_dispatch_operations():
+    """acceptとdispatchのID衝突で別operationのsuccessを返す回帰を防ぐ。"""
+    simulator = LogisticsSimulator()
+    assert simulator.reset("human-operator", 3) is not None
+    plan = make_plan(simulator, team=True)
+    action_id = uuid4()
+    assert accept(simulator, plan, action_id=action_id).event.status == "success"
+    accepted = simulator.observe()
+    conflict = simulator.dispatch("dispatcher", make_dispatch_action(simulator, plan, 0, action_id))
+    assert conflict.event.reason == "action_id_conflict"
+    assert simulator.observe() == accepted
+
+
+@pytest.mark.parametrize("field", ["run_id", "decision_id"])
+def test_dispatch_correlation_must_match_accepted_plan(field):
+    """採用計画と無関係なrun/decisionを確定Eventへ混入する回帰を防ぐ。"""
+    simulator = LogisticsSimulator()
+    assert simulator.reset("human-operator", 3) is not None
+    plan = make_plan(simulator, team=True)
+    accept(simulator, plan)
+    updates = {field: uuid4()}
+    action = make_dispatch_action(simulator, plan, 0).model_copy(update=updates)
+    before = simulator.observe()
+    result = simulator.dispatch("dispatcher", action)
+    assert result.event.reason == "plan_mismatch"
+    assert simulator.observe() == before
 
 
 def test_stale_revision_is_domain_failure_without_mutation():

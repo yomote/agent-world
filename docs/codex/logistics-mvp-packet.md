@@ -24,9 +24,10 @@
 ## ローカル証跡
 
 - `npm run api:generate`: 生成成功。
-- `npm run check`: API契約、lint、format、frontend 9件、Python 43件、TypeScript/Vite buildがpass。既知のPhaser chunk size warningと依存側deprecation warning 2件あり。
+- `npm run check`: API契約、lint、format、frontend 10件、Python 47件、TypeScript/Vite buildがpass。既知のPhaser chunk size warningと依存側deprecation warning 2件あり。
 - 実画面: 既存port使用中のため、API 8010 / Vite 5174で確認。A=4/16、B=4/16と`warehouse_capacity_exceeded`、C=16/16。各runが別world_idであること、plan/handoff/Event/結果artifactの相関表示、既存A/moveの(3,2)→(4,2)とsuccess Traceを確認。
 - 再現: APIを`python scripts/python_env.py -m uvicorn world.api:app --app-dir apps --host 127.0.0.1 --port 8010`、webを`AGENT_WORLD_API_PORT=8010`と`AGENT_WORLD_WEB_PORT=5174`を設定して`npm run dev:web`で起動する。通常の既定portは8000/5173。
 - 現在: 独立reviewとユーザー試用のため、ローカルdev serverをAPI 8010 / frontend 5174で稼働中。永続hostingではない。停止は各起動terminalでCtrl+C。既存の別環境8000/5173は未変更。
-- 未検証: 独立review、GitHub CI、push/PR、production環境。本番認証はscope外。
+- 未検証: 修正後の独立review、GitHub CI、push/PR、production環境。本番認証はscope外。
+- 未実装: AIによる次toolの自律選択、各役割のLLM化、動的な再計画loop、追加調査tool。現版はhostが固定順でpure rule pipelineを実行する。
 - 学び: PythonがOpenAPI数値制約を`1.0`、JavaScriptが`1`と表す差は意味差ではない。API checkerでJSON数値として比較し、minimum/maximum契約を維持した。

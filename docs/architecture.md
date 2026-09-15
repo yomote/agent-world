@@ -87,7 +87,7 @@ flowchart LR
   Simulator --> Event[typed Event + 相関]
 ```
 
-APIは`GET /api/logistics/world`、`POST /api/logistics/scenario/reset`、`POST /api/logistics/plans/accept`、`POST /api/logistics/actions`。Scenario resetは毎回新しい`world_id`を発行する。successだけがrevisionと業務状態を更新し、domain failureとauthz deniedは状態を変えない。同一`action_id`は同じEventとState snapshotを返す。
+APIは`GET /api/logistics/world`、`POST /api/logistics/scenario/reset`、`POST /api/logistics/plans/accept`、`POST /api/logistics/actions`。Scenario resetは毎回新しい`world_id`を発行する。successだけがrevisionと業務状態を更新し、domain failureとauthz deniedは状態を変えない。同一`action_id`はprincipal・operation・Action全体が一致する再要求だけ同じEventとState snapshotを返し、不一致は`action_id_conflict`になる。dispatchのrun/decisionも採用計画との一致を検証する。
 
 principalとcapabilityの制約、比較解釈は[ADR 0006](adr/0006-logistics-scenario-and-local-capabilities.md)を正典とする。
 
@@ -96,5 +96,7 @@ principalとcapabilityの制約、比較解釈は[ADR 0006](adr/0006-logistics-s
 このMVPのorchestratorはReact hostから呼ぶ`runLogisticsScenario`である。A/B/Cのボタンを1回押すと、`Scenario reset → pure rule planner → operator capabilityによるplan採用 → dispatcher capabilityによるshipment rowの直列実行 → actual集計`を順番に行う。plan採用は別画面で人間が再確認するcheckpointではなく、選んだScenarioボタンの処理内で自動実行する。
 
 方策は`nearest-warehouse-v1`と`role-team-v1`の2つで、LLMを使わない。後者は`allocateInventory → scheduleWarehouseCapacity → assignFleet → coordinateDueDates`という4つのpure role関数を直列実行し、前段の型付きartifactを次段のinputとして渡す。需要・在庫、能力配分、車両割当、期限内数量の実出力からhandoff表示を作る。これらは独立Agent processではなく、並列の会話も行わない。
+
+実行順と使うAPIはhost codeに固定されている。AIが状況に応じて次のtoolを選ぶ自律orchestration、各役割のLLM化、動的な再計画loop、追加調査toolは未実装である。
 
 物流UIはReactのDOM cardで描画し、Phaserは既存A/moveのgridだけを担当する。World stateと採用plan、Action IDの確定結果cacheはserver processのmemory、結果artifactと表示Event一覧はbrowser tabのmemoryにだけ保持する。永続DBとserver Event履歴APIはない。通常UIはA/B/Cの成功・domain failureを操作できるが、認可拒否、stale revision、重複Actionの故障注入はAPI/Simulator testで検証する。

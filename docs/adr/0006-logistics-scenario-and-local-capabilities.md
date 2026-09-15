@@ -16,7 +16,7 @@
 - Actorはreadonly観測からversion付き計画を返すpure moduleとし、API clientやcapabilityをimportしない。役割方策は在庫配分、倉庫capacity割当、fleet割当、納期照合のpure関数を直列に呼び、各出力artifactを次の入力へ渡す。
 - serverは`Principal { id, kind, roles }`を固定registryから解決し、単一policyでprincipal・action・resourceを判定する。humanはreset/accept、serviceは採用済みplan rowのdispatchだけを要求できる。
 - supported runtimeでは`OperatorCapabilities`と`DispatchCapabilities`を分け、Actorへprincipal selectorやoperator capabilityを渡さない。
-- `run_id → decision_id → plan_id/version → action_id → event_id → world_revision`をEventとartifactで追跡する。同じ`action_id`は同じ確定結果を返して二重消費を防ぐ。通信結果不明はclient側の`transport_unknown`として扱い、自動再送しない。
+- `run_id → decision_id → plan_id/version → action_id → event_id → world_revision`をEventとartifactで追跡する。dispatchのrun/decisionは採用計画と一致する場合だけ確定する。同じ`action_id`はprincipal・operation・Action全体が一致する再要求だけ同じ確定結果を返し、いずれかが異なる場合は`action_id_conflict`として状態を変えない。通信結果不明はclient側の`transport_unknown`として扱い、自動再送しない。
 
 ## セキュリティ境界
 

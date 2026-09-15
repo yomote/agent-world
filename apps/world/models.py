@@ -170,6 +170,7 @@ class LogisticsEvent(ValueModel):
         "plan_accepted",
         "shipment_dispatched",
         "authz_denied",
+        "action_id_conflict",
         "stale_revision",
         "wrong_world",
         "plan_mismatch",

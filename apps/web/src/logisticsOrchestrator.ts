@@ -17,6 +17,8 @@ export interface RunArtifact {
   finalRevision: number;
   finalWorld: LogisticsWorldState;
   status: "confirmed";
+  acceptance: "auto_accepted" | "not_accepted";
+  acceptanceReason: LogisticsEvent["reason"];
 }
 
 interface RunOptions {
@@ -79,5 +81,7 @@ export async function runLogisticsScenario(options: RunOptions): Promise<RunArti
     finalRevision: current.revision,
     finalWorld: current,
     status: "confirmed",
+    acceptance: accepted.event.status === "success" ? "auto_accepted" : "not_accepted",
+    acceptanceReason: accepted.event.reason,
   };
 }

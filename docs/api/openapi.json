@@ -100,10 +100,224 @@
           }
         }
       }
+    },
+    "/api/logistics/world": {
+      "get": {
+        "summary": "Observe Logistics",
+        "operationId": "observe_logistics_api_logistics_world_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsWorldState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logistics/scenario/reset": {
+      "post": {
+        "summary": "Reset Logistics",
+        "operationId": "reset_logistics_api_logistics_scenario_reset_post",
+        "parameters": [
+          {
+            "name": "X-Local-Principal",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Local-Principal"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetLogisticsScenario"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsWorldState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logistics/plans/accept": {
+      "post": {
+        "summary": "Accept Logistics Plan",
+        "operationId": "accept_logistics_plan_api_logistics_plans_accept_post",
+        "parameters": [
+          {
+            "name": "X-Local-Principal",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Local-Principal"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPlanAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logistics/actions": {
+      "post": {
+        "summary": "Dispatch Logistics",
+        "operationId": "dispatch_logistics_api_logistics_actions_post",
+        "parameters": [
+          {
+            "name": "X-Local-Principal",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Local-Principal"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchShipmentAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogisticsActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AcceptPlanAction": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          },
+          "actor_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Actor Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "accept_logistics_plan",
+            "title": "Type"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/LogisticsPlan"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action_id",
+          "run_id",
+          "decision_id",
+          "actor_id",
+          "type",
+          "expected_revision",
+          "plan"
+        ],
+        "title": "AcceptPlanAction"
+      },
       "Action": {
         "properties": {
           "action_id": {
@@ -157,6 +371,90 @@
         "type": "object",
         "required": ["world", "events", "event"],
         "title": "ActionResult"
+      },
+      "DispatchShipmentAction": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          },
+          "actor_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Actor Id"
+          },
+          "type": {
+            "type": "string",
+            "const": "dispatch_shipment",
+            "title": "Type"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          },
+          "plan_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Plan Id"
+          },
+          "plan_version": {
+            "type": "integer",
+            "title": "Plan Version"
+          },
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "truck_id": {
+            "type": "string",
+            "title": "Truck Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "enum": ["W1", "W2"],
+            "title": "Warehouse Id"
+          },
+          "store_id": {
+            "type": "string",
+            "enum": ["S1", "S2"],
+            "title": "Store Id"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Quantity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action_id",
+          "run_id",
+          "decision_id",
+          "actor_id",
+          "type",
+          "expected_revision",
+          "plan_id",
+          "plan_version",
+          "row_id",
+          "truck_id",
+          "warehouse_id",
+          "store_id",
+          "quantity"
+        ],
+        "title": "DispatchShipmentAction"
       },
       "Entity": {
         "properties": {
@@ -269,6 +567,331 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LogisticsActionResult": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/LogisticsEvent"
+          },
+          "world": {
+            "$ref": "#/components/schemas/LogisticsWorldState"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["event", "world"],
+        "title": "LogisticsActionResult"
+      },
+      "LogisticsEvent": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Event Id"
+          },
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          },
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id"
+          },
+          "action_type": {
+            "type": "string",
+            "enum": ["accept_logistics_plan", "dispatch_shipment"],
+            "title": "Action Type"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "domain_failure", "authz_denied"],
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "plan_accepted",
+              "shipment_dispatched",
+              "authz_denied",
+              "action_id_conflict",
+              "stale_revision",
+              "wrong_world",
+              "plan_mismatch",
+              "truck_unavailable",
+              "truck_capacity_exceeded",
+              "warehouse_capacity_exceeded",
+              "insufficient_inventory",
+              "order_already_fulfilled",
+              "order_quantity_exceeded",
+              "route_unavailable",
+              "arrival_after_horizon"
+            ],
+            "title": "Reason"
+          },
+          "principal_id": {
+            "type": "string",
+            "title": "Principal Id"
+          },
+          "principal_kind": {
+            "type": "string",
+            "enum": ["human", "agent", "service", "unknown"],
+            "title": "Principal Kind"
+          },
+          "principal_role": {
+            "type": "string",
+            "title": "Principal Role"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "plan_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Version"
+          },
+          "row_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Id"
+          },
+          "quantity": {
+            "type": "integer",
+            "title": "Quantity"
+          },
+          "world_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "World Id"
+          },
+          "world_revision": {
+            "type": "integer",
+            "title": "World Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "action_id",
+          "run_id",
+          "decision_id",
+          "actor_id",
+          "action_type",
+          "status",
+          "reason",
+          "principal_id",
+          "principal_kind",
+          "principal_role",
+          "plan_id",
+          "plan_version",
+          "row_id",
+          "quantity",
+          "world_id",
+          "world_revision"
+        ],
+        "title": "LogisticsEvent"
+      },
+      "LogisticsPlan": {
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Plan Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "publication_state": {
+            "type": "string",
+            "const": "proposed",
+            "title": "Publication State"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          },
+          "input_world_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Input World Id"
+          },
+          "input_world_revision": {
+            "type": "integer",
+            "title": "Input World Revision"
+          },
+          "created_by": {
+            "type": "string",
+            "enum": ["nearest-warehouse-v1", "role-team-v1"],
+            "title": "Created By"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ShipmentPlanRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "handoffs": {
+            "items": {
+              "$ref": "#/components/schemas/RoleHandoff"
+            },
+            "type": "array",
+            "title": "Handoffs"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "plan_id",
+          "version",
+          "publication_state",
+          "run_id",
+          "decision_id",
+          "input_world_id",
+          "input_world_revision",
+          "created_by",
+          "rows",
+          "handoffs",
+          "reason"
+        ],
+        "title": "LogisticsPlan"
+      },
+      "LogisticsWorldState": {
+        "properties": {
+          "world_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "World Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "horizon_ticks": {
+            "type": "integer",
+            "title": "Horizon Ticks"
+          },
+          "warehouses": {
+            "items": {
+              "$ref": "#/components/schemas/Warehouse"
+            },
+            "type": "array",
+            "title": "Warehouses"
+          },
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/StoreOrder"
+            },
+            "type": "array",
+            "title": "Orders"
+          },
+          "trucks": {
+            "items": {
+              "$ref": "#/components/schemas/Truck"
+            },
+            "type": "array",
+            "title": "Trucks"
+          },
+          "roads": {
+            "items": {
+              "$ref": "#/components/schemas/Road"
+            },
+            "type": "array",
+            "title": "Roads"
+          },
+          "accepted_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "world_id",
+          "revision",
+          "horizon_ticks",
+          "warehouses",
+          "orders",
+          "trucks",
+          "roads"
+        ],
+        "title": "LogisticsWorldState"
+      },
+      "PlanReference": {
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Plan Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["plan_id", "version", "run_id", "decision_id"],
+        "title": "PlanReference"
+      },
       "Position": {
         "properties": {
           "x": {
@@ -284,6 +907,150 @@
         "type": "object",
         "required": ["x", "y"],
         "title": "Position"
+      },
+      "ResetLogisticsScenario": {
+        "properties": {
+          "truck_count": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Truck Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["truck_count"],
+        "title": "ResetLogisticsScenario"
+      },
+      "Road": {
+        "properties": {
+          "warehouse_id": {
+            "type": "string",
+            "enum": ["W1", "W2"],
+            "title": "Warehouse Id"
+          },
+          "store_id": {
+            "type": "string",
+            "enum": ["S1", "S2"],
+            "title": "Store Id"
+          },
+          "travel_ticks": {
+            "type": "integer",
+            "title": "Travel Ticks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["warehouse_id", "store_id", "travel_ticks"],
+        "title": "Road"
+      },
+      "RoleHandoff": {
+        "properties": {
+          "from_role": {
+            "type": "string",
+            "enum": [
+              "inventory_allocator",
+              "warehouse_scheduler",
+              "dispatcher",
+              "due_date_coordinator"
+            ],
+            "title": "From Role"
+          },
+          "to_role": {
+            "type": "string",
+            "enum": [
+              "warehouse_scheduler",
+              "dispatcher",
+              "due_date_coordinator",
+              "scenario_operator"
+            ],
+            "title": "To Role"
+          },
+          "artifact": {
+            "type": "string",
+            "title": "Artifact"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["from_role", "to_role", "artifact"],
+        "title": "RoleHandoff"
+      },
+      "ShipmentPlanRow": {
+        "properties": {
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "enum": ["W1", "W2"],
+            "title": "Warehouse Id"
+          },
+          "store_id": {
+            "type": "string",
+            "enum": ["S1", "S2"],
+            "title": "Store Id"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Quantity"
+          },
+          "truck_id": {
+            "type": "string",
+            "title": "Truck Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["row_id", "warehouse_id", "store_id", "quantity", "truck_id"],
+        "title": "ShipmentPlanRow"
+      },
+      "StoreOrder": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": ["S1", "S2"],
+            "title": "Id"
+          },
+          "requested": {
+            "type": "integer",
+            "title": "Requested"
+          },
+          "fulfilled": {
+            "type": "integer",
+            "title": "Fulfilled"
+          },
+          "due_tick": {
+            "type": "integer",
+            "title": "Due Tick"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "requested", "fulfilled", "due_tick"],
+        "title": "StoreOrder"
+      },
+      "Truck": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "capacity": {
+            "type": "integer",
+            "title": "Capacity"
+          },
+          "available_deliveries": {
+            "type": "integer",
+            "title": "Available Deliveries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "capacity", "available_deliveries"],
+        "title": "Truck"
       },
       "ValidationError": {
         "properties": {
@@ -320,6 +1087,31 @@
         "type": "object",
         "required": ["loc", "msg", "type"],
         "title": "ValidationError"
+      },
+      "Warehouse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": ["W1", "W2"],
+            "title": "Id"
+          },
+          "inventory": {
+            "type": "integer",
+            "title": "Inventory"
+          },
+          "processing_capacity": {
+            "type": "integer",
+            "title": "Processing Capacity"
+          },
+          "processing_remaining": {
+            "type": "integer",
+            "title": "Processing Remaining"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "inventory", "processing_capacity", "processing_remaining"],
+        "title": "Warehouse"
       },
       "WorldState": {
         "properties": {
