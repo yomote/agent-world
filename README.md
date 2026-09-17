@@ -47,7 +47,7 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 利用者の実認証、永続化、複数worker、LLM、God Agent、文明、経済、戦闘は未実装。
 ローカル開発用として127.0.0.1にbindする。
 
-物流MVPの`X-Local-Principal`は教育用policyのsimulation selectorであり、trusted identityではない。serverがroleを割り当て、supported runtimeではoperatorとdispatchのcapabilityを分けるが、任意HTTP callerによるprincipal偽装は防御しない。詳細は[ADR 0006](docs/adr/0006-logistics-scenario-and-local-capabilities.md)。
+物流MVPの`X-Local-Principal`は教育用policyのsimulation selectorであり、trusted identityではない。serverがroleを割り当て、supported runtimeではoperatorとdispatchのcapabilityを分けるが、任意HTTP callerによるprincipal偽装は防御しない。詳細は[ADR 0012](docs/adr/0012-logistics-scenario-and-local-capabilities.md)。
 
 ## 開発資料
 
@@ -56,3 +56,5 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 - [管理statusのインフラ構成図](docs/assets/infrastructure/agent-world-infrastructure.svg)
 - [起動・品質チェック・トラブルシュート](docs/runbooks/local-dev.md)
 - [テスト方針](docs/testing.md) / [Agent向け規約](AGENTS.md)
+- [Agent orchestrationと6業務Worldの提案](docs/proposals/agent-orchestration-domain-roadmap.md)
+- [物流rule版の実装範囲と次段階](docs/proposals/logistics-rule-foundation.md)

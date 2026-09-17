@@ -89,7 +89,7 @@ flowchart LR
 
 APIは`GET /api/logistics/world`、`POST /api/logistics/scenario/reset`、`POST /api/logistics/plans/accept`、`POST /api/logistics/actions`。Scenario resetは毎回新しい`world_id`を発行する。successだけがrevisionと業務状態を更新し、domain failureとauthz deniedは状態を変えない。同一`action_id`はprincipal・operation・Action全体が一致する再要求だけ同じEventとState snapshotを返し、不一致は`action_id_conflict`になる。dispatchのrun/decisionも採用計画との一致を検証する。
 
-principalとcapabilityの制約、比較解釈は[ADR 0006](adr/0006-logistics-scenario-and-local-capabilities.md)を正典とする。
+principalとcapabilityの制約、比較解釈は[ADR 0012](adr/0012-logistics-scenario-and-local-capabilities.md)を正典とする。rule版と将来のAI判断loopの境界は[物流rule版の実装範囲と次段階](proposals/logistics-rule-foundation.md)に整理する。
 
 ### 実際のオーケストレーション
 

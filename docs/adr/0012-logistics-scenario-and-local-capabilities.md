@@ -1,4 +1,4 @@
-# ADR 0006: 物流Scenarioとローカルcapability境界
+# ADR 0012: 物流Scenarioとローカルcapability境界
 
 - 状態: Accepted
 - 日付: 2026-09-15

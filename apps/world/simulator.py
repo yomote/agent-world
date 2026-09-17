@@ -88,15 +88,15 @@ class WorldSimulator:
                     }
                 )
             event = Event(
-                    event_id=uuid4(),
-                    action=action,
-                    status="success" if success else "failure",
-                    reason=reason,
-                    before=before,
-                    after=after,
-                    world_id=self._state.world_id,
-                    world_revision=self._state.revision,
-                )
+                event_id=uuid4(),
+                action=action,
+                status="success" if success else "failure",
+                reason=reason,
+                before=before,
+                after=after,
+                world_id=self._state.world_id,
+                world_revision=self._state.revision,
+            )
             self._events.append(event)
             return ActionResult(
                 event=event,
