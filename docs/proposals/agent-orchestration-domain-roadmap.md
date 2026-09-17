@@ -114,6 +114,7 @@ Agentは検索結果を即座にWorldのruleへ変換しない。取得した根
 | 横断AI SRE | run、tool health、latency、cost、error、eval結果 | 検知、診断、緩和提案、運用承認、改善case化   | incident、RCA evidence、mitigation proposal、eval regression       | 失敗traceから原因候補を調査し、安全な緩和だけ実行、残りを承認へ回す     |
 
 金融と会計は別Worldとする。金融はposition・risk・注文執行、会計は証憑・仕訳・期間統制が中心で、identityと承認の分離要件も異なる。
+横断AI SREは6つ目の業務Worldではなく運用層である。各domain Worldを直接更新せず、domain toolと同じ認可・承認境界を通して緩和Actionを提案・実行する。
 
 ## 段階的な実装と判定
 

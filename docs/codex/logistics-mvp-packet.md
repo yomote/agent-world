@@ -19,15 +19,28 @@
 
 ## 状態
 
-2026-09-17: 旧base上の実装は独立reviewでblockingなし。レビューで固定handoff表示を実stage pipelineへ直し、run/decision相関、冪等性conflict、採否表示の境界を修正した。現在は現`origin/main`へ物流専用差分を移植し、[将来設計](../proposals/agent-orchestration-domain-roadmap.md)と[物流rule土台](../proposals/logistics-rule-foundation.md)を正本化した段階。移植後current headの全検証・独立review・GitHub反映は未完了。
+2026-09-17: 旧base上の実装は独立reviewでblockingなし。レビューで固定handoff表示を実stage pipelineへ直し、run/decision相関、冪等性conflict、採否表示の境界を修正した。現`origin/main`へ物流専用差分を移植し、[将来設計](../proposals/agent-orchestration-domain-roadmap.md)と[物流rule土台](../proposals/logistics-rule-foundation.md)を正本化した。移植後candidate `ab3f7b124481651bfd52466277e6f2dbc65846b0`の全checkは完了したが、独立reviewで本packetの証跡区分にblocking指摘があり、この文書更新後headの再reviewと実画面確認、GitHub反映は未完了。
 
 ## ローカル証跡
 
+### 現main移植後candidate `ab3f7b1`
+
 - `npm run api:generate`: 生成成功。
-- `npm run check`: API契約、lint、format、frontend 10件、Python 47件、TypeScript/Vite buildがpass。既知のPhaser chunk size warningと依存側deprecation warning 2件あり。
-- 実画面: 既存port使用中のため、API 8010 / Vite 5174で確認。A=4/16、B=4/16と`warehouse_capacity_exceeded`、C=16/16。各runが別world_idであること、plan/handoff/Event/結果artifactの相関表示、既存A/moveの(3,2)→(4,2)とsuccess Traceを確認。
+- `npm run check`: API契約、lint、format、Vitest 28件、status dashboard 34件、Python 630件、TypeScript/Vite buildがpass。既知のPhaser chunk size warningと依存側deprecation warning 2件あり。checkは未commitの同一treeから開始し、実行中に内容を変えずcandidate `ab3f7b1`としてcommitした。dirty-startの結果であり、文書修正後headのcurrent checkとは区別する。
+- 変更関連test: 物流/API Python 29件がpass。誤って実行した未定義script `npm run test:web`はscript-not-foundであり、test failureではない。Web testは正規の`npm run check`内Vitest 28件でpassした。
+- 実画面: 未確認。旧headの画面結果を移植後candidateの結果へ読み替えない。
+- 独立review: packetの旧head/current head証跡区分にblocking指摘。本小節への修正後headを再reviewするまで完了扱いにしない。
+
+### 旧head `d04bc801`の履歴証跡
+
+- `npm run check`: API契約、lint、format、frontend 10件、Python 47件、TypeScript/Vite buildがpass。
+- 実画面: API 8010 / Vite 5174でA=4/16、B=4/16と`warehouse_capacity_exceeded`、C=16/16を確認。各runの別world_id、plan/handoff/Event/結果artifactの相関表示、既存A/moveの(3,2)→(4,2)とsuccess Traceも確認。
+- 独立review: 相関、冪等性conflict、state不変を含めblockingなし。この結果は現main移植後headの受入証跡ではない。
+
+### 実行環境と未完了
+
 - 再現: APIを`python scripts/python_env.py -m uvicorn world.api:app --app-dir apps --host 127.0.0.1 --port 8010`、webを`AGENT_WORLD_API_PORT=8010`と`AGENT_WORLD_WEB_PORT=5174`を設定して`npm run dev:web`で起動する。通常の既定portは8000/5173。
 - 現在: 独立reviewとユーザー試用のため、ローカルdev serverをAPI 8010 / frontend 5174で稼働中。永続hostingではない。停止は各起動terminalでCtrl+C。既存の別環境8000/5173は未変更。
-- 未検証: 現main移植後headの全check・実画面・独立review、GitHub CI、push/PR、production環境。本番認証はscope外。下記PASSは旧head `d04bc801`に対する結果であり、新headへ読み替えない。
+- 未検証: 文書修正後headのcurrent check・独立review、現main移植後の実画面、GitHub CI、push/PR、production環境。本番認証はscope外。
 - 未実装: AIによる次toolの自律選択、各役割のLLM化、動的な再計画loop、追加調査tool。現版はhostが固定順でpure rule pipelineを実行する。
 - 学び: PythonがOpenAPI数値制約を`1.0`、JavaScriptが`1`と表す差は意味差ではない。API checkerでJSON数値として比較し、minimum/maximum契約を維持した。
