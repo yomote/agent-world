@@ -43,7 +43,7 @@ def main() -> None:
     controller = AccountingAgentController(simulator, store, provider)
     run_id = controller.start(args.mode)
     view = controller.view(run_id)
-    for step in range(11):
+    for _step in range(11):
         if view["status"] != "running" or view["pending_question"]:
             break
         view = controller.advance(run_id, f"eval-{uuid4()}", view["step_version"])
