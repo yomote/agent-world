@@ -6,7 +6,7 @@ from accounting_agent.controller import AccountingAgentController
 from accounting_agent.models import AgentDecision
 from accounting_agent.provider import CodexExecProvider
 from accounting_agent.store import RunStore
-from world.accounting_simulator import AccountingSimulator
+from world.accounting_simulator import AccountingDomainError, AccountingSimulator
 
 
 class SequenceProvider:
@@ -99,6 +99,7 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
     view = controller.advance(run_id, "action-4", 3)
     assert view["status"] == "ready_for_review"
     assert view["artifact"]["payload"]["actual_ledger_updated"] is False
+    assert view["artifact"]["payload"]["observed_adjustments"] == []
     assert simulator.observe().invoices[0].open_amount.minor_units == 70000
 
 
@@ -169,6 +170,37 @@ def test_domain_failure_receipt_replays_original_error_without_second_decision(t
     with pytest.raises(Exception, match="tool_not_allowed"):
         controller.advance(run_id, "advance-bad", 0)
     assert controller.view(run_id)["model_attempts"] == 1
+
+
+def test_missing_tool_argument_has_stable_public_error_on_replay(tmp_path) -> None:
+    # 回帰: allowlist toolの欠落argsを初回500・replay422へ変化させず同じ公開codeにする。
+    provider = SequenceProvider([_tool("search_documents", {})])
+    controller = AccountingAgentController(
+        AccountingSimulator(), RunStore(tmp_path / "runs.sqlite3"), provider
+    )
+    run_id = controller.start("agent")
+    for _attempt in range(2):
+        with pytest.raises(AccountingDomainError, match="^invalid_tool_arguments$"):
+            controller.advance(run_id, "advance-missing-query", 0)
+    assert controller.view(run_id)["model_attempts"] == 1
+
+
+def test_unexpected_context_failure_is_normalized_and_replayed(tmp_path) -> None:
+    # 回帰: context構築の内部例外や秘密本文を公開せず初回/replayを同じcodeへ固定する。
+    class BrokenContextSimulator(AccountingSimulator):
+        def observe(self):
+            raise RuntimeError("private internal detail")
+
+    controller = AccountingAgentController(
+        BrokenContextSimulator(),
+        RunStore(tmp_path / "runs.sqlite3"),
+        SequenceProvider([_tool("list_documents", {})]),
+    )
+    run_id = controller.start("agent")
+    for _attempt in range(2):
+        with pytest.raises(AccountingDomainError, match="^domain_failed$"):
+            controller.advance(run_id, "advance-context-failure", 0)
+    assert controller.view(run_id)["model_attempts"] == 0
 
 
 def test_codex_command_isolated_from_repository_and_disables_builtin_tools(tmp_path) -> None:

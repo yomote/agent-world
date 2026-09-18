@@ -62,8 +62,8 @@ class AccountingAgentController:
             self._enforce_limits(current)
             context = self._context(run_id)
         except Exception as error:
-            self._complete_failure(action_id, run_id, error)
-            raise
+            code = self._complete_failure(action_id, run_id, error)
+            raise AccountingDomainError(code) from error
         self._store.record_attempt(run_id)
         try:
             decision, usage = self._provider.decide(context)
@@ -101,8 +101,8 @@ class AccountingAgentController:
                 self._set_status(run_id, "stopped")
         except Exception as error:
             self._set_status(run_id, "domain_failed")
-            self._complete_failure(action_id, run_id, error)
-            raise
+            code = self._complete_failure(action_id, run_id, error)
+            raise AccountingDomainError(code) from error
         return self._complete(action_id, run_id, self.view(run_id))
 
     def answer(
@@ -161,7 +161,8 @@ class AccountingAgentController:
             raise AccountingDomainError("tool_not_allowed")
         try:
             args = json.loads(decision.args_json)
-        except json.JSONDecodeError as error:
+            self._validate_tool_args(name, args)
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
             raise AccountingDomainError("invalid_tool_arguments") from error
         call_id = f"tool-{uuid4()}"
         tenant = "tenant-demo"
@@ -252,6 +253,12 @@ class AccountingAgentController:
                 for allocation in proposal.allocations
                 for ref in allocation.evidence
             ],
+            observed_adjustments=[
+                item
+                for entry in self._require_run(run_id)["trace"]
+                if entry["kind"] == "tool" and entry["name"] == "read_adjustment_history"
+                for item in entry["payload"]["result"]["history"]
+            ],
         )
         self._store.save_artifact(
             package.artifact_id,
@@ -318,9 +325,38 @@ class AccountingAgentController:
             raise AccountingDomainError(receipt["value"]["error"])
         return receipt["value"]
 
-    def _complete_failure(self, action_id: str, run_id: str, error: Exception) -> None:
+    def _complete_failure(self, action_id: str, run_id: str, error: Exception) -> str:
         code = str(error) if isinstance(error, AccountingDomainError) else "domain_failed"
         self._store.complete_operation(action_id, run_id, {"error": code}, ok=False)
+        return code
+
+    @staticmethod
+    def _validate_tool_args(name: str, args: Any) -> None:
+        if not isinstance(args, dict):
+            raise ValueError("arguments_must_be_object")
+        required: dict[str, dict[str, type]] = {
+            "list_documents": {},
+            "read_open_receivables": {},
+            "search_documents": {"query": str},
+            "read_document": {"document_id": str},
+            "lookup_counterparty": {"text": str},
+            "find_allocation_candidates": {"receipt_id": str, "invoice_ids": list},
+            "read_adjustment_history": {"invoice_id": str},
+            "ask_operator": {"question": str, "reason": str, "options": list},
+        }
+        specification = required[name]
+        if set(args) != set(specification):
+            raise ValueError("argument_keys_mismatch")
+        if any(not isinstance(args[key], expected) for key, expected in specification.items()):
+            raise TypeError("argument_type_mismatch")
+        if name == "find_allocation_candidates" and not all(
+            isinstance(value, str) for value in args["invoice_ids"]
+        ):
+            raise TypeError("invoice_ids_must_be_strings")
+        if name == "ask_operator" and (
+            len(args["options"]) < 2 or not all(isinstance(value, str) for value in args["options"])
+        ):
+            raise ValueError("options_invalid")
 
     def _enforce_limits(self, run: dict[str, Any]) -> None:
         limits = {

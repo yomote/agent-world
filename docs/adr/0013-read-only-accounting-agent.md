@@ -1,6 +1,6 @@
 # ADR 0013: 入金消込Agentはレビューpackageまでを読み取り専用で作る
 
-状態: Accepted（MVP実装）
+状態: 設計Accepted／MVP実装中
 
 ## 文脈
 

@@ -31,10 +31,12 @@
 
 ## 検証の区別
 
-backend snapshot `f9113e1` はtargeted 24 tests/ruffを通した後、独立reviewで7観点のblockingを受けた。修正snapshot `ca7cfeb` の限定reviewで残ったreceipt優先、tenant付き正本、current source照合、stateful/holdout束縛も修正し、typed evidence、receipt/CAS、再起動復元、run上限、同条件baseline、stateful PBTを含むtargeted 34 testsと限定Ruffが通過している。
+backend snapshot `f9113e1` はtargeted 24 tests/ruffを通した後、独立reviewで7観点のblockingを受けた。修正snapshot `ca7cfeb` の限定reviewで残ったreceipt優先、tenant付き正本、current source照合、stateful/holdout束縛を修正した。続くsnapshot `3e6ed4d` ではatomic claim/CASとadjustment根拠の金額束縛を修正した。現在の候補は、typed evidence、receipt/CAS、再起動復元、run上限、同条件baseline、stateful PBT、同時claim、初回/replayの安定した公開failure codeを含むtargeted 39 testsと限定Ruffが通過している。独立再reviewは継続中である。
 
 modelを使わない固定workflowは同じtyped fact、read tool、solver、validatorでknown例とM8欠落例を実行した。known例は50,000円配分・予定残高20,000円・台帳不変、M8は配分0円・未配分30,000円・営業照会・台帳不変となった。これはbaselineの動作確認であり、Agentとの優劣評価ではない。
 
-current candidateの全体check、実browser、修正後actual known/unknown評価、独立再reviewは未完了である。API生成とAPI契約check、web buildは途中snapshotで通過したため、candidate固定後に再確認する。actual modelの追加callは初期24枠の残り6を維持し、再reviewと評価計画の合意まで停止する。
+UIはAgent/固定workflowの各latest runを並べ、判断回数、tool回数、配分、未配分、取消を含む観測済み調整と根拠を表示する。write失敗時は同じwriteを再送せず、既知runだけをGETで1回照合して結果不明、予算上限、domain failure、通信失敗を分ける。
+
+current candidateの全体check、実browser、修正後actual known/unknown評価、独立再reviewは未完了である。旧head `90a7469` で開始した全体checkは後続backend変更の証跡に昇格させない。API契約checkとweb buildはcurrent dirty snapshotで通過したため、candidate固定後に再確認する。actual modelは旧phaseで18 attemptを使用済みとして引き継ぎ、最終phaseの追加上限22（cumulative最大40）案をhost側で強制する。再reviewとfreeze完了まで追加callを停止する。
 
 Draft PR作成、push、mergeはこのpacket時点では未実施。本番deploy、実口座、帳簿確定、外部メール、本番認証、新provider/課金は行わない。

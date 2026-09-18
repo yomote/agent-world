@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { accountingApi, type AccountingRun } from "./api/accountingClient";
+import { AccountingApiError, accountingApi, type AccountingRun } from "./api/accountingClient";
 
 type PackagePayload = {
   actual_ledger_updated: false;
@@ -19,6 +19,12 @@ type PackagePayload = {
     ledger_balance_unchanged: boolean;
   };
   sales_inquiry: string[];
+  observed_adjustments: Array<{
+    adjustment_id: string;
+    amount: { minor_units: number };
+    status: string;
+    source: { artifact_id: string; version: number; span: string };
+  }>;
 };
 
 const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
@@ -29,43 +35,83 @@ function packageOf(run: AccountingRun | null): PackagePayload | null {
 }
 
 export function AccountingLab() {
-  const [run, setRun] = useState<AccountingRun | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [runs, setRuns] = useState<Record<"agent" | "baseline", AccountingRun | null>>({
+    agent: null,
+    baseline: null,
+  });
+  const [selectedMode, setSelectedMode] = useState<"agent" | "baseline">("agent");
+  const [busyMode, setBusyMode] = useState<"agent" | "baseline" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const run = runs[selectedMode];
   const result = packageOf(run);
 
+  function remember(mode: "agent" | "baseline", value: AccountingRun) {
+    setRuns((current) => ({ ...current, [mode]: value }));
+  }
+
+  async function reportFailure(
+    mode: "agent" | "baseline",
+    current: AccountingRun | null,
+    reason: unknown,
+  ) {
+    if (!current) {
+      const kind = reason instanceof AccountingApiError ? "domain/API失敗" : "通信失敗";
+      setError(`${kind}: runを作成できず状態は未確認です`);
+      return;
+    }
+    try {
+      const observed = await accountingApi.get(current.run_id);
+      remember(mode, observed);
+      const labels: Record<string, string> = {
+        unknown_terminal: "結果不明で停止",
+        budget_exhausted: "予算上限で停止",
+        domain_failed: "domain検証失敗",
+      };
+      setError(labels[observed.status] ?? `通信失敗（read-only照合時の状態: ${observed.status}）`);
+    } catch {
+      setError("通信失敗・状態未確認です。writeは自動再送していません");
+    }
+  }
+
   async function start(mode: "agent" | "baseline") {
-    setBusy(true);
+    setSelectedMode(mode);
+    setBusyMode(mode);
     setError(null);
+    let current: AccountingRun | null = null;
     try {
       let next = await accountingApi.start(mode);
-      setRun(next);
+      current = next;
+      remember(mode, next);
       while (next.status === "running" && !next.pending_question) {
         next = await accountingApi.advance(next);
-        setRun(next);
+        current = next;
+        remember(mode, next);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "結果不明のため停止しました");
+      await reportFailure(mode, current, reason);
     } finally {
-      setBusy(false);
+      setBusyMode(null);
     }
   }
 
   async function answer(value: string) {
     if (!run?.pending_question) return;
-    setBusy(true);
+    setBusyMode(selectedMode);
     setError(null);
+    let current: AccountingRun | null = run;
     try {
       let next = await accountingApi.answer(run, run.pending_question.question_id, value);
-      setRun(next);
+      current = next;
+      remember(selectedMode, next);
       while (next.status === "running" && !next.pending_question) {
         next = await accountingApi.advance(next);
-        setRun(next);
+        current = next;
+        remember(selectedMode, next);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "結果不明のため停止しました");
+      await reportFailure(selectedMode, current, reason);
     } finally {
-      setBusy(false);
+      setBusyMode(null);
     }
   }
 
@@ -102,15 +148,50 @@ export function AccountingLab() {
       </div>
 
       <div className="accounting-actions">
-        <button disabled={busy} onClick={() => void start("agent")}>
-          {busy && run?.mode === "agent" ? "Agentが調査中…" : "実モデルAgentで調査"}
+        <button disabled={busyMode !== null} onClick={() => void start("agent")}>
+          {busyMode === "agent" ? "Agentが調査中…" : "実モデルAgentで調査"}
         </button>
-        <button disabled={busy} onClick={() => void start("baseline")}>
-          {busy && run?.mode === "baseline" ? "固定workflow実行中…" : "同条件の固定workflow"}
+        <button disabled={busyMode !== null} onClick={() => void start("baseline")}>
+          {busyMode === "baseline" ? "固定workflow実行中…" : "同条件の固定workflow"}
         </button>
       </div>
 
       {error && <p className="accounting-error">{error}。自動再送していません。</p>}
+      {(runs.agent || runs.baseline) && (
+        <div className="accounting-comparison" aria-label="同条件の実行結果比較">
+          {(["agent", "baseline"] as const).map((mode) => {
+            const compared = runs[mode];
+            const comparedPackage = packageOf(compared);
+            return (
+              <button
+                className={selectedMode === mode ? "selected" : ""}
+                disabled={!compared}
+                key={mode}
+                onClick={() => setSelectedMode(mode)}
+              >
+                <strong>{mode === "agent" ? "実モデルAgent" : "固定workflow"}</strong>
+                {compared ? (
+                  <>
+                    <span>状態 {compared.status}</span>
+                    <span>
+                      判断 {compared.model_attempts} / tool {compared.tool_calls}
+                    </span>
+                    <span>
+                      配分 {yen(comparedPackage?.validation.allocated_cash.minor_units ?? 0)} /
+                      未配分 {yen(comparedPackage?.proposal.unapplied.minor_units ?? 0)}
+                    </span>
+                  </>
+                ) : (
+                  <span>未実行</span>
+                )}
+              </button>
+            );
+          })}
+          <p>
+            優位性は未実証です。同じ資料・typed fact・solver・validatorで結果と負担を比較します。
+          </p>
+        </div>
+      )}
       {run?.pending_question && (
         <div className="operator-question">
           <strong>経理担当への確認</strong>
@@ -118,7 +199,7 @@ export function AccountingLab() {
           <small>{run.pending_question.reason}</small>
           <div>
             {run.pending_question.options.map((option) => (
-              <button key={option} disabled={busy} onClick={() => void answer(option)}>
+              <button key={option} disabled={busyMode !== null} onClick={() => void answer(option)}>
                 {option}
               </button>
             ))}
@@ -149,6 +230,10 @@ export function AccountingLab() {
               <strong>{yen(result.validation.planned_balance.minor_units)}</strong>
             </div>
             <div>
+              <span>未配分</span>
+              <strong>{yen(result.proposal.unapplied.minor_units)}</strong>
+            </div>
+            <div>
               <span>実台帳</span>
               <strong>{result.validation.ledger_balance_unchanged ? "変更なし" : "要確認"}</strong>
             </div>
@@ -166,6 +251,21 @@ export function AccountingLab() {
               </p>
             </article>
           ))}
+          <h4>確認した調整</h4>
+          {(result.observed_adjustments ?? []).length ? (
+            <ul>
+              {(result.observed_adjustments ?? []).map((adjustment) => (
+                <li key={adjustment.adjustment_id}>
+                  {adjustment.adjustment_id}: {yen(adjustment.amount.minor_units)} /{" "}
+                  {adjustment.status}
+                  （根拠 {adjustment.source.artifact_id} v{adjustment.source.version}#
+                  {adjustment.source.span}）
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>調整履歴は未確認です。</p>
+          )}
           <h4>未確認・次担当</h4>
           {result.sales_inquiry.length ? (
             <ul>

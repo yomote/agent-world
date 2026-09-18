@@ -33,6 +33,7 @@ class ReviewPackage(StrictModel):
     unresolved: list[str]
     sales_inquiry: list[str]
     source_provenance: list[dict]
+    observed_adjustments: list[dict]
     actual_ledger_updated: Literal[False] = False
 
 

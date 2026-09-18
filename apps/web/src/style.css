@@ -586,6 +586,30 @@ code {
   border-radius: 5px;
   background: #203144;
 }
+.accounting-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+.accounting-comparison button {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  text-align: left;
+  color: #b9cada;
+  border: 1px solid #34546a;
+  background: #132231;
+}
+.accounting-comparison button.selected {
+  border-color: #68d6ad;
+}
+.accounting-comparison p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9db4c7;
+  font-size: 0.8rem;
+}
 .accounting-error,
 .operator-question {
   margin: 14px 0;
@@ -661,5 +685,11 @@ code {
   }
   .lab-kpi {
     text-align: left;
+  }
+  .accounting-comparison {
+    grid-template-columns: 1fr;
+  }
+  .accounting-comparison p {
+    grid-column: auto;
   }
 }
