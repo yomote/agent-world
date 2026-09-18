@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { comparisonMessage } from "./accountingComparison";
 import { AccountingApiError, accountingApi, type AccountingRun } from "./api/accountingClient";
 
 type PackagePayload = {
@@ -173,13 +174,13 @@ export function AccountingLab() {
           {busyMode === "agent" ? "Agentが調査中…" : "実モデルAgentで調査"}
         </button>
         <button disabled={busyMode !== null} onClick={() => void start("baseline")}>
-          {busyMode === "baseline" ? "固定workflow実行中…" : "同条件の固定workflow"}
+          {busyMode === "baseline" ? "固定workflow実行中…" : "固定workflowを実行"}
         </button>
       </div>
 
       {error && <p className="accounting-error">{error}。自動再送していません。</p>}
       {(runs.agent || runs.baseline) && (
-        <div className="accounting-comparison" aria-label="同条件の実行結果比較">
+        <div className="accounting-comparison" aria-label="実行結果比較">
           {(["agent", "baseline"] as const).map((mode) => {
             const compared = runs[mode];
             const comparedPackage = packageOf(compared);
@@ -197,6 +198,7 @@ export function AccountingLab() {
                     <span>
                       判断 {compared.model_attempts} / tool {compared.tool_calls}
                     </span>
+                    <span>fixture {compared.fixture_id}</span>
                     {comparedPackage ? (
                       <span>
                         配分 {yen(comparedPackage.validation.allocated_cash.minor_units)} / 未配分{" "}
@@ -212,9 +214,7 @@ export function AccountingLab() {
               </button>
             );
           })}
-          <p>
-            優位性は未実証です。同じ資料・typed fact・solver・validatorで結果と負担を比較します。
-          </p>
+          <p>{comparisonMessage(runs.agent, runs.baseline)}</p>
         </div>
       )}
       {run?.pending_question && (
