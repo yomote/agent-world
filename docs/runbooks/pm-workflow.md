@@ -6,6 +6,8 @@
 
 Front Deskは指示受信時に、既知情報だけで短く受付、状態表示、既決事項への回答を行います。wall-clockの応答秒数は保証しません。tool待機、調査、実装、workerの完了待ち・追跡・担当調整を抱えず、新規依頼や管理判断をPM controllerへ渡します。
 
+work itemを委任したら、Front Deskは既知状態と次に報告を受ける条件をユーザーへ返してturnを終了し、`wait_agent`、sleep、反復照会で完了を同期的に待ちません。途中更新が必要な作業でも、ownerまたはPMから届いた節目を取り次ぎ、会話への応答と同期的な実務progressを混同しません。rootの応答終了はworkerへの停止指示ではなく、明示的な停止指示またはowner/runtimeの観測がない状態で、停止やその原因を断定しません。
+
 PM controllerはroadmap、優先順位、複数Issueの依存、owner、DoD、リスク、状態遷移、受入れ・release判断を管理します。PMOに相当する課題横断の整理とdecision packetもこの責務に含め、別のdispatcherや競合する指示窓口を設けません。worker報告に基づいて事実、制約、選択肢とtradeoff、推奨、期限、必要なユーザー判断をまとめます。技術的な根拠の調査・検証は具体的なwork itemとしてworkerへ依頼します。
 
 新規開発、scope・priority・DoDの変更、依存やownerの衝突、blocked、受入れ・次release判断を管理の節目とします。既存packet内の修正、再検証、再reviewはownerが継続します。PMの受入れは人間の承認を代替せず、新しい承認gateにもなりません。
