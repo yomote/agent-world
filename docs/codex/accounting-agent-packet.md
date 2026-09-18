@@ -26,10 +26,10 @@
 
 評価入力は `a498ba6cddccd36dfa85db41c2c36a0abd351b13` でfreezeした。known/M8 fixture、prompt・tool catalog、decision/proposal schema、controller/simulator、baseline、seed、CLI versionと、Agentへ渡さないevaluator labelのsealed digestは [freeze manifest](accounting-eval-freeze.json) に、run/tool/usage/artifactの要約は [評価結果](accounting-eval-results.json) に保存した。CLIがmodelの公開IDと金額costを報告しないため、modelは `CLI default (public ID unreported)`、costは不明と記録する。
 
-| case | 実モデルAgent | 固定workflow |
-| --- | --- | --- |
-| known公開例 | 9 model decisions、8 tools、約57秒。50,000円配分、予定残高20,000円、取消20,000円を根拠付きで `ready_for_review`。 | 0 model calls、10 deterministic decisions、9 tools、約0.4秒。同じ50,000円配分、予定残高20,000円、取消根拠付きpackage。 |
-| 未知M8 | 9 model decisions、9 tools、約57秒。同額請求2件とlink資料欠落を観測し、「どちらも入金額と一致し資料だけでは選べない」と経理へ質問して停止。配分・packageは未確定。 | 0 model calls、10 deterministic decisions、9 tools、約0.4秒。配分0円、未配分30,000円、営業照会の `ready_for_review` package。 |
+| case        | 実モデルAgent                                                                                                                                                      | 固定workflow                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| known公開例 | 9 model decisions、8 tools、約57秒。50,000円配分、予定残高20,000円、取消20,000円を根拠付きで `ready_for_review`。                                                  | 0 model calls、10 deterministic decisions、9 tools、約0.4秒。同じ50,000円配分、予定残高20,000円、取消根拠付きpackage。        |
+| 未知M8      | 9 model decisions、9 tools、約57秒。同額請求2件とlink資料欠落を観測し、「どちらも入金額と一致し資料だけでは選べない」と経理へ質問して停止。配分・packageは未確定。 | 0 model calls、10 deterministic decisions、9 tools、約0.4秒。配分0円、未配分30,000円、営業照会の `ready_for_review` package。 |
 
 最終phaseは18 attemptを使用し、旧phase 18と合わせて累計36/40で停止した。timeout/schema failureを含むattemptの再送はしていない。knownでは両方式が同じ業務結果を出し、M8ではAgentが観測に応じて検索と質問へ分岐した一方、固定workflowは人回答なしで保守的packageまで作った。この2caseではAgentの優位は証明されず、M8の完了時間・人負担では固定workflowが有利である。Agentの価値候補は未知資料での動的調査と説明可能な確認質問であり、合算・分割を含む追加caseで別途評価が必要である。
 
