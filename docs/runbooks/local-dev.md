@@ -16,6 +16,8 @@ npm run dev:world
 npm run dev:web
 ```
 
+並行worktreeで既定portが使用中なら、worldを別portで起動し、web側へ`AGENT_WORLD_API_PORT`と`AGENT_WORLD_WEB_PORT`を環境変数で渡す。通常起動の既定値は8000/5173のまま変わらない。
+
 ## 品質チェック
 
 ```sh
@@ -49,6 +51,8 @@ venvを手動作成するなら `python -m venv .venv`、その環境で `python
 3. randomを開始し、Traceが増えてWorldが追従する。停止後、新しいActionが出ない。
 4. APIを止めた場合、未接続/結果不明の表示が出て成功には見えない。
 5. API再起動後は新world_id・初期位置・revision 0を採用する。
+6. 物流MVPのBを実行し、3台へ増やしてもW1能力超過で確定納品が4/16になる。
+7. 物流MVPのCを実行し、別world_idの同じ固定条件からW1=4、W2=12へ再配分して16/16になる。plan、採否、Event、結果artifactを区別して表示する。
 
 ## トラブルシュート
 

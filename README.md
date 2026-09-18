@@ -24,6 +24,14 @@ python scripts/dev.py
 5. Random actorを開始すると約0.7秒ごとに同じAPIへActionを発行。停止ボタンで止まる。
 6. 同じSandboxを別タブで開くと、同じWorldの確定位置とAction Traceが約1秒ごとに反映される。failureも共有される。
 
+画面下部の物流MVPでは、固定ScenarioをWorld API経由で再生成して次を比較できる。
+
+1. トラック1台で近い倉庫へ配送する。
+2. 同じ在庫・注文・能力・道路・期条件のままトラックだけ3台へ増やす。W1へ集中した計画では確定納品が4/16に留まる。
+3. 在庫配分、倉庫能力、配車、納期の成果物を受け渡してW1=4、W2=12へ再配分すると、確定納品が16/16になる。
+
+数値はUI定数ではなくSimulatorが確定した注文充足から集計する。これはcapacity-aware再配分の効果を見るデモで、複数Agent自体の優位性を検証したものではない。
+
 ## 構成と制約
 
 - `apps/world`: immutableなWorldState / Entity / Action / Event、move規則、HTTP API。
@@ -36,8 +44,10 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 新しく開いたタブにも保持中の履歴が表示される。80件を超えた古いEventは破棄され、取得間隔中に上限を超えた場合は取りこぼし得る。再起動でworld_idが変わると各タブの旧履歴も消える。
 通信失敗は「結果不明」としてそのタブだけに残し、success/failureを捏造せず自動再送もしない。表示は結果不明を含め最大80件。
 
-認証・永続化・複数worker・LLM・God Agent・マルチエージェント・文明・経済・戦闘は未実装。
+利用者の実認証、永続化、複数worker、LLM、God Agent、文明、経済、戦闘は未実装。
 ローカル開発用として127.0.0.1にbindする。
+
+物流MVPの`X-Local-Principal`は教育用policyのsimulation selectorであり、trusted identityではない。serverがroleを割り当て、supported runtimeではoperatorとdispatchのcapabilityを分けるが、任意HTTP callerによるprincipal偽装は防御しない。詳細は[ADR 0012](docs/adr/0012-logistics-scenario-and-local-capabilities.md)。
 
 ## 開発資料
 
@@ -46,3 +56,5 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 - [管理statusのインフラ構成図](docs/assets/infrastructure/agent-world-infrastructure.svg)
 - [起動・品質チェック・トラブルシュート](docs/runbooks/local-dev.md)
 - [テスト方針](docs/testing.md) / [Agent向け規約](AGENTS.md)
+- [Agent orchestrationと6業務Worldの提案](docs/proposals/agent-orchestration-domain-roadmap.md)
+- [物流rule版の実装範囲と次段階](docs/proposals/logistics-rule-foundation.md)

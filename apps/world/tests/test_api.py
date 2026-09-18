@@ -128,3 +128,39 @@ def test_other_clients_receive_bounded_success_and_failure_history():
         fresh = restarted.get("/api/events").json()
         assert fresh["events"] == []
         assert fresh["world"]["world_id"] != bounded["world"]["world_id"]
+
+
+def test_logistics_reset_uses_server_principal_registry_and_preserves_state_when_denied():
+    """clientがroleを自己申告してScenarioを変更できる認可抜けを防ぐ。"""
+    with TestClient(create_app()) as client:
+        before = client.get("/api/logistics/world").json()
+        denied = client.post(
+            "/api/logistics/scenario/reset",
+            headers={"X-Local-Principal": "dispatcher", "X-Role": "scenario_operator"},
+            json={"truck_count": 3},
+        )
+        assert denied.status_code == 403
+        assert denied.json()["detail"] == "authz_denied"
+        assert client.get("/api/logistics/world").json() == before
+
+        allowed = client.post(
+            "/api/logistics/scenario/reset",
+            headers={"X-Local-Principal": "human-operator", "X-Role": "untrusted"},
+            json={"truck_count": 3},
+        )
+        assert allowed.status_code == 200
+        assert len(allowed.json()["trucks"]) == 3
+
+
+@pytest.mark.parametrize("truck_count", [0, 4])
+def test_logistics_reset_rejects_unsupported_truck_count(truck_count):
+    """固定Scenarioの1〜3台制約をHTTP入力が抜け、比較条件が変わる回帰を防ぐ。"""
+    with TestClient(create_app()) as client:
+        before = client.get("/api/logistics/world").json()
+        response = client.post(
+            "/api/logistics/scenario/reset",
+            headers={"X-Local-Principal": "human-operator"},
+            json={"truck_count": truck_count},
+        )
+        assert response.status_code == 422
+        assert client.get("/api/logistics/world").json() == before

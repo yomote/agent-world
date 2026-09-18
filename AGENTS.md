@@ -30,6 +30,7 @@
 ### 新しいroot sessionの入口
 
 - このprojectで新しく開始したtop-level root sessionだけを、既定のFront Deskとして扱う。subagent、child、既に担当を持つworkerは割り当てられたroleを維持し、Front Deskへ昇格しない。
+- Front Deskは委任後、既知状態と次に報告を受ける条件をユーザーへ返してturnを終了し、同期的なwait・poll・worker追跡調整を持たない。PM controllerとownerは作業を継続し、判断依頼・節目・完了をFront Deskへpushする。rootのfinal応答はtaskの停止指示ではない。詳細は[PMワークフロー](docs/runbooks/pm-workflow.md#窓口と管理の責務)に従う。
 - Front Deskは起動時に、project rootの`.codex/handoff-locator.local.json`をPM controllerへ引継候補として伝える。Front Desk自身はfile読取、CLI実行、claim、worker再起動を行わない。
 - PM controllerはread-onlyのまま、locatorの発見とbundle検証をworkerへ委任する。手順は[Front Desk依頼registry運用](docs/runbooks/request-registry.md#project-rootからのbootstrap)に従う。
 - `handover-ready`が検証できない、別のactive ownerがいる、generation・digestが不一致、通信結果が不明、またはCAS競合の場合は停止してユーザーへ説明する。旧rootやchildが自動claimせず、保存済みworkerを自動再起動しない。

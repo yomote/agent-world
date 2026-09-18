@@ -72,10 +72,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/logistics/world": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Observe Logistics */
+    get: operations["observe_logistics_api_logistics_world_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/logistics/scenario/reset": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reset Logistics */
+    post: operations["reset_logistics_api_logistics_scenario_reset_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/logistics/plans/accept": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Accept Logistics Plan */
+    post: operations["accept_logistics_plan_api_logistics_plans_accept_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/logistics/actions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Dispatch Logistics */
+    post: operations["dispatch_logistics_api_logistics_actions_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AcceptPlanAction */
+    AcceptPlanAction: {
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /**
+       * Decision Id
+       * Format: uuid
+       */
+      decision_id: string;
+      /** Actor Id */
+      actor_id: string;
+      /**
+       * Type
+       * @constant
+       */
+      type: "accept_logistics_plan";
+      /** Expected Revision */
+      expected_revision: number;
+      plan: components["schemas"]["LogisticsPlan"];
+    };
     /** Action */
     Action: {
       /**
@@ -101,6 +197,56 @@ export interface components {
       /** Events */
       events: components["schemas"]["Event"][];
       event: components["schemas"]["Event"];
+    };
+    /** DispatchShipmentAction */
+    DispatchShipmentAction: {
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /**
+       * Decision Id
+       * Format: uuid
+       */
+      decision_id: string;
+      /** Actor Id */
+      actor_id: string;
+      /**
+       * Type
+       * @constant
+       */
+      type: "dispatch_shipment";
+      /** Expected Revision */
+      expected_revision: number;
+      /**
+       * Plan Id
+       * Format: uuid
+       */
+      plan_id: string;
+      /** Plan Version */
+      plan_version: number;
+      /** Row Id */
+      row_id: string;
+      /** Truck Id */
+      truck_id: string;
+      /**
+       * Warehouse Id
+       * @enum {string}
+       */
+      warehouse_id: "W1" | "W2";
+      /**
+       * Store Id
+       * @enum {string}
+       */
+      store_id: "S1" | "S2";
+      /** Quantity */
+      quantity: number;
     };
     /** Entity */
     Entity: {
@@ -147,12 +293,258 @@ export interface components {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
     };
+    /** LogisticsActionResult */
+    LogisticsActionResult: {
+      event: components["schemas"]["LogisticsEvent"];
+      world: components["schemas"]["LogisticsWorldState"];
+    };
+    /** LogisticsEvent */
+    LogisticsEvent: {
+      /**
+       * Event Id
+       * Format: uuid
+       */
+      event_id: string;
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /**
+       * Decision Id
+       * Format: uuid
+       */
+      decision_id: string;
+      /** Actor Id */
+      actor_id: string;
+      /**
+       * Action Type
+       * @enum {string}
+       */
+      action_type: "accept_logistics_plan" | "dispatch_shipment";
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "success" | "domain_failure" | "authz_denied";
+      /**
+       * Reason
+       * @enum {string}
+       */
+      reason:
+        | "plan_accepted"
+        | "shipment_dispatched"
+        | "authz_denied"
+        | "action_id_conflict"
+        | "stale_revision"
+        | "wrong_world"
+        | "plan_mismatch"
+        | "truck_unavailable"
+        | "truck_capacity_exceeded"
+        | "warehouse_capacity_exceeded"
+        | "insufficient_inventory"
+        | "order_already_fulfilled"
+        | "order_quantity_exceeded"
+        | "route_unavailable"
+        | "arrival_after_horizon";
+      /** Principal Id */
+      principal_id: string;
+      /**
+       * Principal Kind
+       * @enum {string}
+       */
+      principal_kind: "human" | "agent" | "service" | "unknown";
+      /** Principal Role */
+      principal_role: string;
+      /** Plan Id */
+      plan_id: string | null;
+      /** Plan Version */
+      plan_version: number | null;
+      /** Row Id */
+      row_id: string | null;
+      /** Quantity */
+      quantity: number;
+      /**
+       * World Id
+       * Format: uuid
+       */
+      world_id: string;
+      /** World Revision */
+      world_revision: number;
+    };
+    /** LogisticsPlan */
+    LogisticsPlan: {
+      /**
+       * Plan Id
+       * Format: uuid
+       */
+      plan_id: string;
+      /** Version */
+      version: number;
+      /**
+       * Publication State
+       * @constant
+       */
+      publication_state: "proposed";
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /**
+       * Decision Id
+       * Format: uuid
+       */
+      decision_id: string;
+      /**
+       * Input World Id
+       * Format: uuid
+       */
+      input_world_id: string;
+      /** Input World Revision */
+      input_world_revision: number;
+      /**
+       * Created By
+       * @enum {string}
+       */
+      created_by: "nearest-warehouse-v1" | "role-team-v1";
+      /** Rows */
+      rows: components["schemas"]["ShipmentPlanRow"][];
+      /** Handoffs */
+      handoffs: components["schemas"]["RoleHandoff"][];
+      /** Reason */
+      reason: string;
+    };
+    /** LogisticsWorldState */
+    LogisticsWorldState: {
+      /**
+       * World Id
+       * Format: uuid
+       */
+      world_id: string;
+      /** Revision */
+      revision: number;
+      /** Horizon Ticks */
+      horizon_ticks: number;
+      /** Warehouses */
+      warehouses: components["schemas"]["Warehouse"][];
+      /** Orders */
+      orders: components["schemas"]["StoreOrder"][];
+      /** Trucks */
+      trucks: components["schemas"]["Truck"][];
+      /** Roads */
+      roads: components["schemas"]["Road"][];
+      accepted_plan?: components["schemas"]["PlanReference"] | null;
+    };
+    /** PlanReference */
+    PlanReference: {
+      /**
+       * Plan Id
+       * Format: uuid
+       */
+      plan_id: string;
+      /** Version */
+      version: number;
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /**
+       * Decision Id
+       * Format: uuid
+       */
+      decision_id: string;
+    };
     /** Position */
     Position: {
       /** X */
       x: number;
       /** Y */
       y: number;
+    };
+    /** ResetLogisticsScenario */
+    ResetLogisticsScenario: {
+      /** Truck Count */
+      truck_count: number;
+    };
+    /** Road */
+    Road: {
+      /**
+       * Warehouse Id
+       * @enum {string}
+       */
+      warehouse_id: "W1" | "W2";
+      /**
+       * Store Id
+       * @enum {string}
+       */
+      store_id: "S1" | "S2";
+      /** Travel Ticks */
+      travel_ticks: number;
+    };
+    /** RoleHandoff */
+    RoleHandoff: {
+      /**
+       * From Role
+       * @enum {string}
+       */
+      from_role:
+        "inventory_allocator" | "warehouse_scheduler" | "dispatcher" | "due_date_coordinator";
+      /**
+       * To Role
+       * @enum {string}
+       */
+      to_role: "warehouse_scheduler" | "dispatcher" | "due_date_coordinator" | "scenario_operator";
+      /** Artifact */
+      artifact: string;
+    };
+    /** ShipmentPlanRow */
+    ShipmentPlanRow: {
+      /** Row Id */
+      row_id: string;
+      /**
+       * Warehouse Id
+       * @enum {string}
+       */
+      warehouse_id: "W1" | "W2";
+      /**
+       * Store Id
+       * @enum {string}
+       */
+      store_id: "S1" | "S2";
+      /** Quantity */
+      quantity: number;
+      /** Truck Id */
+      truck_id: string;
+    };
+    /** StoreOrder */
+    StoreOrder: {
+      /**
+       * Id
+       * @enum {string}
+       */
+      id: "S1" | "S2";
+      /** Requested */
+      requested: number;
+      /** Fulfilled */
+      fulfilled: number;
+      /** Due Tick */
+      due_tick: number;
+    };
+    /** Truck */
+    Truck: {
+      /** Id */
+      id: string;
+      /** Capacity */
+      capacity: number;
+      /** Available Deliveries */
+      available_deliveries: number;
     };
     /** ValidationError */
     ValidationError: {
@@ -166,6 +558,20 @@ export interface components {
       input?: unknown;
       /** Context */
       ctx?: Record<string, never>;
+    };
+    /** Warehouse */
+    Warehouse: {
+      /**
+       * Id
+       * @enum {string}
+       */
+      id: "W1" | "W2";
+      /** Inventory */
+      inventory: number;
+      /** Processing Capacity */
+      processing_capacity: number;
+      /** Processing Remaining */
+      processing_remaining: number;
     };
     /** WorldState */
     WorldState: {
@@ -283,6 +689,131 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["EventHistory"];
+        };
+      };
+    };
+  };
+  observe_logistics_api_logistics_world_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LogisticsWorldState"];
+        };
+      };
+    };
+  };
+  reset_logistics_api_logistics_scenario_reset_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "X-Local-Principal": string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ResetLogisticsScenario"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LogisticsWorldState"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  accept_logistics_plan_api_logistics_plans_accept_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "X-Local-Principal": string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AcceptPlanAction"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LogisticsActionResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  dispatch_logistics_api_logistics_actions_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "X-Local-Principal": string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DispatchShipmentAction"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LogisticsActionResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

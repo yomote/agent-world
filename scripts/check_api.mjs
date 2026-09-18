@@ -38,7 +38,11 @@ for (const [relative, source] of outputs) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  if (actual?.replaceAll("\r\n", "\n") !== expected) {
+  // JSONの1と1.0は同じ数値。Python生成時とJSON.parse後の字句差を意味差として扱わない。
+  const matches = relative.endsWith(".json")
+    ? actual !== undefined && JSON.stringify(JSON.parse(actual)) === JSON.stringify(schema)
+    : actual?.replaceAll("\r\n", "\n") === expected;
+  if (!matches) {
     console.error(
       `${relative}: 生成物が欠落または古くなっています。npm run api:generate を実行してください。`,
     );

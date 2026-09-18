@@ -248,6 +248,193 @@ dd {
 .trace-panel {
   margin-top: 20px;
 }
+.logistics-lab {
+  margin-top: 28px;
+  padding: 26px;
+  border: 1px solid #31516a;
+  border-radius: 12px;
+  background: radial-gradient(circle at 95% 0%, #17464a66, transparent 38%), #101e30;
+}
+.lab-heading,
+.run-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+.lab-heading h2 {
+  font-size: 1.35rem;
+}
+.lab-kpi {
+  min-width: 145px;
+  text-align: right;
+  color: #9db0c6;
+}
+.lab-kpi strong {
+  color: #72e4cb;
+  font-size: 2rem;
+}
+.lab-kpi span {
+  display: block;
+  margin-top: 3px;
+  font: 0.7rem monospace;
+  text-transform: uppercase;
+}
+.lab-intro {
+  max-width: 820px;
+  margin-top: 16px;
+  color: #b8c8da;
+  line-height: 1.75;
+  font-size: 0.9rem;
+}
+.intervention-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 20px;
+}
+.intervention-buttons button {
+  padding: 13px 12px;
+}
+.intervention-buttons .primary {
+  border-color: #2b8a77;
+  color: #83ecd5;
+  background: #133b3b;
+}
+.lab-message {
+  min-height: 22px;
+  margin-top: 13px;
+  color: #9db0c6;
+  font-size: 0.83rem;
+}
+.logistics-world {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid #2a435c;
+  border-radius: 8px;
+  background: #2a435c;
+}
+.logistics-world > div {
+  padding: 15px 17px;
+  background: #0d1929;
+}
+.logistics-world h3,
+.run-card h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+.logistics-world p {
+  margin-top: 6px;
+  color: #b8c8da;
+  font-size: 0.82rem;
+}
+.muted {
+  color: #7f96b0 !important;
+  font-family: monospace;
+}
+.run-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+.run-card {
+  padding: 18px;
+  border: 1px solid #2a435c;
+  border-radius: 9px;
+  background: #0d1929;
+}
+.artifact-state {
+  display: block;
+  margin-bottom: 7px;
+  color: #8da6c2;
+  font: 0.72rem monospace;
+}
+.run-title > strong {
+  padding: 6px 8px;
+  border-radius: 5px;
+  font: 1rem monospace;
+}
+.run-title .complete {
+  color: #79e8ce;
+  background: #58dfc212;
+}
+.run-title .partial {
+  color: #ffbd78;
+  background: #ffbd7812;
+}
+.run-card > p {
+  color: #9db0c6;
+  line-height: 1.55;
+  font-size: 0.8rem;
+}
+.shipment-plan,
+.event-list {
+  padding: 0;
+  list-style: none;
+}
+.shipment-plan li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #22364c;
+  font-size: 0.8rem;
+}
+.handoff-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 12px 0;
+}
+.handoff-flow span {
+  padding: 4px 6px;
+  border: 1px solid #36546f;
+  border-radius: 4px;
+  color: #9db0c6;
+  font-size: 0.7rem;
+}
+.handoff-flow span + span::before {
+  content: "→ ";
+  color: #58dfc2;
+}
+.event-list li {
+  margin-top: 7px;
+  padding-left: 9px;
+  border-left: 2px solid #58dfc2;
+  font-size: 0.78rem;
+}
+.event-list li.domain_failure {
+  border-left-color: #ffbd78;
+}
+.event-list li.authz_denied {
+  border-left-color: #ef9ba6;
+}
+.event-list small {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 3px;
+  color: #7189a4;
+  font-family: monospace;
+}
+.run-card footer {
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid #26384e;
+  color: #9db0c6;
+  font-size: 0.75rem;
+}
+.sandbox-boundary {
+  margin-top: 18px;
+  padding-top: 15px;
+  border-top: 1px solid #26384e;
+  color: #8299b3;
+  line-height: 1.6;
+  font-size: 0.76rem;
+}
 .causal-path {
   padding: 12px 22px;
   display: flex;
@@ -377,5 +564,15 @@ code {
   }
   .world-canvas {
     max-height: none;
+  }
+  .intervention-buttons,
+  .logistics-world {
+    grid-template-columns: 1fr;
+  }
+  .lab-heading {
+    flex-wrap: wrap;
+  }
+  .lab-kpi {
+    text-align: left;
   }
 }

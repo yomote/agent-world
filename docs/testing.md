@@ -10,8 +10,12 @@ Mind Inboxの「静かな回帰を止める」「取得失敗と成功を区別�
 | Frontend unit   | Sessionとrandom actor                    | 応答前の移動、古い観測での巻き戻し、通信失敗の偽装、再起動追従、Actorの観測変更     |
 | Contract        | OpenAPIとTypeScriptの再生成差分          | PythonのAPI変更がフロントの型に反映されない状態                                     |
 | 手動の通し確認  | 実Vite・FastAPI・Phaser                  | Canvasの描画、Actionボタン、Trace、random開始停止                                   |
+| 物流Python unit | LogisticsSimulator / API                 | 認可拒否の状態変更、二重消費、計画迂回、不公平な比較reset                           |
+| 物流Actor unit  | pure rule planner                        | 観測の直接変更、倉庫能力を共有しない役割間handoff                                   |
 
 各テストのコメントに防ぐ回帰を書く。FrontendのAPIダブルは順序・通信異常を制御する目的のみ。画面が実サーバーと動いた証明には使わない。
 UI snapshot、大規模E2E基盤、LLM評価、カバレッジの一律閾値、定期監視は今回は導入しない。
+
+物流MVPの手動確認ではA/B/Cを順に実行し、BとCがそれぞれ新しいWorldの同じ固定条件から始まること、Bの確定actualが4/16で倉庫能力failureを示すこと、Cが16/16であること、plan・Event・結果artifactのID相関を画面で確認する。
 
 CIは `npm run check` と契約再生成差分を実行する。ブラウザーの目視確認やGitHub Actions自体の実行結果は別に報告する。
