@@ -51,13 +51,19 @@ class AccountingAgentController:
             raise AccountingDomainError(str(error)) from error
         if claim == "replay":
             return self._replay(action_id)
+        if claim == "in_progress":
+            raise AccountingDomainError("operation_in_progress")
         if claim == "unknown":
             raise AccountingDomainError("operation_result_unknown")
-        current = self._require_run(run_id)
-        if self._store.pending_question(run_id):
-            return self._complete(action_id, run_id, self.view(run_id))
-        self._enforce_limits(current)
-        context = self._context(run_id)
+        try:
+            current = self._require_run(run_id)
+            if self._store.pending_question(run_id):
+                return self._complete(action_id, run_id, self.view(run_id))
+            self._enforce_limits(current)
+            context = self._context(run_id)
+        except Exception as error:
+            self._complete_failure(action_id, run_id, error)
+            raise
         self._store.record_attempt(run_id)
         try:
             decision, usage = self._provider.decide(context)
@@ -93,9 +99,9 @@ class AccountingAgentController:
                 self._publish(run_id, decision_id, decision)
             else:
                 self._set_status(run_id, "stopped")
-        except Exception:
+        except Exception as error:
             self._set_status(run_id, "domain_failed")
-            self._store.complete_operation(action_id, run_id, {"error": "domain_failed"}, ok=False)
+            self._complete_failure(action_id, run_id, error)
             raise
         return self._complete(action_id, run_id, self.view(run_id))
 
@@ -119,6 +125,8 @@ class AccountingAgentController:
             raise AccountingDomainError(str(error)) from error
         if claim == "replay":
             return self._replay(action_id)
+        if claim == "in_progress":
+            raise AccountingDomainError("operation_in_progress")
         if claim == "unknown":
             raise AccountingDomainError("operation_result_unknown")
         pending = self._store.pending_question(run_id)
@@ -309,6 +317,10 @@ class AccountingAgentController:
         if not receipt["ok"]:
             raise AccountingDomainError(receipt["value"]["error"])
         return receipt["value"]
+
+    def _complete_failure(self, action_id: str, run_id: str, error: Exception) -> None:
+        code = str(error) if isinstance(error, AccountingDomainError) else "domain_failed"
+        self._store.complete_operation(action_id, run_id, {"error": code}, ok=False)
 
     def _enforce_limits(self, run: dict[str, Any]) -> None:
         limits = {

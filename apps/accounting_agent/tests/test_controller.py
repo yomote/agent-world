@@ -157,6 +157,20 @@ def test_answer_receipt_replays_after_question_is_no_longer_pending(tmp_path) ->
     assert replay["step_version"] == 2
 
 
+def test_domain_failure_receipt_replays_original_error_without_second_decision(tmp_path) -> None:
+    # 回帰: claim後のdomain failureを曖昧な失敗へ変えず、同Action再送でもmodelを呼ばない。
+    provider = SequenceProvider([_tool("write_ledger", {})])
+    controller = AccountingAgentController(
+        AccountingSimulator(), RunStore(tmp_path / "runs.sqlite3"), provider
+    )
+    run_id = controller.start("agent")
+    with pytest.raises(Exception, match="tool_not_allowed"):
+        controller.advance(run_id, "advance-bad", 0)
+    with pytest.raises(Exception, match="tool_not_allowed"):
+        controller.advance(run_id, "advance-bad", 0)
+    assert controller.view(run_id)["model_attempts"] == 1
+
+
 def test_codex_command_isolated_from_repository_and_disables_builtin_tools(tmp_path) -> None:
     # 回帰: hidden fixture/評価labelをCodexのfile/shell能力から直読させない。
     command = CodexExecProvider.command(tmp_path, tmp_path / "schema.json", tmp_path / "out.json")

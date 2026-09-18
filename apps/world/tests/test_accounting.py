@@ -254,6 +254,41 @@ def test_equal_amount_holdout_requires_link_or_stays_unapplied() -> None:
     assert held.valid
 
 
+def test_adjustment_evidence_is_bound_to_candidate_amount(tmp_path) -> None:
+    # 回帰: 同じ請求の別金額adjustment根拠を候補額の承認証拠として流用しない。
+    source = Path(__file__).parents[1] / "fixtures" / "accounting_known.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    adjustment = fixture["snapshot"]["adjustments"][0]
+    adjustment["status"] = "approved"
+    adjustment["source"]["value"] = "approved"
+    fixture["documents"][2]["spans"]["status"]["value"] = "approved"
+    fixture["documents"][2]["spans"]["status"]["text"] = "status=approved"
+    other = deepcopy(adjustment)
+    other["adjustment_id"] = "ADJ-10000"
+    other["amount"]["minor_units"] = 10000
+    other["source"].update(artifact_id="DOC-ADJ-OTHER", subject_id="ADJ-10000")
+    other_document = deepcopy(fixture["documents"][2])
+    other_document.update(document_id="DOC-ADJ-OTHER")
+    other_document["spans"]["status"].update(subject_id="ADJ-10000")
+    fixture["snapshot"]["adjustments"].append(other)
+    fixture["documents"].append(other_document)
+    path = tmp_path / "two-adjustments.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    simulator = AccountingSimulator(path)
+    history = simulator.read_adjustment_history(
+        "tenant-demo", "INV-70000", "amount-run", "call-adjustments"
+    )
+    proposal = _proposal(simulator, "amount-run")
+    proposal.allocations[0].adjustment_candidate = MoneyJPY(minor_units=20000)
+    proposal.allocations[0].evidence.append(
+        EvidenceRef.model_validate(
+            next(ref for ref in history["issued_refs"] if ref["subject_id"] == "ADJ-10000")
+        )
+    )
+    report = simulator.validate(proposal, "amount-run")
+    assert "invalid_evidence" in {issue.code for issue in report.issues}
+
+
 def test_money_rejects_non_jpy_fractional_or_negative_values() -> None:
     # 回帰: 通貨換算・小数円・負数をmodel出力から暗黙補正しない。
     for payload in [

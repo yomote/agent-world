@@ -2,7 +2,9 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 
 class RunStore:
@@ -13,6 +15,8 @@ class RunStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        self._lock = RLock()
+        self._owner_token = str(uuid4())
         self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS runs (
@@ -48,10 +52,20 @@ class RunStore:
               operation TEXT NOT NULL, fingerprint TEXT NOT NULL,
               expected_step_version INTEGER NOT NULL,
               status TEXT NOT NULL, result_json TEXT,
+              owner_token TEXT,
               created_at TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS one_pending_operation_per_run
+              ON operation_receipts(run_id) WHERE status='pending';
             """
         )
+        columns = {
+            row[1]
+            for row in self._connection.execute("PRAGMA table_info(operation_receipts)").fetchall()
+        }
+        if "owner_token" not in columns:
+            self._connection.execute("ALTER TABLE operation_receipts ADD COLUMN owner_token TEXT")
+            self._connection.commit()
 
     def create_run(self, run_id: str, mode: str, fixture_id: str) -> None:
         self._connection.execute(
@@ -165,41 +179,78 @@ class RunStore:
             separators=(",", ":"),
         )
         fingerprint = __import__("hashlib").sha256(canonical.encode()).hexdigest()
-        existing = self._connection.execute(
-            "SELECT run_id,operation,fingerprint,status FROM operation_receipts WHERE action_id=?",
-            (action_id,),
-        ).fetchone()
-        if existing:
-            if tuple(existing[:3]) != (run_id, operation, fingerprint):
-                raise ValueError("action_id_conflict")
-            return "replay" if existing[3] == "completed" else "unknown"
-        pending = self._connection.execute(
-            "SELECT action_id FROM operation_receipts WHERE run_id=? AND status='pending'",
-            (run_id,),
-        ).fetchone()
-        if pending:
-            self.set_status(run_id, "unknown_terminal")
-            raise ValueError("operation_result_unknown")
-        run = self._connection.execute(
-            "SELECT status,step_version,deadline_at FROM runs WHERE run_id=?", (run_id,)
-        ).fetchone()
-        if run is None:
-            raise ValueError("unknown_run")
-        if run[0] != "running":
-            raise ValueError("run_not_running")
-        if run[1] != expected_step_version:
-            raise ValueError("stale_step_version")
-        if datetime.fromisoformat(run[2]) <= datetime.now(UTC):
-            self.set_status(run_id, "budget_exhausted")
-            raise ValueError("wall_budget_exhausted")
-        self._connection.execute(
-            """INSERT INTO operation_receipts(
-                 action_id,run_id,operation,fingerprint,expected_step_version,status,created_at
-               ) VALUES(?,?,?,?,?,'pending',?)""",
-            (action_id, run_id, operation, fingerprint, expected_step_version, self._now()),
-        )
-        self._connection.commit()
-        return "new"
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._connection.execute(
+                    """SELECT run_id,operation,fingerprint,status,owner_token
+                       FROM operation_receipts WHERE action_id=?""",
+                    (action_id,),
+                ).fetchone()
+                if existing:
+                    if tuple(existing[:3]) != (run_id, operation, fingerprint):
+                        raise ValueError("action_id_conflict")
+                    if existing[3] == "completed":
+                        outcome = "replay"
+                    elif existing[3] == "pending" and existing[4] == self._owner_token:
+                        outcome = "in_progress"
+                    else:
+                        self._connection.execute(
+                            "UPDATE runs SET status='unknown_terminal' WHERE run_id=?", (run_id,)
+                        )
+                        outcome = "unknown"
+                    self._connection.commit()
+                    return outcome
+                pending = self._connection.execute(
+                    """SELECT owner_token FROM operation_receipts
+                       WHERE run_id=? AND status='pending'""",
+                    (run_id,),
+                ).fetchone()
+                if pending:
+                    if pending[0] == self._owner_token:
+                        self._connection.commit()
+                        return "in_progress"
+                    self._connection.execute(
+                        "UPDATE runs SET status='unknown_terminal' WHERE run_id=?", (run_id,)
+                    )
+                    self._connection.commit()
+                    return "unknown"
+                run = self._connection.execute(
+                    "SELECT status,step_version,deadline_at FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise ValueError("unknown_run")
+                if run[0] != "running":
+                    raise ValueError("run_not_running")
+                if run[1] != expected_step_version:
+                    raise ValueError("stale_step_version")
+                if datetime.fromisoformat(run[2]) <= datetime.now(UTC):
+                    self._connection.execute(
+                        "UPDATE runs SET status='budget_exhausted' WHERE run_id=?", (run_id,)
+                    )
+                    self._connection.commit()
+                    raise ValueError("wall_budget_exhausted")
+                self._connection.execute(
+                    """INSERT INTO operation_receipts(
+                         action_id,run_id,operation,fingerprint,expected_step_version,status,
+                         owner_token,created_at
+                       ) VALUES(?,?,?,?,?,'pending',?,?)""",
+                    (
+                        action_id,
+                        run_id,
+                        operation,
+                        fingerprint,
+                        expected_step_version,
+                        self._owner_token,
+                        self._now(),
+                    ),
+                )
+                self._connection.commit()
+                return "new"
+            except Exception:
+                if self._connection.in_transaction:
+                    self._connection.rollback()
+                raise
 
     def complete_operation(
         self, action_id: str, run_id: str, value: dict | None = None, *, ok: bool = True
@@ -207,15 +258,23 @@ class RunStore:
         result_json = json.dumps(
             {"ok": ok, "value": value or {}}, ensure_ascii=False, sort_keys=True
         )
-        self._connection.execute(
-            """UPDATE operation_receipts SET status='completed',result_json=?
-               WHERE action_id=? AND run_id=?""",
-            (result_json, action_id, run_id),
-        )
-        self._connection.execute(
-            "UPDATE runs SET step_version=step_version+1 WHERE run_id=?", (run_id,)
-        )
-        self._connection.commit()
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                changed = self._connection.execute(
+                    """UPDATE operation_receipts SET status='completed',result_json=?
+                       WHERE action_id=? AND run_id=? AND status='pending'""",
+                    (result_json, action_id, run_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("operation_result_unknown")
+                self._connection.execute(
+                    "UPDATE runs SET step_version=step_version+1 WHERE run_id=?", (run_id,)
+                )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
 
     def operation_result(self, action_id: str) -> dict:
         row = self._connection.execute(

@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 from accounting_agent.store import RunStore
 
 
@@ -61,10 +64,24 @@ def test_pending_operation_becomes_terminal_unknown_after_restart(tmp_path) -> N
     first.create_run("run-1", "agent", "known")
     assert first.claim_operation("run-1", "action-1", "advance", 0, {"run_id": "run-1"}) == "new"
     restarted = RunStore(path)
-    try:
+    assert (
         restarted.claim_operation("run-1", "action-2", "advance", 0, {"run_id": "run-1"})
-    except ValueError as error:
-        assert str(error) == "operation_result_unknown"
-    else:
-        raise AssertionError("pending operation must stop a new decision")
+        == "unknown"
+    )
     assert restarted.get_run("run-1")["status"] == "unknown_terminal"
+
+
+def test_concurrent_distinct_actions_claim_only_one_model_step(tmp_path) -> None:
+    # 回帰: 同じstepへの同時clickがSELECT→INSERT競合を抜けて二重model callにならない。
+    store = RunStore(tmp_path / "runs.sqlite3")
+    store.create_run("run-1", "agent", "known")
+    barrier = Barrier(2)
+
+    def claim(action_id: str) -> str:
+        barrier.wait()
+        return store.claim_operation("run-1", action_id, "advance", 0, {"run_id": "run-1"})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(claim, ["action-a", "action-b"]))
+
+    assert sorted(outcomes) == ["in_progress", "new"]
