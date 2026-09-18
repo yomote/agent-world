@@ -15,6 +15,8 @@ FILES = [
     "apps/world/accounting_simulator.py",
     "apps/accounting_agent/provider.py",
     "apps/accounting_agent/controller.py",
+    "apps/accounting_agent/models.py",
+    "scripts/evaluate_accounting.py",
 ]
 
 
@@ -25,15 +27,29 @@ def digest(path: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--previous-attempts", type=int, required=True)
+    parser.add_argument("--final-attempt-limit", type=int, required=True)
     args = parser.parse_args()
     manifest = {
         "frozen_at": datetime.now(UTC).isoformat(),
         "seed": 8901,
         "provider": "Codex CLI / ChatGPT login",
         "model": "CLI default (public ID unreported)",
+        "model_reported_version": "not exposed by the configured CLI event stream",
         "cli_version": subprocess.check_output(["codex", "--version"], text=True).strip(),
+        "git_head": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip(),
         "files": {relative: digest(ROOT / relative) for relative in FILES},
         "evaluator_label_included": False,
+        "sealed_evaluator_digest": digest(
+            ROOT / "apps/accounting_agent/tests/evaluator/accounting_holdout_m8_missing.json"
+        ),
+        "budget": {
+            "previous_attempts": args.previous_attempts,
+            "final_attempt_limit": args.final_attempt_limit,
+            "cumulative_limit": args.previous_attempts + args.final_attempt_limit,
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

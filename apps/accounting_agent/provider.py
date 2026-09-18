@@ -40,9 +40,11 @@ class DecisionProvider(Protocol):
 
 
 class GlobalCallBudget:
-    def __init__(self, limit: int = 24) -> None:
+    def __init__(self, limit: int = 24, used: int = 0) -> None:
+        if used < 0 or used > limit:
+            raise ValueError("invalid_global_call_budget")
         self.limit = limit
-        self.used = 0
+        self.used = used
         self._lock = Lock()
 
     def take(self) -> None:

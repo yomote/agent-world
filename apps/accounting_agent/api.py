@@ -17,7 +17,10 @@ def create_app(database_path: Path | None = None, fixture_path: Path | None = No
     )
     store = RunStore(db_path)
     simulator = AccountingSimulator(fixture_path)
-    budget = GlobalCallBudget(limit=24)
+    budget = GlobalCallBudget(
+        limit=int(os.getenv("ACCOUNTING_MODEL_CALL_LIMIT", "24")),
+        used=int(os.getenv("ACCOUNTING_MODEL_CALLS_ALREADY_USED", "0")),
+    )
     controllers = {
         "agent": AccountingAgentController(simulator, store, CodexExecProvider(budget)),
         "baseline": AccountingAgentController(simulator, store, FixedWorkflowProvider()),
@@ -25,7 +28,12 @@ def create_app(database_path: Path | None = None, fixture_path: Path | None = No
 
     @app.get("/healthz")
     def health() -> dict:
-        return {"status": "ok", "model_budget_remaining": budget.remaining}
+        return {
+            "status": "ok",
+            "model_budget_limit": budget.limit,
+            "model_budget_used": budget.used,
+            "model_budget_remaining": budget.remaining,
+        }
 
     @app.post("/api/accounting/runs", response_model=RunView)
     def start(request: StartRunRequest) -> dict:
