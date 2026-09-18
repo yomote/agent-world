@@ -100,3 +100,13 @@ principalとcapabilityの制約、比較解釈は[ADR 0012](adr/0012-logistics-s
 実行順と使うAPIはhost codeに固定されている。AIが状況に応じて次のtoolを選ぶ自律orchestration、各役割のLLM化、動的な再計画loop、追加調査toolは未実装である。
 
 物流UIはReactのDOM cardで描画し、Phaserは既存A/moveのgridだけを担当する。World stateと採用plan、Action IDの確定結果cacheはserver processのmemory、結果artifactと表示Event一覧はbrowser tabのmemoryにだけ保持する。永続DBとserver Event履歴APIはない。通常UIはA/B/Cの成功・domain failureを操作できるが、認可拒否、stale revision、重複Actionの故障注入はAPI/Simulator testで検証する。
+
+## 入金消込Agent
+
+Accounting Labは3層に分ける。
+
+1. `apps/world/accounting_simulator.py`: 合成資料と請求残高の読み取り正本、候補solver、domain validator。Actor/React/LLM SDKへ依存せず、台帳状態を更新しない。
+2. `apps/accounting_agent`: modelの次tool提案を未信頼入力として受け、server側allowlist capabilityを実行する。SQLiteへpublic reason、tool receipt、typed evidence、review packageを保存する。modelへWorld更新能力は渡さない。
+3. `apps/web/src/AccountingLab.tsx`: 困り事と成果をtraceより先に見せ、actual model/fixed workflow、質問、未確認、根拠を表示する。
+
+ローカルAPIは `127.0.0.1:8020`。本番identity認証ではなく、任意HTTP callerを防御する境界ではない。詳細は[ADR 0013](adr/0013-read-only-accounting-agent.md)。

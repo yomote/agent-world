@@ -35,16 +35,10 @@ class AccountingAgentController:
 
     def start(self, mode: str) -> str:
         run_id = f"run-{uuid4()}"
-        self._store.create_run(run_id, mode, "known-public-example")
+        self._store.create_run(run_id, mode, self._simulator.fixture_id)
         return run_id
 
     def advance(self, run_id: str, action_id: str, expected_step_version: int) -> dict[str, Any]:
-        current = self._require_run(run_id)
-        if current["status"] != "running":
-            return current
-        if self._store.pending_question(run_id):
-            return self.view(run_id)
-        self._enforce_limits(current)
         try:
             claim = self._store.claim_operation(
                 run_id,
@@ -56,9 +50,13 @@ class AccountingAgentController:
         except ValueError as error:
             raise AccountingDomainError(str(error)) from error
         if claim == "replay":
-            return self.view(run_id)
+            return self._replay(action_id)
         if claim == "unknown":
             raise AccountingDomainError("operation_result_unknown")
+        current = self._require_run(run_id)
+        if self._store.pending_question(run_id):
+            return self._complete(action_id, run_id, self.view(run_id))
+        self._enforce_limits(current)
         context = self._context(run_id)
         self._store.record_attempt(run_id)
         try:
@@ -97,10 +95,9 @@ class AccountingAgentController:
                 self._set_status(run_id, "stopped")
         except Exception:
             self._set_status(run_id, "domain_failed")
-            self._store.complete_operation(action_id, run_id)
+            self._store.complete_operation(action_id, run_id, {"error": "domain_failed"}, ok=False)
             raise
-        self._store.complete_operation(action_id, run_id)
-        return self.view(run_id)
+        return self._complete(action_id, run_id, self.view(run_id))
 
     def answer(
         self,
@@ -110,12 +107,6 @@ class AccountingAgentController:
         question_id: str,
         answer: str,
     ) -> dict[str, Any]:
-        pending = self._store.pending_question(run_id)
-        if pending is None or pending["question_id"] != question_id:
-            raise AccountingDomainError("question_not_pending")
-        question = Question.model_validate(pending)
-        if answer not in question.options:
-            raise AccountingDomainError("answer_not_in_options")
         try:
             claim = self._store.claim_operation(
                 run_id,
@@ -127,9 +118,21 @@ class AccountingAgentController:
         except ValueError as error:
             raise AccountingDomainError(str(error)) from error
         if claim == "replay":
-            return self.view(run_id)
+            return self._replay(action_id)
         if claim == "unknown":
             raise AccountingDomainError("operation_result_unknown")
+        pending = self._store.pending_question(run_id)
+        if pending is None or pending["question_id"] != question_id:
+            self._store.complete_operation(
+                action_id, run_id, {"error": "question_not_pending"}, ok=False
+            )
+            raise AccountingDomainError("question_not_pending")
+        question = Question.model_validate(pending)
+        if answer not in question.options:
+            self._store.complete_operation(
+                action_id, run_id, {"error": "answer_not_in_options"}, ok=False
+            )
+            raise AccountingDomainError("answer_not_in_options")
         self._store.answer_question(run_id, question_id, answer)
         self._store.append_trace(
             run_id,
@@ -137,8 +140,7 @@ class AccountingAgentController:
             "ask_operator",
             {"question_id": question_id, "answer": answer},
         )
-        self._store.complete_operation(action_id, run_id)
-        return self.view(run_id)
+        return self._complete(action_id, run_id, self.view(run_id))
 
     def view(self, run_id: str) -> dict[str, Any]:
         value = self._require_run(run_id)
@@ -296,6 +298,17 @@ class AccountingAgentController:
 
     def _set_status(self, run_id: str, status: str) -> None:
         self._store.set_status(run_id, status)
+
+    def _complete(self, action_id: str, run_id: str, value: dict[str, Any]) -> dict[str, Any]:
+        completed = {**value, "step_version": value["step_version"] + 1}
+        self._store.complete_operation(action_id, run_id, completed)
+        return completed
+
+    def _replay(self, action_id: str) -> dict[str, Any]:
+        receipt = self._store.operation_result(action_id)
+        if not receipt["ok"]:
+            raise AccountingDomainError(receipt["value"]["error"])
+        return receipt["value"]
 
     def _enforce_limits(self, run: dict[str, Any]) -> None:
         limits = {

@@ -6,6 +6,7 @@ import { handleMoveKeyDown } from "./moveKeyboard";
 import { SandboxSession, type TraceEntry } from "./session";
 import { WorldCanvas } from "./world/WorldCanvas";
 import { LogisticsLab } from "./LogisticsLab";
+import { AccountingLab } from "./AccountingLab";
 
 const reasons: Record<WorldEvent["reason"], string> = {
   moved: "移動を確定",
@@ -240,6 +241,7 @@ export default function App() {
         )}
       </section>
       <LogisticsLab />
+      <AccountingLab />
       <footer className="page-footer">
         <span>メモリ内World · 休止や再起動でAの位置と履歴はリセット</span>
         <span>World Simulator is authoritative.</span>

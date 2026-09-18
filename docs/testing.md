@@ -19,3 +19,5 @@ UI snapshot、大規模E2E基盤、LLM評価、カバレッジの一律閾値、
 物流MVPの手動確認ではA/B/Cを順に実行し、BとCがそれぞれ新しいWorldの同じ固定条件から始まること、Bの確定actualが4/16で倉庫能力failureを示すこと、Cが16/16であること、plan・Event・結果artifactのID相関を画面で確認する。
 
 CIは `npm run check` と契約再生成差分を実行する。ブラウザーの目視確認やGitHub Actions自体の実行結果は別に報告する。
+
+会計Labはdomain/PBTとAgent evalを分ける。HypothesisはJPY境界、重複配分、候補coverage、調整status、tenant、入力順、stale revision、publication replay/conflict、readonly不変条件をshrink/replay可能な形で検査する。Agent evalは同じ資料、fact抽出、tool、solver、ACL、人回答、予算を使う固定workflowと比較し、誤配分、適切な保留、質問、tool数、model attempt、成果物の引継ぎを測る。PBTの成功をAgent品質の成功と扱わない。

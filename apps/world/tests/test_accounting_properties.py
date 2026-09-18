@@ -62,6 +62,18 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
         self.initial = deepcopy(self.simulator.observe())
         self.counter = 0
         self.directory = TemporaryDirectory(prefix="accounting-stateful-")
+        fixture = json.loads(
+            (Path(__file__).parents[1] / "fixtures" / "accounting_known.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        fixture["snapshot"]["revision"] = 8
+        next(item for item in fixture["documents"] if item["document_id"] == "DOC-MAIL")[
+            "version"
+        ] = 2
+        updated_path = Path(self.directory.name) / "updated.json"
+        updated_path.write_text(json.dumps(fixture), encoding="utf-8")
+        self.updated_simulator = AccountingSimulator(updated_path)
         self.store = RunStore(Path(self.directory.name) / "runs.sqlite3")
         self.store.create_run("stateful-run", "baseline", "generated")
         self.validated_payload: dict | None = None
@@ -80,8 +92,8 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
     def solve(self) -> None:
         self.simulator.find_allocation_candidates("tenant-demo", "RCPT-50000", ["INV-70000"])
 
-    @rule(stale=st.booleans())
-    def propose_validate_and_revalidate(self, stale: bool) -> None:
+    @rule(stale=st.booleans(), source_updated=st.booleans())
+    def propose_validate_and_revalidate(self, stale: bool, source_updated: bool) -> None:
         self.counter += 1
         mail = self.simulator.read_document(
             "tenant-demo", "DOC-MAIL", "stateful-run", f"mail-{self.counter}"
@@ -114,8 +126,13 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
                 status="complete",
             ),
         )
-        report = self.simulator.validate(proposal, "stateful-run")
-        expected_codes = {"stale_revision"} if stale else set()
+        target = self.updated_simulator if source_updated else self.simulator
+        report = target.validate(proposal, "stateful-run")
+        expected_codes = set()
+        if stale or source_updated:
+            expected_codes.add("stale_revision")
+        if source_updated:
+            expected_codes.add("invalid_evidence")
         assert {issue.code for issue in report.issues} == expected_codes
         if report.valid:
             self.validated_payload = {
@@ -166,6 +183,7 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
     @invariant()
     def ledger_is_immutable(self) -> None:
         assert self.simulator.observe() == self.initial
+        assert self.updated_simulator.observe().invoices == self.initial.invoices
 
 
 TestReadOnlyAccountingMachine = ReadOnlyAccountingMachine.TestCase
@@ -195,6 +213,9 @@ def test_adjustment_scope_and_input_order_properties(
     second["open_amount"]["minor_units"] = 30000
     fixture["snapshot"]["invoices"].append(second)
     fixture["snapshot"]["adjustments"][0]["status"] = status
+    fixture["snapshot"]["adjustments"][0]["source"]["value"] = status
+    fixture["documents"][2]["spans"]["status"]["value"] = status
+    fixture["documents"][2]["spans"]["status"]["text"] = f"status={status}"
     with TemporaryDirectory(prefix="accounting-property-") as directory:
         fixture_path = Path(directory) / "fixture.json"
         fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
@@ -219,6 +240,8 @@ def test_adjustment_scope_and_input_order_properties(
     receipt_evidence = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
     invoice_observation = simulator.read_document(tenant, "DOC-INVOICE", "property-run", "call-2")
     invoice_evidence = simulator.issued_evidence_ref(invoice_observation.evidence_id, "balance")
+    adjustment = simulator.read_adjustment_history(tenant, "INV-70000", "property-run", "call-3")
+    adjustment_evidence = adjustment["issued_refs"][0]
     proposal = ReconciliationProposal(
         proposal_id="property-adjustment",
         version=1,
@@ -232,7 +255,7 @@ def test_adjustment_scope_and_input_order_properties(
                 invoice_id="INV-70000",
                 cash_amount=MoneyJPY(minor_units=50000),
                 adjustment_candidate=MoneyJPY(minor_units=20000),
-                evidence=[receipt_evidence, invoice_evidence],
+                evidence=[receipt_evidence, invoice_evidence, adjustment_evidence],
             )
         ],
         unapplied=MoneyJPY(minor_units=0),
@@ -244,3 +267,18 @@ def test_adjustment_scope_and_input_order_properties(
     )
     report = simulator.validate(proposal, "property-run")
     assert report.valid is (status == "approved")
+
+
+def test_inconsistent_adjustment_source_is_rejected_at_fixture_load(tmp_path) -> None:
+    # 回帰: statusだけをapprovedへ変え、source本文がcancelledの矛盾fixtureを正解にしない。
+    source = Path(__file__).parents[1] / "fixtures" / "accounting_known.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    fixture["snapshot"]["adjustments"][0]["status"] = "approved"
+    path = tmp_path / "inconsistent.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    try:
+        AccountingSimulator(path)
+    except ValueError as error:
+        assert "invalid_fixture_adjustment_provenance" in str(error)
+    else:
+        raise AssertionError("inconsistent fixture must be rejected")

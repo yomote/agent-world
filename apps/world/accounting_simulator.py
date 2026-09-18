@@ -26,18 +26,21 @@ class AccountingSimulator:
 
     def __init__(self, fixture_path: Path | None = None) -> None:
         path = fixture_path or Path(__file__).with_name("fixtures") / "accounting_known.json"
-        raw = __import__("json").loads(path.read_text(encoding="utf-8"))
+        fixture_bytes = path.read_bytes()
+        self.fixture_id = f"fixture-{sha256(fixture_bytes).hexdigest()[:12]}"
+        raw = __import__("json").loads(fixture_bytes.decode("utf-8"))
         self._snapshot = AccountingSnapshot.model_validate(raw["snapshot"])
         self._documents = {
             item.document_id: item
             for item in (AccountingDocument.model_validate(value) for value in raw["documents"])
         }
-        self._aliases: dict[str, list[str]] = raw["aliases"]
+        self._aliases: list[dict[str, str]] = raw["aliases"]
         self._issued_evidence: dict[str, tuple[str, EvidenceRef]] = {}
         self._initial_open_totals = {
             tenant: self._open_total(tenant)
             for tenant in {item.tenant_id for item in self._snapshot.invoices}
         }
+        self._validate_fixture_provenance()
 
     def observe(self) -> AccountingSnapshot:
         return self._snapshot.model_copy(deep=True)
@@ -116,7 +119,11 @@ class AccountingSimulator:
 
     def lookup_counterparty(self, tenant_id: str, text: str) -> dict[str, Any]:
         self._require_tenant(tenant_id)
-        matches = self._aliases.get(text.casefold(), [])
+        matches = [
+            item["counterparty_id"]
+            for item in self._aliases
+            if item["tenant_id"] == tenant_id and item["text"].casefold() == text.casefold()
+        ]
         return {
             "query": text,
             "confirmed_ids": matches if len(matches) == 1 else [],
@@ -206,6 +213,11 @@ class AccountingSimulator:
             for item in self._snapshot.invoices
             if item.tenant_id == proposal.tenant_id
         }
+        ambiguous_invoice_ids = {
+            item.invoice_id
+            for item in invoices.values()
+            if item.open_amount.minor_units >= receipt_amount
+        }
         seen: set[tuple[str, str]] = set()
         allocated = 0
         for line in proposal.allocations:
@@ -253,11 +265,27 @@ class AccountingSimulator:
                         detail=f"入金額または請求残高の根拠不足: {line.invoice_id}",
                     )
                 )
+            if (
+                len(ambiguous_invoice_ids) > 1
+                and (
+                    "allocation_link",
+                    proposal.receipt_id,
+                    line.invoice_id,
+                )
+                not in facts
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="invalid_evidence",
+                        detail=f"同額候補を特定する対応づけ根拠不足: {line.invoice_id}",
+                    )
+                )
             if line.adjustment_candidate and line.adjustment_candidate.minor_units:
                 statuses = {
                     item.status
                     for item in self._snapshot.adjustments
                     if item.invoice_id == line.invoice_id
+                    and item.tenant_id == proposal.tenant_id
                     and item.amount.minor_units == line.adjustment_candidate.minor_units
                 }
                 if statuses != {"approved"}:
@@ -265,6 +293,24 @@ class AccountingSimulator:
                         ValidationIssue(
                             code="cancelled_adjustment",
                             detail=f"取消済みまたは未確認の調整: {line.invoice_id}",
+                        )
+                    )
+                adjustment_evidence = {
+                    (ref.fact_type, ref.value)
+                    for ref in line.evidence
+                    if ref.subject_id
+                    in {
+                        item.adjustment_id
+                        for item in self._snapshot.adjustments
+                        if item.invoice_id == line.invoice_id
+                        and item.tenant_id == proposal.tenant_id
+                    }
+                }
+                if ("adjustment_status", "approved") not in adjustment_evidence:
+                    issues.append(
+                        ValidationIssue(
+                            code="invalid_evidence",
+                            detail=f"承認済み調整の観測根拠不足: {line.invoice_id}",
                         )
                     )
         eligible = sorted(
@@ -311,8 +357,32 @@ class AccountingSimulator:
         """Restores only refs persisted in this run's tool receipts after process restart."""
         for raw in refs:
             ref = EvidenceRef.model_validate(raw)
+            if not self._is_current_evidence(ref):
+                continue
             key = f"restored:{ref.artifact_id}:{ref.version}:{ref.span}"
             self._issued_evidence[key] = (run_id, ref)
+
+    def _is_current_evidence(self, ref: EvidenceRef) -> bool:
+        document = self._documents.get(ref.artifact_id)
+        if document and document.version == ref.version and ref.span in document.spans:
+            span = document.spans[ref.span]
+            return (
+                span.fact_type == ref.fact_type
+                and span.subject_id == ref.subject_id
+                and span.value == ref.value
+            )
+        return any(item.source == ref for item in self._snapshot.adjustments)
+
+    def _validate_fixture_provenance(self) -> None:
+        for item in self._snapshot.adjustments:
+            source = item.source
+            if (
+                source.fact_type != "adjustment_status"
+                or source.subject_id != item.adjustment_id
+                or source.value != item.status
+                or not self._is_current_evidence(source)
+            ):
+                raise AccountingDomainError("invalid_fixture_adjustment_provenance")
 
     def _validate_evidence(
         self, line: AllocationLine, run_id: str, issues: list[ValidationIssue]

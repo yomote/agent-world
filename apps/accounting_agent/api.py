@@ -10,13 +10,13 @@ from .provider import CodexExecProvider, FixedWorkflowProvider, GlobalCallBudget
 from .store import RunStore
 
 
-def create_app(database_path: Path | None = None) -> FastAPI:
+def create_app(database_path: Path | None = None, fixture_path: Path | None = None) -> FastAPI:
     app = FastAPI(title="Accounting Cash Application Agent", version="0.1.0")
     db_path = database_path or Path(
         os.getenv("ACCOUNTING_RUN_DB", "artifacts/accounting/runs.sqlite3")
     )
     store = RunStore(db_path)
-    simulator = AccountingSimulator()
+    simulator = AccountingSimulator(fixture_path)
     budget = GlobalCallBudget(limit=24)
     controllers = {
         "agent": AccountingAgentController(simulator, store, CodexExecProvider(budget)),

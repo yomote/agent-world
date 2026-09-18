@@ -4,7 +4,7 @@
   "description": "同額候補を特定するメールが欠落した評価専用bundle",
   "expected": {
     "must_leave_unapplied": true,
-    "must_not_allocate_invoice_ids": ["INV-HIDDEN-A", "INV-HIDDEN-B"],
+    "must_not_allocate_invoice_ids": ["INV-30101", "INV-30102"],
     "required_outcome": "needs_operator_or_unapplied"
   }
 }

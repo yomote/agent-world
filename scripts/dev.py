@@ -29,7 +29,7 @@ def main() -> int:
     major, minor, *_ = map(int, version.lstrip("v").split("."))
     if major < 22 or (major == 22 and minor < 13):
         raise RuntimeError(f"Node.js 22.13以上が必要です（現在 {version}）。")
-    for port in (8000, 5173):
+    for port in (8000, 8020, 5173):
         with socket.socket() as probe:
             try:
                 probe.bind(("127.0.0.1", port))
@@ -62,13 +62,29 @@ def main() -> int:
             "--port",
             "8000",
         ],
+        [
+            str(PYTHON),
+            "-m",
+            "uvicorn",
+            "accounting_agent.api:app",
+            "--app-dir",
+            "apps",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8020",
+        ],
         [node, "node_modules/vite/bin/vite.js", "--config", "apps/web/vite.config.ts"],
     ]
     children: list[subprocess.Popen] = []
     try:
         for command in commands:
             children.append(subprocess.Popen(command, cwd=ROOT, start_new_session=os.name != "nt"))
-        print("\nSandbox: http://127.0.0.1:5173  API: http://127.0.0.1:8000/docs", flush=True)
+        print(
+            "\nSandbox: http://127.0.0.1:5173  World API: http://127.0.0.1:8000/docs "
+            "Accounting API: http://127.0.0.1:8020/docs",
+            flush=True,
+        )
         print("停止: Ctrl+C。Pythonの変更は再起動すると反映されます。", flush=True)
         while all(child.poll() is None for child in children):
             time.sleep(0.25)

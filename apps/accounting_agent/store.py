@@ -201,15 +201,29 @@ class RunStore:
         self._connection.commit()
         return "new"
 
-    def complete_operation(self, action_id: str, run_id: str) -> None:
+    def complete_operation(
+        self, action_id: str, run_id: str, value: dict | None = None, *, ok: bool = True
+    ) -> None:
+        result_json = json.dumps(
+            {"ok": ok, "value": value or {}}, ensure_ascii=False, sort_keys=True
+        )
         self._connection.execute(
-            "UPDATE operation_receipts SET status='completed' WHERE action_id=? AND run_id=?",
-            (action_id, run_id),
+            """UPDATE operation_receipts SET status='completed',result_json=?
+               WHERE action_id=? AND run_id=?""",
+            (result_json, action_id, run_id),
         )
         self._connection.execute(
             "UPDATE runs SET step_version=step_version+1 WHERE run_id=?", (run_id,)
         )
         self._connection.commit()
+
+    def operation_result(self, action_id: str) -> dict:
+        row = self._connection.execute(
+            "SELECT status,result_json FROM operation_receipts WHERE action_id=?", (action_id,)
+        ).fetchone()
+        if row is None or row[0] != "completed" or row[1] is None:
+            raise ValueError("operation_result_unknown")
+        return json.loads(row[1])
 
     def mark_operation_unknown(self, action_id: str, run_id: str) -> None:
         self._connection.execute(

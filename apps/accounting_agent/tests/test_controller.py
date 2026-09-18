@@ -131,6 +131,32 @@ def test_restart_replays_completed_action_without_second_model_call(tmp_path) ->
     assert replay["model_attempts"] == 1
 
 
+def test_answer_receipt_replays_after_question_is_no_longer_pending(tmp_path) -> None:
+    # 回帰: 成功した回答の応答喪失後、pending消失を理由に同じActionを失敗扱いしない。
+    provider = SequenceProvider(
+        [
+            _tool(
+                "ask_operator",
+                {
+                    "question": "どちらを確認しますか",
+                    "reason": "資料だけでは決められない",
+                    "options": ["sales", "hold"],
+                },
+            )
+        ]
+    )
+    controller = AccountingAgentController(
+        AccountingSimulator(), RunStore(tmp_path / "runs.sqlite3"), provider
+    )
+    run_id = controller.start("agent")
+    waiting = controller.advance(run_id, "advance-1", 0)
+    question = waiting["pending_question"]
+    answered = controller.answer(run_id, "answer-1", 1, question["question_id"], "sales")
+    replay = controller.answer(run_id, "answer-1", 1, question["question_id"], "sales")
+    assert replay == answered
+    assert replay["step_version"] == 2
+
+
 def test_codex_command_isolated_from_repository_and_disables_builtin_tools(tmp_path) -> None:
     # 回帰: hidden fixture/評価labelをCodexのfile/shell能力から直読させない。
     command = CodexExecProvider.command(tmp_path, tmp_path / "schema.json", tmp_path / "out.json")

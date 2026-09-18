@@ -164,16 +164,94 @@ def test_mixed_tenant_records_do_not_affect_demo_scope_or_totals(tmp_path) -> No
     foreign_invoice.update(invoice_id="FOREIGN-I", tenant_id="tenant-other")
     foreign_receipt = deepcopy(fixture["snapshot"]["receipts"][0])
     foreign_receipt.update(receipt_id="FOREIGN-R", tenant_id="tenant-other")
+    foreign_adjustment = deepcopy(fixture["snapshot"]["adjustments"][0])
+    foreign_adjustment.update(
+        adjustment_id="FOREIGN-A", tenant_id="tenant-other", status="approved"
+    )
+    foreign_adjustment["source"].update(
+        artifact_id="FOREIGN-DOC", subject_id="FOREIGN-A", value="approved"
+    )
+    foreign_document = deepcopy(fixture["documents"][2])
+    foreign_document.update(document_id="FOREIGN-DOC", tenant_id="tenant-other")
+    foreign_document["spans"]["status"].update(
+        subject_id="FOREIGN-A", value="approved", text="status=approved"
+    )
     fixture["snapshot"]["invoices"].append(foreign_invoice)
     fixture["snapshot"]["receipts"].append(foreign_receipt)
+    fixture["snapshot"]["adjustments"].append(foreign_adjustment)
+    fixture["documents"].append(foreign_document)
+    fixture["aliases"].append(
+        {"tenant_id": "tenant-other", "text": "alpha tr", "counterparty_id": "FOREIGN-C"}
+    )
     path = tmp_path / "mixed.json"
     path.write_text(json.dumps(fixture), encoding="utf-8")
     simulator = AccountingSimulator(path)
     observed = simulator.read_open_receivables("tenant-demo")
     assert [item["invoice_id"] for item in observed["invoices"]] == ["INV-70000"]
     assert [item["receipt_id"] for item in observed["receipts"]] == ["RCPT-50000"]
+    assert simulator.lookup_counterparty("tenant-demo", "alpha tr")["confirmed_ids"] == [
+        "CUST-ALPHA"
+    ]
     report = simulator.validate(_proposal(simulator, "mixed-run"), "mixed-run")
     assert report.planned_balance.minor_units == 20000
+
+
+def test_restored_old_source_version_is_not_reissued_as_current(tmp_path) -> None:
+    # 回帰: 再起動時にDB traceの旧refをcurrent source照合なしで再登録しない。
+    old = AccountingSimulator()
+    observation = old.read_document("tenant-demo", "DOC-MAIL", "restart-run", "call-1")
+    old_ref = old.issued_evidence_ref(observation.evidence_id, "receipt")
+    source = Path(__file__).parents[1] / "fixtures" / "accounting_known.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    mail = next(item for item in fixture["documents"] if item["document_id"] == "DOC-MAIL")
+    mail["version"] = 2
+    path = tmp_path / "updated.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    restarted = AccountingSimulator(path)
+    restarted.restore_evidence("restart-run", [old_ref.model_dump(mode="json")])
+    proposal = _proposal(restarted, "restart-run")
+    proposal.allocations[0].evidence = [old_ref, proposal.allocations[0].evidence[1]]
+    report = restarted.validate(proposal, "restart-run")
+    assert "invalid_evidence" in {issue.code for issue in report.issues}
+
+
+def test_equal_amount_holdout_requires_link_or_stays_unapplied() -> None:
+    # 回帰: 同額候補2件でcoverageが完全でも任意first invoiceへ配分しない。
+    path = Path(__file__).parents[1] / "fixtures" / "accounting_holdout_m8_missing.json"
+    simulator = AccountingSimulator(path)
+    bank = simulator.read_document("tenant-demo", "H-DOC-BANK", "holdout-run", "call-1")
+    invoice = simulator.read_document("tenant-demo", "H-DOC-I1", "holdout-run", "call-2")
+    proposal = ReconciliationProposal(
+        proposal_id="holdout-proposal",
+        version=1,
+        world_id="acct-holdout-02",
+        based_on_revision=11,
+        tenant_id="tenant-demo",
+        receipt_id="RCPT-30000",
+        allocations=[
+            AllocationLine(
+                receipt_id="RCPT-30000",
+                invoice_id="INV-30101",
+                cash_amount=MoneyJPY(minor_units=30000),
+                evidence=[
+                    simulator.issued_evidence_ref(bank.evidence_id, "line-1"),
+                    simulator.issued_evidence_ref(invoice.evidence_id, "balance"),
+                ],
+            )
+        ],
+        unapplied=MoneyJPY(minor_units=0),
+        coverage=CandidateCoverage(
+            eligible_invoice_ids=["INV-30101", "INV-30102"],
+            considered_invoice_ids=["INV-30101", "INV-30102"],
+            status="complete",
+        ),
+    )
+    rejected = simulator.validate(proposal, "holdout-run")
+    assert "invalid_evidence" in {issue.code for issue in rejected.issues}
+    proposal.allocations = []
+    proposal.unapplied = MoneyJPY(minor_units=30000)
+    held = simulator.validate(proposal, "holdout-run")
+    assert held.valid
 
 
 def test_money_rejects_non_jpy_fractional_or_negative_values() -> None:

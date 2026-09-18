@@ -10,6 +10,7 @@ FactType = Literal[
     "counterparty_match",
     "adjustment_status",
     "unresolved_balance",
+    "allocation_link",
 ]
 
 
