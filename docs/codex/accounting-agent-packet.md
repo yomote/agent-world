@@ -31,7 +31,7 @@
 
 ## 検証の区別
 
-backend snapshot `f9113e1` はtargeted 24 tests/ruffを通した後、独立reviewで7観点のblockingを受けた。修正snapshot `ca7cfeb` の限定reviewで残ったreceipt優先、tenant付き正本、current source照合、stateful/holdout束縛を修正した。続くsnapshot `3e6ed4d` ではatomic claim/CASとadjustment根拠の金額束縛を修正した。現在の候補は、typed evidence、receipt/CAS、再起動復元、run上限、同条件baseline、stateful PBT、同時claim、初回/replayの安定した公開failure codeを含むtargeted 39 testsと限定Ruffが通過している。独立再reviewは継続中である。
+backend snapshot `f9113e1` はtargeted 24 tests/ruffを通した後、独立reviewで7観点のblockingを受けた。修正snapshot `ca7cfeb` の限定reviewで残ったreceipt優先、tenant付き正本、current source照合、stateful/holdout束縛を修正した。続くsnapshot `3e6ed4d` ではatomic claim/CASとadjustment根拠の金額束縛を修正した。現在の候補は、typed evidence、receipt/CAS、旧SQLite履歴migration、再起動復元、run上限、同条件baseline、stateful PBT、同時claim、初回/replayの安定した公開failure codeを含むtargeted 40 testsと限定Ruffが通過している。独立再reviewは継続中である。
 
 modelを使わない固定workflowは同じtyped fact、read tool、solver、validatorでknown例とM8欠落例を実行した。known例は50,000円配分・予定残高20,000円・台帳不変、M8は配分0円・未配分30,000円・営業照会・台帳不変となった。これはbaselineの動作確認であり、Agentとの優劣評価ではない。
 

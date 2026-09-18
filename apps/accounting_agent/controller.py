@@ -62,6 +62,11 @@ class AccountingAgentController:
             self._enforce_limits(current)
             context = self._context(run_id)
         except Exception as error:
+            if not (
+                isinstance(error, AccountingDomainError)
+                and str(error).startswith(("run_budget_exhausted", "wall_budget_exhausted"))
+            ):
+                self._set_status(run_id, "domain_failed")
             code = self._complete_failure(action_id, run_id, error)
             raise AccountingDomainError(code) from error
         self._store.record_attempt(run_id)
@@ -232,15 +237,8 @@ class AccountingAgentController:
                 decision_id=decision_id,
             )
             raise AccountingDomainError("proposal_domain_invalid")
-        payload = {
-            "proposal": proposal.model_dump(mode="json"),
-            "validation": report.model_dump(mode="json"),
-        }
-        digest = sha256(
-            json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
-        ).hexdigest()
         package = ReviewPackage(
-            artifact_id=f"package-{digest[:16]}",
+            artifact_id="pending",
             version=1,
             status="ready_for_review",
             run_id=run_id,
@@ -260,6 +258,8 @@ class AccountingAgentController:
                 for item in entry["payload"]["result"]["history"]
             ],
         )
+        digest = self._review_package_digest(package)
+        package = package.model_copy(update={"artifact_id": f"package-{digest[:16]}"})
         self._store.save_artifact(
             package.artifact_id,
             run_id,
@@ -275,6 +275,15 @@ class AccountingAgentController:
             {"artifact_id": package.artifact_id, "digest": digest},
             decision_id=decision_id,
         )
+
+    @staticmethod
+    def _review_package_digest(package: ReviewPackage) -> str:
+        canonical = package.model_dump(mode="json", exclude={"artifact_id"})
+        return sha256(
+            json.dumps(
+                canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
 
     def _context(self, run_id: str) -> dict[str, Any]:
         snapshot = self._simulator.observe()

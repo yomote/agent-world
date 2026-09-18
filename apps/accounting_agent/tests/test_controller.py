@@ -3,7 +3,7 @@ from collections.abc import Iterator
 
 import pytest
 from accounting_agent.controller import AccountingAgentController
-from accounting_agent.models import AgentDecision
+from accounting_agent.models import AgentDecision, ReviewPackage
 from accounting_agent.provider import CodexExecProvider
 from accounting_agent.store import RunStore
 from world.accounting_simulator import AccountingDomainError, AccountingSimulator
@@ -47,6 +47,7 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
             _tool("read_open_receivables", {}),
             _tool("read_document", {"document_id": "DOC-MAIL"}),
             _tool("read_document", {"document_id": "DOC-INVOICE"}),
+            _tool("read_adjustment_history", {"invoice_id": "INV-70000"}),
         ]
     )
     controller = AccountingAgentController(simulator, store, provider)
@@ -54,9 +55,10 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
     controller.advance(run_id, "action-1", 0)
     controller.advance(run_id, "action-2", 1)
     controller.advance(run_id, "action-3", 2)
+    controller.advance(run_id, "action-4", 3)
     trace = [item for item in controller.view(run_id)["trace"] if item["kind"] == "tool"]
-    mail = trace[-2]["payload"]["result"]
-    invoice = trace[-1]["payload"]["result"]
+    mail = trace[1]["payload"]["result"]
+    invoice = trace[2]["payload"]["result"]
     evidence = [
         next(ref for ref in mail["issued_refs"] if ref["span"] == "receipt"),
         next(ref for ref in invoice["issued_refs"] if ref["span"] == "balance"),
@@ -96,10 +98,14 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
             )
         ]
     )
-    view = controller.advance(run_id, "action-4", 3)
+    view = controller.advance(run_id, "action-5", 4)
     assert view["status"] == "ready_for_review"
     assert view["artifact"]["payload"]["actual_ledger_updated"] is False
-    assert view["artifact"]["payload"]["observed_adjustments"] == []
+    package = ReviewPackage.model_validate(view["artifact"]["payload"])
+    assert package.observed_adjustments[0]["status"] == "cancelled"
+    changed = package.model_copy(deep=True)
+    changed.observed_adjustments[0]["status"] = "approved"
+    assert controller._review_package_digest(package) != controller._review_package_digest(changed)
     assert simulator.observe().invoices[0].open_amount.minor_units == 70000
 
 
@@ -200,6 +206,7 @@ def test_unexpected_context_failure_is_normalized_and_replayed(tmp_path) -> None
     for _attempt in range(2):
         with pytest.raises(AccountingDomainError, match="^domain_failed$"):
             controller.advance(run_id, "advance-context-failure", 0)
+        assert controller.view(run_id)["status"] == "domain_failed"
     assert controller.view(run_id)["model_attempts"] == 0
 
 

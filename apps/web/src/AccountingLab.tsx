@@ -176,10 +176,14 @@ export function AccountingLab() {
                     <span>
                       判断 {compared.model_attempts} / tool {compared.tool_calls}
                     </span>
-                    <span>
-                      配分 {yen(comparedPackage?.validation.allocated_cash.minor_units ?? 0)} /
-                      未配分 {yen(comparedPackage?.proposal.unapplied.minor_units ?? 0)}
-                    </span>
+                    {comparedPackage ? (
+                      <span>
+                        配分 {yen(comparedPackage.validation.allocated_cash.minor_units)} / 未配分{" "}
+                        {yen(comparedPackage.proposal.unapplied.minor_units)}
+                      </span>
+                    ) : (
+                      <span>成果物なし</span>
+                    )}
                   </>
                 ) : (
                   <span>未実行</span>
