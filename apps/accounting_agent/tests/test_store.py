@@ -37,3 +37,34 @@ def test_artifact_publication_is_idempotent_only_for_identical_payload(tmp_path)
         assert str(error) == "artifact_id_conflict"
     else:
         raise AssertionError("conflicting artifact ID must be rejected")
+
+
+def test_operation_receipt_replays_exact_request_and_rejects_conflict(tmp_path) -> None:
+    # 回帰: double clickと応答喪失でmodel decisionを二重発行せず、ID使い回しを拒否する。
+    store = RunStore(tmp_path / "runs.sqlite3")
+    store.create_run("run-1", "agent", "known")
+    assert store.claim_operation("run-1", "action-1", "advance", 0, {"run_id": "run-1"}) == "new"
+    store.complete_operation("action-1", "run-1")
+    assert store.claim_operation("run-1", "action-1", "advance", 0, {"run_id": "run-1"}) == "replay"
+    try:
+        store.claim_operation("run-1", "action-1", "advance", 1, {"run_id": "run-1"})
+    except ValueError as error:
+        assert str(error) == "action_id_conflict"
+    else:
+        raise AssertionError("same action ID with a different step must conflict")
+
+
+def test_pending_operation_becomes_terminal_unknown_after_restart(tmp_path) -> None:
+    # 回帰: crash後のpending decisionを新Actionで無差別再送しない。
+    path = tmp_path / "runs.sqlite3"
+    first = RunStore(path)
+    first.create_run("run-1", "agent", "known")
+    assert first.claim_operation("run-1", "action-1", "advance", 0, {"run_id": "run-1"}) == "new"
+    restarted = RunStore(path)
+    try:
+        restarted.claim_operation("run-1", "action-2", "advance", 0, {"run_id": "run-1"})
+    except ValueError as error:
+        assert str(error) == "operation_result_unknown"
+    else:
+        raise AssertionError("pending operation must stop a new decision")
+    assert restarted.get_run("run-1")["status"] == "unknown_terminal"

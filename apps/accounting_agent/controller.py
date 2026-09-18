@@ -32,23 +32,33 @@ class AccountingAgentController:
         self._simulator = simulator
         self._store = store
         self._provider = provider
-        self._traces: dict[str, list[dict[str, Any]]] = {}
-        self._questions: dict[str, Question] = {}
-        self._answers: dict[str, list[dict[str, str]]] = {}
 
     def start(self, mode: str) -> str:
         run_id = f"run-{uuid4()}"
         self._store.create_run(run_id, mode, "known-public-example")
-        self._traces[run_id] = []
-        self._answers[run_id] = []
         return run_id
 
-    def advance(self, run_id: str) -> dict[str, Any]:
+    def advance(self, run_id: str, action_id: str, expected_step_version: int) -> dict[str, Any]:
         current = self._require_run(run_id)
         if current["status"] != "running":
             return current
-        if run_id in self._questions:
+        if self._store.pending_question(run_id):
             return self.view(run_id)
+        self._enforce_limits(current)
+        try:
+            claim = self._store.claim_operation(
+                run_id,
+                action_id,
+                "advance",
+                expected_step_version,
+                {"run_id": run_id},
+            )
+        except ValueError as error:
+            raise AccountingDomainError(str(error)) from error
+        if claim == "replay":
+            return self.view(run_id)
+        if claim == "unknown":
+            raise AccountingDomainError("operation_result_unknown")
         context = self._context(run_id)
         self._store.record_attempt(run_id)
         try:
@@ -61,6 +71,7 @@ class AccountingAgentController:
                 "decision",
                 {"code": type(error).__name__, "detail": str(error)[:200]},
             )
+            self._store.mark_operation_unknown(action_id, run_id)
             raise
         self._store.record_model_result(run_id, True)
         decision_id = f"decision-{uuid4()}"
@@ -75,35 +86,63 @@ class AccountingAgentController:
             },
             decision_id=decision_id,
         )
-        if decision.kind == "tool":
-            self._execute_tool(run_id, decision_id, decision)
-        elif decision.kind == "publish":
-            self._publish(run_id, decision_id, decision)
-        else:
-            self._set_status(run_id, "stopped")
+        try:
+            if decision.kind == "tool":
+                self._store.increment(run_id, "tool_calls")
+                self._execute_tool(run_id, decision_id, decision)
+            elif decision.kind == "publish":
+                self._store.increment(run_id, "proposal_count")
+                self._publish(run_id, decision_id, decision)
+            else:
+                self._set_status(run_id, "stopped")
+        except Exception:
+            self._set_status(run_id, "domain_failed")
+            self._store.complete_operation(action_id, run_id)
+            raise
+        self._store.complete_operation(action_id, run_id)
         return self.view(run_id)
 
-    def answer(self, run_id: str, question_id: str, answer: str) -> dict[str, Any]:
-        question = self._questions.get(run_id)
-        if question is None or question.question_id != question_id:
+    def answer(
+        self,
+        run_id: str,
+        action_id: str,
+        expected_step_version: int,
+        question_id: str,
+        answer: str,
+    ) -> dict[str, Any]:
+        pending = self._store.pending_question(run_id)
+        if pending is None or pending["question_id"] != question_id:
             raise AccountingDomainError("question_not_pending")
+        question = Question.model_validate(pending)
         if answer not in question.options:
             raise AccountingDomainError("answer_not_in_options")
-        self._answers[run_id].append({"question_id": question_id, "answer": answer})
+        try:
+            claim = self._store.claim_operation(
+                run_id,
+                action_id,
+                "answer",
+                expected_step_version,
+                {"question_id": question_id, "answer": answer},
+            )
+        except ValueError as error:
+            raise AccountingDomainError(str(error)) from error
+        if claim == "replay":
+            return self.view(run_id)
+        if claim == "unknown":
+            raise AccountingDomainError("operation_result_unknown")
+        self._store.answer_question(run_id, question_id, answer)
         self._store.append_trace(
             run_id,
             "operator_answer",
             "ask_operator",
             {"question_id": question_id, "answer": answer},
         )
-        del self._questions[run_id]
+        self._store.complete_operation(action_id, run_id)
         return self.view(run_id)
 
     def view(self, run_id: str) -> dict[str, Any]:
         value = self._require_run(run_id)
-        value["pending_question"] = (
-            self._questions[run_id].model_dump(mode="json") if run_id in self._questions else None
-        )
+        value["pending_question"] = self._store.pending_question(run_id)
         return value
 
     def _execute_tool(self, run_id: str, decision_id: str, decision: AgentDecision) -> None:
@@ -141,7 +180,9 @@ class AccountingAgentController:
                 tenant, str(args["receipt_id"]), [str(value) for value in args["invoice_ids"]]
             )
         elif name == "read_adjustment_history":
-            result = self._simulator.read_adjustment_history(tenant, str(args["invoice_id"]))
+            result = self._simulator.read_adjustment_history(
+                tenant, str(args["invoice_id"]), run_id, call_id
+            )
         else:
             question = Question(
                 question_id=f"question-{uuid4()}",
@@ -149,10 +190,11 @@ class AccountingAgentController:
                 reason=str(args["reason"]),
                 options=[str(value) for value in args["options"]],
             )
-            self._questions[run_id] = question
+            self._store.increment(run_id, "question_count")
+            self._store.save_question(
+                run_id, question.question_id, question.model_dump(mode="json")
+            )
             result = question.model_dump(mode="json")
-        public = {"kind": "tool", "name": name, "args": args, "payload": result}
-        self._traces[run_id].append(public)
         self._store.append_trace(
             run_id,
             "tool",
@@ -219,6 +261,18 @@ class AccountingAgentController:
 
     def _context(self, run_id: str) -> dict[str, Any]:
         snapshot = self._simulator.observe()
+        persisted = self._require_run(run_id)
+        trace: list[dict[str, Any]] = []
+        for item in persisted["trace"]:
+            if item["kind"] != "tool":
+                continue
+            payload = item["payload"]
+            result = payload["result"]
+            refs = result.get("issued_refs", []) if isinstance(result, dict) else []
+            self._simulator.restore_evidence(run_id, refs)
+            trace.append(
+                {"kind": "tool", "name": item["name"], "args": payload["args"], "payload": result}
+            )
         return {
             "mission": "資料を調査し、入金消込のレビューpackageを作る。台帳は更新しない。",
             "run_id": run_id,
@@ -230,8 +284,8 @@ class AccountingAgentController:
             },
             "document_manifest": self._simulator.list_documents(snapshot.tenant_id),
             "proposal_schema": ReconciliationProposal.model_json_schema(),
-            "trace": self._traces[run_id],
-            "operator_answers": self._answers[run_id],
+            "trace": trace,
+            "operator_answers": self._store.answered_questions(run_id),
         }
 
     def _require_run(self, run_id: str) -> dict[str, Any]:
@@ -242,3 +296,15 @@ class AccountingAgentController:
 
     def _set_status(self, run_id: str, status: str) -> None:
         self._store.set_status(run_id, status)
+
+    def _enforce_limits(self, run: dict[str, Any]) -> None:
+        limits = {
+            "model_attempts": 11,
+            "tool_calls": 18,
+            "question_count": 2,
+            "proposal_count": 2,
+        }
+        exceeded = next((name for name, limit in limits.items() if run[name] >= limit), None)
+        if exceeded:
+            self._set_status(run["run_id"], "budget_exhausted")
+            raise AccountingDomainError(f"run_budget_exhausted:{exceeded}")

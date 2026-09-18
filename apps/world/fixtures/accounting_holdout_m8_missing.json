@@ -1,0 +1,22 @@
+{
+  "snapshot": {
+    "world_id": "acct-holdout-02",
+    "revision": 11,
+    "tenant_id": "tenant-demo",
+    "as_of": "2026-09-18T10:00:00Z",
+    "invoices": [
+      {"invoice_id":"INV-30101","tenant_id":"tenant-demo","counterparty_id":"CUST-BETA","amount":{"currency":"JPY","minor_units":30000},"open_amount":{"currency":"JPY","minor_units":30000},"issued_on":"2026-09-01"},
+      {"invoice_id":"INV-30102","tenant_id":"tenant-demo","counterparty_id":"CUST-BETA","amount":{"currency":"JPY","minor_units":30000},"open_amount":{"currency":"JPY","minor_units":30000},"issued_on":"2026-09-03"}
+    ],
+    "receipts": [
+      {"receipt_id":"RCPT-30000","tenant_id":"tenant-demo","amount":{"currency":"JPY","minor_units":30000},"booked_on":"2026-09-17","payer_text":"BETA TRANSFER"}
+    ],
+    "adjustments": []
+  },
+  "aliases": {"beta transfer":["CUST-BETA"]},
+  "documents": [
+    {"document_id":"H-DOC-BANK","tenant_id":"tenant-demo","version":1,"kind":"bank_statement","title":"9月17日 銀行明細","body":"RCPT-30000 / BETA TRANSFER / 30,000円","spans":{"line-1":{"text":"RCPT-30000 / BETA TRANSFER / 30,000円","fact_type":"receipt_amount","subject_id":"RCPT-30000","value":"30000"}}},
+    {"document_id":"H-DOC-I1","tenant_id":"tenant-demo","version":1,"kind":"invoice","title":"請求書 9月1日分","body":"Beta社 30,000円。未収30,000円。","spans":{"amount":{"text":"請求額30,000円","fact_type":"invoice_amount","subject_id":"INV-30101","value":"30000"},"balance":{"text":"未収30,000円","fact_type":"invoice_open_amount","subject_id":"INV-30101","value":"30000"}}},
+    {"document_id":"H-DOC-I2","tenant_id":"tenant-demo","version":1,"kind":"invoice","title":"請求書 9月3日分","body":"Beta社 30,000円。未収30,000円。","spans":{"amount":{"text":"請求額30,000円","fact_type":"invoice_amount","subject_id":"INV-30102","value":"30000"},"balance":{"text":"未収30,000円","fact_type":"invoice_open_amount","subject_id":"INV-30102","value":"30000"}}}
+  ]
+}

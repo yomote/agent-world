@@ -3,6 +3,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+FactType = Literal[
+    "receipt_amount",
+    "invoice_amount",
+    "invoice_open_amount",
+    "counterparty_match",
+    "adjustment_status",
+    "unresolved_balance",
+]
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -20,6 +29,19 @@ class SourceSpan(StrictModel):
     observed_at: datetime
 
 
+class EvidenceRef(SourceSpan):
+    fact_type: FactType
+    subject_id: str
+    value: str
+
+
+class DocumentSpan(StrictModel):
+    text: str
+    fact_type: FactType
+    subject_id: str
+    value: str
+
+
 class AccountingDocument(StrictModel):
     document_id: str
     tenant_id: str
@@ -27,7 +49,7 @@ class AccountingDocument(StrictModel):
     kind: Literal["bank_statement", "invoice", "remittance", "email", "adjustment"]
     title: str
     body: str
-    spans: dict[str, str]
+    spans: dict[str, DocumentSpan]
 
 
 class Invoice(StrictModel):
@@ -53,7 +75,7 @@ class Adjustment(StrictModel):
     invoice_id: str
     amount: MoneyJPY
     status: Literal["draft", "approved", "cancelled", "applied"]
-    source: SourceSpan
+    source: EvidenceRef
 
 
 class AccountingSnapshot(StrictModel):
@@ -71,7 +93,7 @@ class AllocationLine(StrictModel):
     invoice_id: str
     cash_amount: MoneyJPY
     adjustment_candidate: MoneyJPY | None = None
-    evidence: list[SourceSpan] = Field(min_length=1)
+    evidence: list[EvidenceRef] = Field(min_length=1)
 
 
 class CandidateCoverage(StrictModel):

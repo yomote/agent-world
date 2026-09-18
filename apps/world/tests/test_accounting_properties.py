@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from accounting_agent.store import RunStore
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
@@ -24,12 +25,14 @@ def test_generated_proposals_preserve_ledger_and_only_valid_totals_pass(
     simulator = AccountingSimulator()
     before = deepcopy(simulator.observe())
     observation = simulator.read_document("tenant-demo", "DOC-MAIL", "pbt-run", "call-1")
-    ref = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    receipt_ref = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    invoice = simulator.read_document("tenant-demo", "DOC-INVOICE", "pbt-run", "call-2")
+    invoice_ref = simulator.issued_evidence_ref(invoice.evidence_id, "balance")
     line = AllocationLine(
         receipt_id="RCPT-50000",
         invoice_id="INV-70000",
         cash_amount=MoneyJPY(minor_units=cash),
-        evidence=[ref],
+        evidence=[receipt_ref, invoice_ref],
     )
     lines = [line, line.model_copy(deep=True)] if duplicate else [line]
     proposal = ReconciliationProposal(
@@ -58,6 +61,11 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
         self.simulator = AccountingSimulator()
         self.initial = deepcopy(self.simulator.observe())
         self.counter = 0
+        self.directory = TemporaryDirectory(prefix="accounting-stateful-")
+        self.store = RunStore(Path(self.directory.name) / "runs.sqlite3")
+        self.store.create_run("stateful-run", "baseline", "generated")
+        self.validated_payload: dict | None = None
+        self.published_payload: dict | None = None
 
     @rule(document_id=st.sampled_from(["DOC-BANK", "DOC-INVOICE", "DOC-MAIL", "DOC-ADJ"]))
     def read(self, document_id: str) -> None:
@@ -72,12 +80,98 @@ class ReadOnlyAccountingMachine(RuleBasedStateMachine):
     def solve(self) -> None:
         self.simulator.find_allocation_candidates("tenant-demo", "RCPT-50000", ["INV-70000"])
 
+    @rule(stale=st.booleans())
+    def propose_validate_and_revalidate(self, stale: bool) -> None:
+        self.counter += 1
+        mail = self.simulator.read_document(
+            "tenant-demo", "DOC-MAIL", "stateful-run", f"mail-{self.counter}"
+        )
+        invoice = self.simulator.read_document(
+            "tenant-demo", "DOC-INVOICE", "stateful-run", f"invoice-{self.counter}"
+        )
+        proposal = ReconciliationProposal(
+            proposal_id=f"stateful-{self.counter}",
+            version=1,
+            world_id="acct-known-01",
+            based_on_revision=6 if stale else 7,
+            tenant_id="tenant-demo",
+            receipt_id="RCPT-50000",
+            allocations=[
+                AllocationLine(
+                    receipt_id="RCPT-50000",
+                    invoice_id="INV-70000",
+                    cash_amount=MoneyJPY(minor_units=50000),
+                    evidence=[
+                        self.simulator.issued_evidence_ref(mail.evidence_id, "receipt"),
+                        self.simulator.issued_evidence_ref(invoice.evidence_id, "balance"),
+                    ],
+                )
+            ],
+            unapplied=MoneyJPY(minor_units=0),
+            coverage=CandidateCoverage(
+                eligible_invoice_ids=["INV-70000"],
+                considered_invoice_ids=["INV-70000"],
+                status="complete",
+            ),
+        )
+        report = self.simulator.validate(proposal, "stateful-run")
+        expected_codes = {"stale_revision"} if stale else set()
+        assert {issue.code for issue in report.issues} == expected_codes
+        if report.valid:
+            self.validated_payload = {
+                "proposal": proposal.model_dump(mode="json"),
+                "report": report.model_dump(mode="json"),
+            }
+
+    @rule()
+    def publish_replay_or_conflict(self) -> None:
+        if self.validated_payload is None:
+            return
+        if self.published_payload is None:
+            self.published_payload = deepcopy(self.validated_payload)
+        self.store.save_artifact(
+            "stateful-package",
+            "stateful-run",
+            1,
+            "review_package",
+            self.published_payload,
+            "digest-1",
+        )
+        self.store.save_artifact(
+            "stateful-package",
+            "stateful-run",
+            1,
+            "review_package",
+            self.published_payload,
+            "digest-1",
+        )
+        try:
+            self.store.save_artifact(
+                "stateful-package",
+                "stateful-run",
+                1,
+                "review_package",
+                {"changed": True},
+                "digest-2",
+            )
+        except ValueError as error:
+            assert str(error) == "artifact_id_conflict"
+        else:
+            raise AssertionError("publication conflict must be rejected")
+
+    def teardown(self) -> None:
+        self.store.close()
+        self.directory.cleanup()
+
     @invariant()
     def ledger_is_immutable(self) -> None:
         assert self.simulator.observe() == self.initial
 
 
 TestReadOnlyAccountingMachine = ReadOnlyAccountingMachine.TestCase
+TestReadOnlyAccountingMachine.settings = settings(
+    max_examples=20, stateful_step_count=12, deadline=None, derandomize=True
+)
 
 
 @given(
@@ -122,7 +216,9 @@ def test_adjustment_scope_and_input_order_properties(
     second_result = simulator.find_allocation_candidates(tenant, "RCPT-50000", ordered)
     assert first == second_result
     observation = simulator.read_document(tenant, "DOC-MAIL", "property-run", "call-1")
-    evidence = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    receipt_evidence = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    invoice_observation = simulator.read_document(tenant, "DOC-INVOICE", "property-run", "call-2")
+    invoice_evidence = simulator.issued_evidence_ref(invoice_observation.evidence_id, "balance")
     proposal = ReconciliationProposal(
         proposal_id="property-adjustment",
         version=1,
@@ -136,7 +232,7 @@ def test_adjustment_scope_and_input_order_properties(
                 invoice_id="INV-70000",
                 cash_amount=MoneyJPY(minor_units=50000),
                 adjustment_candidate=MoneyJPY(minor_units=20000),
-                evidence=[evidence],
+                evidence=[receipt_evidence, invoice_evidence],
             )
         ],
         unapplied=MoneyJPY(minor_units=0),

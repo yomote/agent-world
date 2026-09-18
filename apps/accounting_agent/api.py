@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from world.accounting_simulator import AccountingDomainError, AccountingSimulator
 
 from .controller import AccountingAgentController
-from .models import AnswerRequest, RunView, StartRunRequest
+from .models import AdvanceRequest, AnswerRequest, RunView, StartRunRequest
 from .provider import CodexExecProvider, FixedWorkflowProvider, GlobalCallBudget
 from .store import RunStore
 
@@ -22,7 +22,6 @@ def create_app(database_path: Path | None = None) -> FastAPI:
         "agent": AccountingAgentController(simulator, store, CodexExecProvider(budget)),
         "baseline": AccountingAgentController(simulator, store, FixedWorkflowProvider()),
     }
-    run_modes: dict[str, str] = {}
 
     @app.get("/healthz")
     def health() -> dict:
@@ -32,18 +31,28 @@ def create_app(database_path: Path | None = None) -> FastAPI:
     def start(request: StartRunRequest) -> dict:
         controller = controllers[request.mode]
         run_id = controller.start(request.mode)
-        run_modes[run_id] = request.mode
         return controller.view(run_id)
 
     @app.post("/api/accounting/runs/{run_id}/advance", response_model=RunView)
-    def advance(run_id: str) -> dict:
-        return _invoke(run_id, lambda controller: controller.advance(run_id))
+    def advance(run_id: str, request: AdvanceRequest) -> dict:
+        return _invoke(
+            run_id,
+            lambda controller: controller.advance(
+                run_id, request.action_id, request.expected_step_version
+            ),
+        )
 
     @app.post("/api/accounting/runs/{run_id}/answer", response_model=RunView)
     def answer(run_id: str, request: AnswerRequest) -> dict:
         return _invoke(
             run_id,
-            lambda controller: controller.answer(run_id, request.question_id, request.answer),
+            lambda controller: controller.answer(
+                run_id,
+                request.action_id,
+                request.expected_step_version,
+                request.question_id,
+                request.answer,
+            ),
         )
 
     @app.get("/api/accounting/runs/{run_id}", response_model=RunView)
@@ -56,7 +65,10 @@ def create_app(database_path: Path | None = None) -> FastAPI:
 
     def _invoke(run_id: str, function):
         try:
-            mode = run_modes[run_id]
+            run = store.get_run(run_id)
+            if run is None:
+                raise KeyError(run_id)
+            mode = run["mode"]
             return function(controllers[mode])
         except KeyError as error:
             raise HTTPException(status_code=404, detail="unknown_run") from error

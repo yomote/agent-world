@@ -41,8 +41,15 @@ class StartRunRequest(StrictModel):
 
 
 class AnswerRequest(StrictModel):
+    action_id: str
+    expected_step_version: int = Field(ge=0)
     question_id: str
     answer: str
+
+
+class AdvanceRequest(StrictModel):
+    action_id: str
+    expected_step_version: int = Field(ge=0)
 
 
 class RunView(StrictModel):
@@ -53,6 +60,11 @@ class RunView(StrictModel):
     model_attempts: int
     model_successes: int
     model_failures: int
+    step_version: int
+    tool_calls: int
+    question_count: int
+    proposal_count: int
+    deadline_at: str
     created_at: str
     trace: list[dict]
     artifact: dict | None

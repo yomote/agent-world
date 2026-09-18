@@ -46,14 +46,21 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
         [
             _tool("read_open_receivables", {}),
             _tool("read_document", {"document_id": "DOC-MAIL"}),
+            _tool("read_document", {"document_id": "DOC-INVOICE"}),
         ]
     )
     controller = AccountingAgentController(simulator, store, provider)
     run_id = controller.start("agent")
-    controller.advance(run_id)
-    controller.advance(run_id)
-    observed = controller._traces[run_id][-1]["payload"]
-    evidence = next(ref for ref in observed["issued_refs"] if ref["span"] == "receipt")
+    controller.advance(run_id, "action-1", 0)
+    controller.advance(run_id, "action-2", 1)
+    controller.advance(run_id, "action-3", 2)
+    trace = [item for item in controller.view(run_id)["trace"] if item["kind"] == "tool"]
+    mail = trace[-2]["payload"]["result"]
+    invoice = trace[-1]["payload"]["result"]
+    evidence = [
+        next(ref for ref in mail["issued_refs"] if ref["span"] == "receipt"),
+        next(ref for ref in invoice["issued_refs"] if ref["span"] == "balance"),
+    ]
     proposal = {
         "proposal_id": "proposal-1",
         "version": 1,
@@ -67,7 +74,7 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
                 "invoice_id": "INV-70000",
                 "cash_amount": {"currency": "JPY", "minor_units": 50000},
                 "adjustment_candidate": None,
-                "evidence": [evidence],
+                "evidence": evidence,
             }
         ],
         "unapplied": {"currency": "JPY", "minor_units": 0},
@@ -89,7 +96,7 @@ def test_observation_drives_tool_sequence_and_package_publication(tmp_path) -> N
             )
         ]
     )
-    view = controller.advance(run_id)
+    view = controller.advance(run_id, "action-4", 3)
     assert view["status"] == "ready_for_review"
     assert view["artifact"]["payload"]["actual_ledger_updated"] is False
     assert simulator.observe().invoices[0].open_amount.minor_units == 70000
@@ -101,12 +108,27 @@ def test_provider_failure_counts_attempt_before_call_and_does_not_publish(tmp_pa
     controller = AccountingAgentController(AccountingSimulator(), store, FailingProvider())
     run_id = controller.start("agent")
     with pytest.raises(TimeoutError):
-        controller.advance(run_id)
+        controller.advance(run_id, "action-1", 0)
     view = controller.view(run_id)
     assert view["model_attempts"] == 1
     assert view["model_successes"] == 0
     assert view["model_failures"] == 1
     assert view["artifact"] is None
+    assert view["status"] == "unknown_terminal"
+
+
+def test_restart_replays_completed_action_without_second_model_call(tmp_path) -> None:
+    # 回帰: 応答喪失後に同じadvanceを再送してもdecision callを二重実行しない。
+    path = tmp_path / "runs.sqlite3"
+    first_provider = SequenceProvider([_tool("list_documents", {})])
+    first = AccountingAgentController(AccountingSimulator(), RunStore(path), first_provider)
+    run_id = first.start("agent")
+    initial = first.advance(run_id, "action-1", 0)
+    second_provider = FailingProvider()
+    restarted = AccountingAgentController(AccountingSimulator(), RunStore(path), second_provider)
+    replay = restarted.advance(run_id, "action-1", 0)
+    assert replay["step_version"] == initial["step_version"] == 1
+    assert replay["model_attempts"] == 1
 
 
 def test_codex_command_isolated_from_repository_and_disables_builtin_tools(tmp_path) -> None:
@@ -117,6 +139,7 @@ def test_codex_command_isolated_from_repository_and_disables_builtin_tools(tmp_p
     assert "browser_use" in joined
     assert "computer_use" in joined
     assert "multi_agent" in joined
+    assert 'approval_policy="never"' in command
     assert "shell_environment_policy.inherit=none" in joined
     assert str(tmp_path) in command
     assert "agent-world" not in str(tmp_path)

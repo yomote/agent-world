@@ -8,9 +8,9 @@ from .accounting_models import (
     AccountingDocument,
     AccountingSnapshot,
     AllocationLine,
+    EvidenceRef,
     MoneyJPY,
     ReconciliationProposal,
-    SourceSpan,
     ToolObservation,
     ValidationIssue,
     ValidationReport,
@@ -33,8 +33,11 @@ class AccountingSimulator:
             for item in (AccountingDocument.model_validate(value) for value in raw["documents"])
         }
         self._aliases: dict[str, list[str]] = raw["aliases"]
-        self._issued_evidence: dict[str, tuple[str, SourceSpan]] = {}
-        self._initial_open_total = self._open_total()
+        self._issued_evidence: dict[str, tuple[str, EvidenceRef]] = {}
+        self._initial_open_totals = {
+            tenant: self._open_total(tenant)
+            for tenant in {item.tenant_id for item in self._snapshot.invoices}
+        }
 
     def observe(self) -> AccountingSnapshot:
         return self._snapshot.model_copy(deep=True)
@@ -73,11 +76,15 @@ class AccountingSimulator:
         payload = document.model_dump(mode="json")
         evidence_id = self._evidence_id(run_id, tool_call_id, payload)
         for span in document.spans:
-            ref = SourceSpan(
+            metadata = document.spans[span]
+            ref = EvidenceRef(
                 artifact_id=document.document_id,
                 version=document.version,
                 span=span,
                 observed_at=self._snapshot.as_of,
+                fact_type=metadata.fact_type,
+                subject_id=metadata.subject_id,
+                value=metadata.value,
             )
             self._issued_evidence[f"{evidence_id}:{span}"] = (run_id, ref)
         return ToolObservation(
@@ -95,8 +102,16 @@ class AccountingSimulator:
             "world_id": self._snapshot.world_id,
             "revision": self._snapshot.revision,
             "as_of": self._snapshot.as_of.isoformat(),
-            "invoices": [item.model_dump(mode="json") for item in self._snapshot.invoices],
-            "receipts": [item.model_dump(mode="json") for item in self._snapshot.receipts],
+            "invoices": [
+                item.model_dump(mode="json")
+                for item in self._snapshot.invoices
+                if item.tenant_id == tenant_id
+            ],
+            "receipts": [
+                item.model_dump(mode="json")
+                for item in self._snapshot.receipts
+                if item.tenant_id == tenant_id
+            ],
         }
 
     def lookup_counterparty(self, tenant_id: str, text: str) -> dict[str, Any]:
@@ -108,19 +123,31 @@ class AccountingSimulator:
             "candidates": matches,
         }
 
-    def read_adjustment_history(self, tenant_id: str, invoice_id: str) -> list[dict[str, Any]]:
+    def read_adjustment_history(
+        self, tenant_id: str, invoice_id: str, run_id: str, tool_call_id: str
+    ) -> dict[str, Any]:
         self._require_tenant(tenant_id)
-        return [
+        history = [
             item.model_dump(mode="json")
             for item in self._snapshot.adjustments
             if item.invoice_id == invoice_id and item.tenant_id == tenant_id
         ]
+        evidence_id = self._evidence_id(run_id, tool_call_id, {"history": history})
+        issued_refs = []
+        for item in self._snapshot.adjustments:
+            if item.invoice_id == invoice_id and item.tenant_id == tenant_id:
+                self._issued_evidence[f"{evidence_id}:{item.source.span}"] = (
+                    run_id,
+                    item.source,
+                )
+                issued_refs.append(item.source.model_dump(mode="json"))
+        return {"history": history, "evidence_id": evidence_id, "issued_refs": issued_refs}
 
     def find_allocation_candidates(
         self, tenant_id: str, receipt_id: str, invoice_ids: list[str]
     ) -> dict[str, Any]:
         self._require_tenant(tenant_id)
-        receipt = self._receipt(receipt_id)
+        receipt = self._receipt(tenant_id, receipt_id)
         eligible = sorted(
             item.invoice_id
             for item in self._snapshot.invoices
@@ -130,8 +157,19 @@ class AccountingSimulator:
         unknown = sorted(set(considered) - set(eligible))
         if unknown:
             raise AccountingDomainError(f"unknown_or_ineligible_invoice:{','.join(unknown)}")
-        invoices = {item.invoice_id: item for item in self._snapshot.invoices}
+        invoices = {
+            item.invoice_id: item for item in self._snapshot.invoices if item.tenant_id == tenant_id
+        }
         selected_total = sum(invoices[item].open_amount.minor_units for item in considered)
+        options = [
+            {
+                "invoice_ids": [item],
+                "cash_allocations": {item: receipt.amount.minor_units},
+                "kind": "partial_or_exact_single",
+            }
+            for item in considered
+            if invoices[item].open_amount.minor_units >= receipt.amount.minor_units
+        ]
         return {
             "receipt_id": receipt_id,
             "receipt_amount": receipt.amount.model_dump(),
@@ -140,6 +178,7 @@ class AccountingSimulator:
             "selected_open_total": MoneyJPY(minor_units=selected_total).model_dump(),
             "difference": selected_total - receipt.amount.minor_units,
             "coverage": "complete" if considered == eligible else "incomplete",
+            "allocation_options": options,
         }
 
     def validate(self, proposal: ReconciliationProposal, run_id: str) -> ValidationReport:
@@ -156,13 +195,17 @@ class AccountingSimulator:
                 ValidationIssue(code="scope_violation", detail="tenant scopeが一致しません")
             )
         try:
-            receipt = self._receipt(proposal.receipt_id)
+            receipt = self._receipt(proposal.tenant_id, proposal.receipt_id)
         except AccountingDomainError:
             issues.append(ValidationIssue(code="unknown_reference", detail="receiptが存在しません"))
             receipt_amount = 0
         else:
             receipt_amount = receipt.amount.minor_units
-        invoices = {item.invoice_id: item for item in self._snapshot.invoices}
+        invoices = {
+            item.invoice_id: item
+            for item in self._snapshot.invoices
+            if item.tenant_id == proposal.tenant_id
+        }
         seen: set[tuple[str, str]] = set()
         allocated = 0
         for line in proposal.allocations:
@@ -192,6 +235,24 @@ class AccountingSimulator:
                 )
             allocated += line.cash_amount.minor_units
             self._validate_evidence(line, run_id, issues)
+            facts = {(ref.fact_type, ref.subject_id, ref.value) for ref in line.evidence}
+            receipt_fact = (
+                "receipt_amount",
+                proposal.receipt_id,
+                str(receipt_amount),
+            )
+            invoice_fact = (
+                "invoice_open_amount",
+                line.invoice_id,
+                str(invoice.open_amount.minor_units),
+            )
+            if receipt_fact not in facts or invoice_fact not in facts:
+                issues.append(
+                    ValidationIssue(
+                        code="invalid_evidence",
+                        detail=f"入金額または請求残高の根拠不足: {line.invoice_id}",
+                    )
+                )
             if line.adjustment_candidate and line.adjustment_candidate.minor_units:
                 statuses = {
                     item.status
@@ -207,7 +268,9 @@ class AccountingSimulator:
                         )
                     )
         eligible = sorted(
-            item.invoice_id for item in self._snapshot.invoices if item.open_amount.minor_units > 0
+            item.invoice_id
+            for item in self._snapshot.invoices
+            if item.tenant_id == proposal.tenant_id and item.open_amount.minor_units > 0
         )
         if (
             proposal.coverage.status != "complete"
@@ -228,16 +291,28 @@ class AccountingSimulator:
             receipt_amount=MoneyJPY(minor_units=receipt_amount),
             allocated_cash=MoneyJPY(minor_units=allocated),
             unapplied=proposal.unapplied,
-            planned_balance=MoneyJPY(minor_units=max(0, self._open_total() - allocated)),
-            ledger_balance_unchanged=self._open_total() == self._initial_open_total,
+            planned_balance=MoneyJPY(
+                minor_units=max(0, self._open_total(proposal.tenant_id) - allocated)
+            ),
+            ledger_balance_unchanged=(
+                self._open_total(proposal.tenant_id)
+                == self._initial_open_totals.get(proposal.tenant_id, 0)
+            ),
             issues=issues,
         )
 
-    def issued_evidence_ref(self, evidence_id: str, span: str) -> SourceSpan:
+    def issued_evidence_ref(self, evidence_id: str, span: str) -> EvidenceRef:
         try:
             return self._issued_evidence[f"{evidence_id}:{span}"][1].model_copy(deep=True)
         except KeyError as error:
             raise AccountingDomainError("evidence_not_issued") from error
+
+    def restore_evidence(self, run_id: str, refs: list[dict[str, Any]]) -> None:
+        """Restores only refs persisted in this run's tool receipts after process restart."""
+        for raw in refs:
+            ref = EvidenceRef.model_validate(raw)
+            key = f"restored:{ref.artifact_id}:{ref.version}:{ref.span}"
+            self._issued_evidence[key] = (run_id, ref)
 
     def _validate_evidence(
         self, line: AllocationLine, run_id: str, issues: list[ValidationIssue]
@@ -256,9 +331,9 @@ class AccountingSimulator:
                     )
                 )
 
-    def _receipt(self, receipt_id: str):
+    def _receipt(self, tenant_id: str, receipt_id: str):
         for item in self._snapshot.receipts:
-            if item.receipt_id == receipt_id and item.tenant_id == self._snapshot.tenant_id:
+            if item.receipt_id == receipt_id and item.tenant_id == tenant_id:
                 return item
         raise AccountingDomainError("unknown_receipt")
 
@@ -266,8 +341,12 @@ class AccountingSimulator:
         if tenant_id != self._snapshot.tenant_id:
             raise AccountingDomainError("scope_violation")
 
-    def _open_total(self) -> int:
-        return sum(item.open_amount.minor_units for item in self._snapshot.invoices)
+    def _open_total(self, tenant_id: str) -> int:
+        return sum(
+            item.open_amount.minor_units
+            for item in self._snapshot.invoices
+            if item.tenant_id == tenant_id
+        )
 
     @staticmethod
     def _evidence_id(run_id: str, tool_call_id: str, payload: dict[str, Any]) -> str:

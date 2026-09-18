@@ -1,20 +1,24 @@
+import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 from world.accounting_models import (
     AllocationLine,
     CandidateCoverage,
+    EvidenceRef,
     MoneyJPY,
     ReconciliationProposal,
-    SourceSpan,
 )
 from world.accounting_simulator import AccountingDomainError, AccountingSimulator
 
 
 def _proposal(simulator: AccountingSimulator, run_id: str = "run-1") -> ReconciliationProposal:
     observation = simulator.read_document("tenant-demo", "DOC-MAIL", run_id, "tool-1")
-    ref = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    receipt_ref = simulator.issued_evidence_ref(observation.evidence_id, "receipt")
+    invoice = simulator.read_document("tenant-demo", "DOC-INVOICE", run_id, "tool-2")
+    invoice_ref = simulator.issued_evidence_ref(invoice.evidence_id, "balance")
     return ReconciliationProposal(
         proposal_id="proposal-1",
         version=1,
@@ -27,7 +31,7 @@ def _proposal(simulator: AccountingSimulator, run_id: str = "run-1") -> Reconcil
                 receipt_id="RCPT-50000",
                 invoice_id="INV-70000",
                 cash_amount=MoneyJPY(minor_units=50000),
-                evidence=[ref],
+                evidence=[receipt_ref, invoice_ref],
             )
         ],
         unapplied=MoneyJPY(minor_units=0),
@@ -113,15 +117,63 @@ def test_source_span_must_exist_in_issued_registry() -> None:
     simulator = AccountingSimulator()
     proposal = _proposal(simulator)
     proposal.allocations[0].evidence = [
-        SourceSpan(
+        EvidenceRef(
             artifact_id="DOC-MAIL",
             version=1,
             span="fabricated",
             observed_at=simulator.observe().as_of,
+            fact_type="receipt_amount",
+            subject_id="RCPT-50000",
+            value="50000",
         )
     ]
     report = simulator.validate(proposal, "run-1")
     assert "invalid_evidence" in {issue.code for issue in report.issues}
+
+
+def test_adjustment_history_issues_run_bound_evidence() -> None:
+    # 回帰: authoritative履歴toolが返した取消根拠を捏造扱いせずrunへ束縛する。
+    simulator = AccountingSimulator()
+    result = simulator.read_adjustment_history(
+        "tenant-demo", "INV-70000", "adjustment-run", "call-1"
+    )
+    assert result["history"][0]["status"] == "cancelled"
+    assert result["issued_refs"][0]["artifact_id"] == "DOC-ADJ"
+
+
+def test_unrelated_adjustment_fact_cannot_support_cash_allocation() -> None:
+    # 回帰: 実在する無関係spanを金額根拠として流用するevidence launderingを防ぐ。
+    simulator = AccountingSimulator()
+    adjustment = simulator.read_adjustment_history(
+        "tenant-demo", "INV-70000", "launder-run", "call-1"
+    )
+    proposal = _proposal(simulator, "launder-run")
+    proposal.allocations[0].evidence = [
+        EvidenceRef.model_validate(value) for value in adjustment["issued_refs"]
+    ]
+    report = simulator.validate(proposal, "launder-run")
+    assert not report.valid
+    assert "invalid_evidence" in {issue.code for issue in report.issues}
+
+
+def test_mixed_tenant_records_do_not_affect_demo_scope_or_totals(tmp_path) -> None:
+    # 回帰: 同じsnapshot fileに別tenant行があってもquery/coverage/残高へ混入させない。
+    source = Path(__file__).parents[1] / "fixtures" / "accounting_known.json"
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    foreign_invoice = deepcopy(fixture["snapshot"]["invoices"][0])
+    foreign_invoice.update(invoice_id="FOREIGN-I", tenant_id="tenant-other")
+    foreign_receipt = deepcopy(fixture["snapshot"]["receipts"][0])
+    foreign_receipt.update(receipt_id="FOREIGN-R", tenant_id="tenant-other")
+    fixture["snapshot"]["invoices"].append(foreign_invoice)
+    fixture["snapshot"]["receipts"].append(foreign_receipt)
+    path = tmp_path / "mixed.json"
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    simulator = AccountingSimulator(path)
+    observed = simulator.read_open_receivables("tenant-demo")
+    assert [item["invoice_id"] for item in observed["invoices"]] == ["INV-70000"]
+    assert [item["receipt_id"] for item in observed["receipts"]] == ["RCPT-50000"]
+    report = simulator.validate(_proposal(simulator, "mixed-run"), "mixed-run")
+    assert report.planned_balance.minor_units == 20000
 
 
 def test_money_rejects_non_jpy_fractional_or_negative_values() -> None:

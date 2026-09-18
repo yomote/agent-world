@@ -10,7 +10,13 @@ def test_baseline_api_exposes_server_assigned_mode_and_durable_replay(tmp_path) 
     run_id = started.json()["run_id"]
     latest = started.json()
     for _ in range(10):
-        latest = client.post(f"/api/accounting/runs/{run_id}/advance").json()
+        latest = client.post(
+            f"/api/accounting/runs/{run_id}/advance",
+            json={
+                "action_id": f"action-{latest['step_version']}",
+                "expected_step_version": latest["step_version"],
+            },
+        ).json()
         if latest["status"] == "ready_for_review":
             break
     assert latest["status"] == "ready_for_review"

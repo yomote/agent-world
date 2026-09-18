@@ -78,13 +78,16 @@ class CodexExecProvider:
             completed = subprocess.run(
                 self.command(root, schema_path, output_path),
                 input=self._prompt(context),
-                text=True,
+                encoding="utf-8",
                 capture_output=True,
                 timeout=self._timeout,
                 check=False,
             )
             if completed.returncode != 0 or not output_path.exists():
-                raise RuntimeError(f"model_call_failed:{completed.returncode}")
+                detail = (
+                    completed.stderr.strip().splitlines()[-1] if completed.stderr.strip() else ""
+                )
+                raise RuntimeError(f"model_call_failed:{completed.returncode}:{detail[:240]}")
             decision = AgentDecision.model_validate_json(output_path.read_text(encoding="utf-8"))
             usage: dict = {}
             for line in completed.stdout.splitlines():
@@ -100,8 +103,6 @@ class CodexExecProvider:
     def command(root: Path, schema_path: Path, output_path: Path) -> list[str]:
         return [
             "codex",
-            "-a",
-            "never",
             "exec",
             "--json",
             "--color",
@@ -124,6 +125,8 @@ class CodexExecProvider:
             "image_generation",
             "--disable",
             "multi_agent",
+            "-c",
+            'approval_policy="never"',
             "-c",
             "shell_environment_policy.inherit=none",
             "-C",
@@ -159,18 +162,32 @@ class FixedWorkflowProvider:
     global_remaining = None
 
     def decide(self, context: dict) -> tuple[AgentDecision, dict]:
+        receivables = self._tool_payload(context["trace"], "read_open_receivables")
         sequence = [
             ("list_documents", {}),
             ("read_open_receivables", {}),
-            ("read_document", {"document_id": "DOC-BANK"}),
-            ("read_document", {"document_id": "DOC-INVOICE"}),
-            ("read_document", {"document_id": "DOC-MAIL"}),
-            ("read_adjustment_history", {"invoice_id": "INV-70000"}),
-            (
-                "find_allocation_candidates",
-                {"receipt_id": "RCPT-50000", "invoice_ids": ["INV-70000"]},
-            ),
         ]
+        sequence.extend(
+            ("read_document", {"document_id": item["document_id"]})
+            for item in context["document_manifest"]
+        )
+        if receivables:
+            sequence.extend(
+                ("lookup_counterparty", {"text": item["payer_text"]})
+                for item in receivables["receipts"]
+            )
+            sequence.extend(
+                ("read_adjustment_history", {"invoice_id": item["invoice_id"]})
+                for item in receivables["invoices"]
+            )
+            invoice_ids = sorted(item["invoice_id"] for item in receivables["invoices"])
+            sequence.extend(
+                (
+                    "find_allocation_candidates",
+                    {"receipt_id": item["receipt_id"], "invoice_ids": invoice_ids},
+                )
+                for item in receivables["receipts"]
+            )
         for name, args in sequence:
             if not self._used_call(context["trace"], name, args):
                 return AgentDecision(
@@ -180,12 +197,37 @@ class FixedWorkflowProvider:
                     proposal_json=None,
                     short_public_reason=f"固定workflow: {name}",
                 ), {}
-        mail = next(
-            item["payload"]
+        facts = [
+            ref
             for item in context["trace"]
-            if item["name"] == "read_document" and item["payload"].get("document_id") == "DOC-MAIL"
-        )
-        evidence = next(ref for ref in mail["issued_refs"] if ref["span"] == "receipt")
+            if item["name"] == "read_document"
+            for ref in item["payload"].get("issued_refs", [])
+        ]
+        candidate = self._tool_payload(context["trace"], "find_allocation_candidates")
+        receipt = receivables["receipts"][0]
+        options = candidate["allocation_options"]
+        unique = options[0] if len(options) == 1 else None
+        allocations = []
+        if unique:
+            invoice_id = unique["invoice_ids"][0]
+            evidence = [
+                ref
+                for ref in facts
+                if (ref["fact_type"], ref["subject_id"])
+                in {
+                    ("receipt_amount", receipt["receipt_id"]),
+                    ("invoice_open_amount", invoice_id),
+                }
+            ]
+            allocations.append(
+                {
+                    "receipt_id": receipt["receipt_id"],
+                    "invoice_id": invoice_id,
+                    "cash_amount": receipt["amount"],
+                    "adjustment_candidate": None,
+                    "evidence": evidence,
+                }
+            )
         world = context["world"]
         proposal = {
             "proposal_id": f"proposal-{context['run_id']}",
@@ -193,23 +235,15 @@ class FixedWorkflowProvider:
             "world_id": world["world_id"],
             "based_on_revision": world["revision"],
             "tenant_id": world["tenant_id"],
-            "receipt_id": "RCPT-50000",
-            "allocations": [
-                {
-                    "receipt_id": "RCPT-50000",
-                    "invoice_id": "INV-70000",
-                    "cash_amount": {"currency": "JPY", "minor_units": 50000},
-                    "adjustment_candidate": None,
-                    "evidence": [evidence],
-                }
-            ],
-            "unapplied": {"currency": "JPY", "minor_units": 0},
+            "receipt_id": receipt["receipt_id"],
+            "allocations": allocations,
+            "unapplied": ({"currency": "JPY", "minor_units": 0} if unique else receipt["amount"]),
             "coverage": {
-                "eligible_invoice_ids": ["INV-70000"],
-                "considered_invoice_ids": ["INV-70000"],
-                "status": "complete",
+                "eligible_invoice_ids": candidate["eligible_invoice_ids"],
+                "considered_invoice_ids": candidate["considered_invoice_ids"],
+                "status": candidate["coverage"],
             },
-            "questions": ["残額20,000円の回収予定を営業へ確認"],
+            "questions": (["複数の候補があるため対応する請求を営業へ確認"] if not unique else []),
         }
         return AgentDecision(
             kind="publish",
@@ -222,3 +256,7 @@ class FixedWorkflowProvider:
     @staticmethod
     def _used_call(trace: list[dict], name: str, args: dict) -> bool:
         return any(item["name"] == name and item.get("args") == args for item in trace)
+
+    @staticmethod
+    def _tool_payload(trace: list[dict], name: str) -> dict | None:
+        return next((item["payload"] for item in trace if item["name"] == name), None)
