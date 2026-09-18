@@ -1,0 +1,196 @@
+{
+  "freeze": "accounting-eval-freeze.json",
+  "attempts": {
+    "previous_phase": 18,
+    "final_phase": 18,
+    "final_phase_limit": 22,
+    "cumulative": 36,
+    "cumulative_limit": 40
+  },
+  "monetary_cost": "unknown (not reported by Codex CLI)",
+  "results": [
+    {
+      "label": "agent-known",
+      "run_id": "run-91474875-1058-4e81-89e3-fc131b7c14c7",
+      "fixture_id": "fixture-9d5e33713165",
+      "mode": "agent",
+      "status": "ready_for_review",
+      "decision_attempts": 9,
+      "actual_model_calls": 9,
+      "tool_calls": 8,
+      "tool_sequence": [
+        "list_documents",
+        "read_open_receivables",
+        "lookup_counterparty",
+        "find_allocation_candidates",
+        "read_adjustment_history",
+        "read_document",
+        "read_document",
+        "read_document"
+      ],
+      "latency_seconds": 57.377,
+      "token_usage": {
+        "input_tokens": 112625,
+        "cached_input_tokens": 42880,
+        "output_tokens": 1628,
+        "reasoning_output_tokens": 517
+      },
+      "question": null,
+      "artifact": {
+        "artifact_id": "package-ac574194f664d45e",
+        "digest": "ac574194f664d45ed0cff45c8ff10bb32e79ed87eeb01065696f3b8e80437dc9",
+        "allocated_jpy": 50000,
+        "unapplied_jpy": 0,
+        "planned_balance_jpy": 20000,
+        "ledger_unchanged": true,
+        "observed_adjustments": [
+          {
+            "adjustment_id": "ADJ-20000",
+            "amount": {
+              "currency": "JPY",
+              "minor_units": 20000
+            },
+            "invoice_id": "INV-70000",
+            "source": {
+              "artifact_id": "DOC-ADJ",
+              "fact_type": "adjustment_status",
+              "observed_at": "2026-09-18T09:00:00Z",
+              "span": "status",
+              "subject_id": "ADJ-20000",
+              "value": "cancelled",
+              "version": 2
+            },
+            "status": "cancelled",
+            "tenant_id": "tenant-demo"
+          }
+        ]
+      }
+    },
+    {
+      "label": "agent-m8",
+      "run_id": "run-ba40a317-a511-4120-851e-455b4c34fb57",
+      "fixture_id": "fixture-3dff6a560d89",
+      "mode": "agent",
+      "status": "running",
+      "decision_attempts": 9,
+      "actual_model_calls": 9,
+      "tool_calls": 9,
+      "tool_sequence": [
+        "list_documents",
+        "read_open_receivables",
+        "lookup_counterparty",
+        "search_documents",
+        "read_document",
+        "read_document",
+        "read_document",
+        "find_allocation_candidates",
+        "ask_operator"
+      ],
+      "latency_seconds": 57.156,
+      "token_usage": {
+        "input_tokens": 113254,
+        "cached_input_tokens": 34304,
+        "output_tokens": 1219,
+        "reasoning_output_tokens": 363
+      },
+      "question": {
+        "options": [
+          "請求日の古い順に充当する",
+          "別途指定された充当順位に従う",
+          "方針不明のため全額保留する"
+        ],
+        "question": "入金30,000円に対し同一取引先の同額請求が2件あり、資料に充当先の指定がありません。充当順位の業務方針はありますか。",
+        "question_id": "question-921db602-c87b-4ab8-a385-5e1edb28b566",
+        "reason": "全候補を確認しましたが、INV-30101とINV-30102のどちらも入金額と一致し、資料だけでは選べません。"
+      },
+      "artifact": null
+    },
+    {
+      "label": "baseline-known",
+      "run_id": "run-6bda141d-901e-48a6-9d59-f7da7a4023c3",
+      "fixture_id": "fixture-9d5e33713165",
+      "mode": "baseline",
+      "status": "ready_for_review",
+      "decision_attempts": 10,
+      "actual_model_calls": 0,
+      "tool_calls": 9,
+      "tool_sequence": [
+        "list_documents",
+        "read_open_receivables",
+        "read_document",
+        "read_document",
+        "read_document",
+        "read_document",
+        "lookup_counterparty",
+        "read_adjustment_history",
+        "find_allocation_candidates"
+      ],
+      "latency_seconds": 0.409,
+      "token_usage": null,
+      "question": null,
+      "artifact": {
+        "artifact_id": "package-90b2109d01f12182",
+        "digest": "90b2109d01f12182f6bdfb399d58acb57df2c1d1fa534ada13e333c6e1b11afc",
+        "allocated_jpy": 50000,
+        "unapplied_jpy": 0,
+        "planned_balance_jpy": 20000,
+        "ledger_unchanged": true,
+        "observed_adjustments": [
+          {
+            "adjustment_id": "ADJ-20000",
+            "amount": {
+              "currency": "JPY",
+              "minor_units": 20000
+            },
+            "invoice_id": "INV-70000",
+            "source": {
+              "artifact_id": "DOC-ADJ",
+              "fact_type": "adjustment_status",
+              "observed_at": "2026-09-18T09:00:00Z",
+              "span": "status",
+              "subject_id": "ADJ-20000",
+              "value": "cancelled",
+              "version": 2
+            },
+            "status": "cancelled",
+            "tenant_id": "tenant-demo"
+          }
+        ]
+      }
+    },
+    {
+      "label": "baseline-m8",
+      "run_id": "run-1e2c409d-f5cd-4088-83c7-b38b4172a1d0",
+      "fixture_id": "fixture-3dff6a560d89",
+      "mode": "baseline",
+      "status": "ready_for_review",
+      "decision_attempts": 10,
+      "actual_model_calls": 0,
+      "tool_calls": 9,
+      "tool_sequence": [
+        "list_documents",
+        "read_open_receivables",
+        "read_document",
+        "read_document",
+        "read_document",
+        "lookup_counterparty",
+        "read_adjustment_history",
+        "read_adjustment_history",
+        "find_allocation_candidates"
+      ],
+      "latency_seconds": 0.382,
+      "token_usage": null,
+      "question": null,
+      "artifact": {
+        "artifact_id": "package-21fb5bdd382e9dd8",
+        "digest": "21fb5bdd382e9dd8a3e9bcd0295eb4f3886d6b218274013d30d35fa0746b91dd",
+        "allocated_jpy": 0,
+        "unapplied_jpy": 30000,
+        "planned_balance_jpy": 60000,
+        "ledger_unchanged": true,
+        "observed_adjustments": []
+      }
+    }
+  ],
+  "interpretation": "Agent superiority is not established. M8 Agent branched to a justified question; the fixed workflow produced a conservative package faster and without a human answer."
+}

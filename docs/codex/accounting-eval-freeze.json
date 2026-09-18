@@ -1,0 +1,26 @@
+{
+  "frozen_at": "2026-09-18T16:39:41.948615+00:00",
+  "seed": 8901,
+  "provider": "Codex CLI / ChatGPT login",
+  "model": "CLI default (public ID unreported)",
+  "model_reported_version": "not exposed by the configured CLI event stream",
+  "cli_version": "codex-cli 0.154.0-alpha.6.2",
+  "git_head": "a498ba6cddccd36dfa85db41c2c36a0abd351b13",
+  "files": {
+    "apps/world/fixtures/accounting_known.json": "9d5e337131654958d90f82888cb752de5fe28d947a001d03a08f9669e5140b2f",
+    "apps/world/fixtures/accounting_holdout_m8_missing.json": "3dff6a560d89e94c607e3fe763268baf60d07ba4ca7abd780ea9a42ed6e40ae7",
+    "apps/world/accounting_models.py": "6c4ccc263c525222f65fb14afd22cabaddde334313c916aced785d01969f4be3",
+    "apps/world/accounting_simulator.py": "a6390160dd59cfbec804ddadeced00f7808f15536ba8ce12d2dd7bd8c3bf2dd7",
+    "apps/accounting_agent/provider.py": "884539d25da60cdd05fa73db14c134aeb5a5e9ad7ef3b780671dfd0df2da17cf",
+    "apps/accounting_agent/controller.py": "0d90bf4449623cb914887bd510b30ecf8aee984c304fe858e86bc4c346d0065f",
+    "apps/accounting_agent/models.py": "2ff2c6a025a3f3d89443764fdcc042d73deb1b3d09c27346aa6d7cd74b7ae035",
+    "scripts/evaluate_accounting.py": "b8888e05cc07c797f18ba3aa2f35584d7563b0b006660b0eae7ea2f4fc75f19c"
+  },
+  "evaluator_label_included": false,
+  "sealed_evaluator_digest": "82eca56a69506b9151976be3d59c88f7439fd4f519d207fed8303f53222830b1",
+  "budget": {
+    "previous_attempts": 18,
+    "final_attempt_limit": 22,
+    "cumulative_limit": 40
+  }
+}

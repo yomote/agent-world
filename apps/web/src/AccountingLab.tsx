@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AccountingApiError, accountingApi, type AccountingRun } from "./api/accountingClient";
 
 type PackagePayload = {
@@ -44,6 +44,27 @@ export function AccountingLab() {
   const [error, setError] = useState<string | null>(null);
   const run = runs[selectedMode];
   const result = packageOf(run);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const history = await accountingApi.list();
+        const latest = await Promise.all(
+          (["agent", "baseline"] as const).map(async (mode) => {
+            const summary = history.find((item) => item.mode === mode);
+            return [mode, summary ? await accountingApi.get(summary.run_id) : null] as const;
+          }),
+        );
+        if (active) setRuns(Object.fromEntries(latest) as typeof runs);
+      } catch {
+        // 履歴表示はread-only補助。新規実行やwrite retryへ連鎖させない。
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function remember(mode: "agent" | "baseline", value: AccountingRun) {
     setRuns((current) => ({ ...current, [mode]: value }));

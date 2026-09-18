@@ -24,6 +24,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const accountingApi = {
+  list() {
+    return request<Array<Pick<AccountingRun, "run_id" | "mode">>>("/api/accounting/runs");
+  },
   get(runId: string) {
     return request<AccountingRun>(`/api/accounting/runs/${runId}`);
   },
