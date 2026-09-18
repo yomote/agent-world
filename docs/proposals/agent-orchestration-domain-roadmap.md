@@ -110,19 +110,25 @@ Agentは検索結果を即座にWorldのruleへ変換しない。取得した根
 | 小売       | 商品、店舗在庫、価格、販促、需要、発注           | 需要観測、補充提案、価格・販促承認、店舗実行 | demand evidence、replenishment plan、promotion proposal            | 欠品と過剰在庫のtrade-offを見てtoolを追加選択し、承認前後を比較         |
 | 製造       | BOM、工程、設備能力、仕掛、品質、納期            | 生産計画、設備割当、品質判定、保全実行       | schedule、work order、quality evidence、maintenance approval       | 故障・品質異常を観測し、再計画か人間escalationを選ぶ                    |
 | 金融       | 口座、position、市場data、risk limit、注文状態   | 情報取得、risk評価、取引提案、独立承認、執行 | market evidence、risk assessment、order proposal、execution result | stale dataやlimit超過で実行せず、追加取得・却下・承認待ちへ分岐         |
-| 会計       | 仕訳候補、証憑、勘定、期間、承認状態             | 証憑照合、仕訳提案、例外調査、承認・計上     | evidence bundle、journal proposal、approval、posted entry          | 不足証憑を質問し、根拠付き仕訳を人間が承認してledgerへ確定              |
-| 横断AI SRE | run、tool health、latency、cost、error、eval結果 | 検知、診断、緩和提案、運用承認、改善case化   | incident、RCA evidence、mitigation proposal、eval regression       | 失敗traceから原因候補を調査し、安全な緩和だけ実行、残りを承認へ回す     |
+| 会計       | 入金、請求、送金通知、調整履歴、資料版           | 消込例外調査、候補検算、確認事項整理         | 消込準備明細、未配分一覧、営業確認票、検証report                   | 不足資料を調べ、根拠付きreview packageを作り、World残高を変えない       |
+| 横断AI SRE | run、tool health、latency、cost、error、eval結果 | 検知、診断、証拠収集、確認手順の提案         | incident、RCA evidence、triage handoff、eval regression            | 失敗traceから原因候補と反証を調査し、未確認事項を運用担当へ引き継ぐ     |
 
-金融と会計は別Worldとする。金融はposition・risk・注文執行、会計は証憑・仕訳・期間統制が中心で、identityと承認の分離要件も異なる。
+金融と会計は別Worldとする。金融はposition・risk・注文執行、会計初版は入金・請求・証憑・調整履歴から作るreview packageが中心で、identityと権限の境界も異なる。
 横断AI SREは6つ目の業務Worldではなく運用層である。各domain Worldを直接更新せず、domain toolと同じ認可・承認境界を通して緩和Actionを提案・実行する。
 
 ## 段階的な実装と判定
 
+### 2026-09-18の選定
+
+最初の業務Agentデモは、会計の[入金消込例外の調査とレビューpackage](accounting-cash-application-agent.md)とする。実務上の例外と最小評価可能性に基づく選定であり、市場性やAgent優位は未検証である。[6カテゴリのscreen](../research/domain-usecase-screen.md)に反証条件と一次資料の限界を記録する。
+
+横断AI SREは5業務と別の運用アプリ候補として、read-onlyのインシデント証拠収集・動的トリアージに限定する。会計デモへ埋め込まず、今回の会計着工Issueのscopeにも含めない。#79の共通Lab/runtimeと#80のAI脱出デモは既存ownerの担当を維持する。
+
 1. 物流rule版を決定論的baselineとして保持する。
-2. 同じ物流World API上で、単一Agentが`observe / retrieve / clarify / propose / stop`を選ぶ最小loopを追加する。外部実行はsandbox内だけにする。
-3. 同一Scenarioでrule版、単一Agent版、必要なら責任分離版を比較する。16/16だけでなくtool選択、制約違反、根拠、費用、遅延を評価する。
-4. 価値が確認できた共通契約を#79の共通Lab/run基盤と接続する。担当境界は#79側の計画に従う。
-5. 小売、製造、会計、金融、AI SREへ順次適用し、先に業務制約とevalを定義する。
+2. 会計では、合成資料からreview packageを作る単一Agentと固定workflow+同じ抽出/solverを比較する。最初はWorldへeffectを出さない。
+3. 未知bundleで誤配分、適切な保留、質問、根拠、修正量、費用を測り、Agentが不要という結果も採用する。
+4. 会計Worldへの適用は初版の対象外とし、将来採用する場合も別scopeで判断する。
+5. 価値が確認できた共通契約を#79の共通Lab/run基盤と接続する。担当境界は#79側の計画に従う。
 
 この順序、利用するLLM、framework、永続化方式はProposedであり、製品選定は未決である。
 
