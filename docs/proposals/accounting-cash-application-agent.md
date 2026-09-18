@@ -111,7 +111,7 @@ seed、期待package、評価labelはevaluator専用に置く。Agentのcwd、pr
 
 ## Definition of Done
 
-- 既知bundle1件で実モデルがtool結果を受けて次toolを複数回選び、review_ready packageを作る。
+- 既知bundle1件で実モデルがtool結果を受けて次toolを複数回選び、ready_for_review packageを作る。
 - M8欠落を含む未知bundleで、同額候補を誤配分せず未配分にする。
 - 合算、partial allocation、取消/有効status、質問要否が入力に応じて変わる。
 - 全artifactのsource/version/span、検算、coverage、未確認を別担当が追える。
