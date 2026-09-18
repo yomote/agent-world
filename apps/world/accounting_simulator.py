@@ -304,8 +304,7 @@ class AccountingSimulator:
                         for item in self._snapshot.adjustments
                         if item.invoice_id == line.invoice_id
                         and item.tenant_id == proposal.tenant_id
-                        and item.amount.minor_units
-                        == line.adjustment_candidate.minor_units
+                        and item.amount.minor_units == line.adjustment_candidate.minor_units
                     }
                 }
                 if ("adjustment_status", "approved") not in adjustment_evidence:
