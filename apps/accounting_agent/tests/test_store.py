@@ -1,3 +1,4 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -85,3 +86,23 @@ def test_concurrent_distinct_actions_claim_only_one_model_step(tmp_path) -> None
         outcomes = list(executor.map(claim, ["action-a", "action-b"]))
 
     assert sorted(outcomes) == ["in_progress", "new"]
+
+
+def test_store_migrates_pre_budget_run_history(tmp_path) -> None:
+    # 回帰: 旧ローカル履歴DBを捨てず、追加したstep/budget列を安全に補う。
+    path = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """CREATE TABLE runs (
+             run_id TEXT PRIMARY KEY, mode TEXT NOT NULL, status TEXT NOT NULL,
+             fixture_id TEXT NOT NULL, created_at TEXT NOT NULL,
+             model_attempts INTEGER NOT NULL DEFAULT 0,
+             model_successes INTEGER NOT NULL DEFAULT 0,
+             model_failures INTEGER NOT NULL DEFAULT 0
+           )"""
+    )
+    connection.commit()
+    connection.close()
+    store = RunStore(path)
+    store.create_run("run-new", "baseline", "fixture-new")
+    assert store.get_run("run-new")["step_version"] == 0

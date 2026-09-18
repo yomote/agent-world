@@ -59,13 +59,27 @@ class RunStore:
               ON operation_receipts(run_id) WHERE status='pending';
             """
         )
+        run_columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        run_migrations = {
+            "step_version": "INTEGER NOT NULL DEFAULT 0",
+            "tool_calls": "INTEGER NOT NULL DEFAULT 0",
+            "question_count": "INTEGER NOT NULL DEFAULT 0",
+            "proposal_count": "INTEGER NOT NULL DEFAULT 0",
+            "deadline_at": "TEXT",
+        }
+        for name, declaration in run_migrations.items():
+            if name not in run_columns:
+                self._connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {declaration}")
+        self._connection.execute("UPDATE runs SET deadline_at=created_at WHERE deadline_at IS NULL")
         columns = {
             row[1]
             for row in self._connection.execute("PRAGMA table_info(operation_receipts)").fetchall()
         }
         if "owner_token" not in columns:
             self._connection.execute("ALTER TABLE operation_receipts ADD COLUMN owner_token TEXT")
-            self._connection.commit()
+        self._connection.commit()
 
     def create_run(self, run_id: str, mode: str, fixture_id: str) -> None:
         self._connection.execute(
