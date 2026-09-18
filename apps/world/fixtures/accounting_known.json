@@ -1,0 +1,24 @@
+{
+  "snapshot": {
+    "world_id": "acct-known-01",
+    "revision": 7,
+    "tenant_id": "tenant-demo",
+    "as_of": "2026-09-18T09:00:00Z",
+    "invoices": [
+      {"invoice_id":"INV-70000","tenant_id":"tenant-demo","counterparty_id":"CUST-ALPHA","amount":{"currency":"JPY","minor_units":70000},"open_amount":{"currency":"JPY","minor_units":70000},"issued_on":"2026-08-31"}
+    ],
+    "receipts": [
+      {"receipt_id":"RCPT-50000","tenant_id":"tenant-demo","amount":{"currency":"JPY","minor_units":50000},"booked_on":"2026-09-17","payer_text":"ALPHA TR"}
+    ],
+    "adjustments": [
+      {"adjustment_id":"ADJ-20000","tenant_id":"tenant-demo","invoice_id":"INV-70000","amount":{"currency":"JPY","minor_units":20000},"status":"cancelled","source":{"artifact_id":"DOC-ADJ","version":2,"span":"status","observed_at":"2026-09-18T09:00:00Z"}}
+    ]
+  },
+  "aliases": {"alpha tr":["CUST-ALPHA"]},
+  "documents": [
+    {"document_id":"DOC-BANK","tenant_id":"tenant-demo","version":1,"kind":"bank_statement","title":"9月17日 銀行明細","body":"RCPT-50000 / ALPHA TR / 50,000円","spans":{"line-1":"RCPT-50000 / ALPHA TR / 50,000円"}},
+    {"document_id":"DOC-INVOICE","tenant_id":"tenant-demo","version":1,"kind":"invoice","title":"請求書 INV-70000","body":"Alpha商事 70,000円。未収70,000円。","spans":{"amount":"請求額70,000円","balance":"未収70,000円"}},
+    {"document_id":"DOC-ADJ","tenant_id":"tenant-demo","version":2,"kind":"adjustment","title":"値引き申請 ADJ-20000","body":"20,000円の値引き申請は9月10日に取消済み。","spans":{"amount":"値引き20,000円","status":"9月10日に取消済み"}},
+    {"document_id":"DOC-MAIL","tenant_id":"tenant-demo","version":1,"kind":"email","title":"営業からの入金連絡","body":"Alpha商事から50,000円入金予定。残り20,000円は確認中。","spans":{"receipt":"50,000円入金予定","remainder":"残り20,000円は確認中"}}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "fixture_version": "holdout-1",
+  "seed": 8901,
+  "description": "同額候補を特定するメールが欠落した評価専用bundle",
+  "expected": {
+    "must_leave_unapplied": true,
+    "must_not_allocate_invoice_ids": ["INV-HIDDEN-A", "INV-HIDDEN-B"],
+    "required_outcome": "needs_operator_or_unapplied"
+  }
+}

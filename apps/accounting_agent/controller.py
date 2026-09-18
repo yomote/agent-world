@@ -1,0 +1,244 @@
+import json
+from hashlib import sha256
+from typing import Any
+from uuid import uuid4
+
+from pydantic import ValidationError
+from world.accounting_models import ReconciliationProposal
+from world.accounting_simulator import AccountingDomainError, AccountingSimulator
+
+from .models import AgentDecision, Question, ReviewPackage
+from .provider import DecisionProvider
+from .store import RunStore
+
+ALLOWED_TOOLS = {
+    "list_documents",
+    "search_documents",
+    "read_document",
+    "read_open_receivables",
+    "lookup_counterparty",
+    "find_allocation_candidates",
+    "read_adjustment_history",
+    "ask_operator",
+}
+
+
+class AccountingAgentController:
+    """Runs model decisions; only this host receives read-only domain capabilities."""
+
+    def __init__(
+        self, simulator: AccountingSimulator, store: RunStore, provider: DecisionProvider
+    ) -> None:
+        self._simulator = simulator
+        self._store = store
+        self._provider = provider
+        self._traces: dict[str, list[dict[str, Any]]] = {}
+        self._questions: dict[str, Question] = {}
+        self._answers: dict[str, list[dict[str, str]]] = {}
+
+    def start(self, mode: str) -> str:
+        run_id = f"run-{uuid4()}"
+        self._store.create_run(run_id, mode, "known-public-example")
+        self._traces[run_id] = []
+        self._answers[run_id] = []
+        return run_id
+
+    def advance(self, run_id: str) -> dict[str, Any]:
+        current = self._require_run(run_id)
+        if current["status"] != "running":
+            return current
+        if run_id in self._questions:
+            return self.view(run_id)
+        context = self._context(run_id)
+        self._store.record_attempt(run_id)
+        try:
+            decision, usage = self._provider.decide(context)
+        except Exception as error:
+            self._store.record_model_result(run_id, False)
+            self._store.append_trace(
+                run_id,
+                "model_failure",
+                "decision",
+                {"code": type(error).__name__, "detail": str(error)[:200]},
+            )
+            raise
+        self._store.record_model_result(run_id, True)
+        decision_id = f"decision-{uuid4()}"
+        self._store.append_trace(
+            run_id,
+            "decision",
+            decision.kind,
+            {
+                "short_public_reason": decision.short_public_reason,
+                "next_tool": decision.next_tool,
+                "usage": usage,
+            },
+            decision_id=decision_id,
+        )
+        if decision.kind == "tool":
+            self._execute_tool(run_id, decision_id, decision)
+        elif decision.kind == "publish":
+            self._publish(run_id, decision_id, decision)
+        else:
+            self._set_status(run_id, "stopped")
+        return self.view(run_id)
+
+    def answer(self, run_id: str, question_id: str, answer: str) -> dict[str, Any]:
+        question = self._questions.get(run_id)
+        if question is None or question.question_id != question_id:
+            raise AccountingDomainError("question_not_pending")
+        if answer not in question.options:
+            raise AccountingDomainError("answer_not_in_options")
+        self._answers[run_id].append({"question_id": question_id, "answer": answer})
+        self._store.append_trace(
+            run_id,
+            "operator_answer",
+            "ask_operator",
+            {"question_id": question_id, "answer": answer},
+        )
+        del self._questions[run_id]
+        return self.view(run_id)
+
+    def view(self, run_id: str) -> dict[str, Any]:
+        value = self._require_run(run_id)
+        value["pending_question"] = (
+            self._questions[run_id].model_dump(mode="json") if run_id in self._questions else None
+        )
+        return value
+
+    def _execute_tool(self, run_id: str, decision_id: str, decision: AgentDecision) -> None:
+        name = decision.next_tool
+        if name not in ALLOWED_TOOLS:
+            raise AccountingDomainError("tool_not_allowed")
+        try:
+            args = json.loads(decision.args_json)
+        except json.JSONDecodeError as error:
+            raise AccountingDomainError("invalid_tool_arguments") from error
+        call_id = f"tool-{uuid4()}"
+        tenant = "tenant-demo"
+        if name == "list_documents":
+            result = self._simulator.list_documents(tenant)
+        elif name == "search_documents":
+            result = self._simulator.search_documents(tenant, str(args["query"]))
+        elif name == "read_document":
+            observation = self._simulator.read_document(
+                tenant, str(args["document_id"]), run_id, call_id
+            )
+            result = observation.payload
+            result["evidence_id"] = observation.evidence_id
+            result["issued_refs"] = [
+                self._simulator.issued_evidence_ref(observation.evidence_id, span).model_dump(
+                    mode="json"
+                )
+                for span in result["spans"]
+            ]
+        elif name == "read_open_receivables":
+            result = self._simulator.read_open_receivables(tenant)
+        elif name == "lookup_counterparty":
+            result = self._simulator.lookup_counterparty(tenant, str(args["text"]))
+        elif name == "find_allocation_candidates":
+            result = self._simulator.find_allocation_candidates(
+                tenant, str(args["receipt_id"]), [str(value) for value in args["invoice_ids"]]
+            )
+        elif name == "read_adjustment_history":
+            result = self._simulator.read_adjustment_history(tenant, str(args["invoice_id"]))
+        else:
+            question = Question(
+                question_id=f"question-{uuid4()}",
+                question=str(args["question"]),
+                reason=str(args["reason"]),
+                options=[str(value) for value in args["options"]],
+            )
+            self._questions[run_id] = question
+            result = question.model_dump(mode="json")
+        public = {"kind": "tool", "name": name, "args": args, "payload": result}
+        self._traces[run_id].append(public)
+        self._store.append_trace(
+            run_id,
+            "tool",
+            name,
+            {"args": args, "result": result},
+            decision_id=decision_id,
+            tool_call_id=call_id,
+        )
+
+    def _publish(self, run_id: str, decision_id: str, decision: AgentDecision) -> None:
+        if decision.proposal_json is None:
+            raise AccountingDomainError("proposal_missing")
+        try:
+            proposal = ReconciliationProposal.model_validate_json(decision.proposal_json)
+        except ValidationError as error:
+            raise AccountingDomainError("proposal_schema_invalid") from error
+        report = self._simulator.validate(proposal, run_id)
+        if not report.valid:
+            self._store.append_trace(
+                run_id,
+                "domain_failure",
+                "validate_reconciliation",
+                report.model_dump(mode="json"),
+                decision_id=decision_id,
+            )
+            raise AccountingDomainError("proposal_domain_invalid")
+        payload = {
+            "proposal": proposal.model_dump(mode="json"),
+            "validation": report.model_dump(mode="json"),
+        }
+        digest = sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        ).hexdigest()
+        package = ReviewPackage(
+            artifact_id=f"package-{digest[:16]}",
+            version=1,
+            status="ready_for_review",
+            run_id=run_id,
+            proposal=proposal,
+            validation=report,
+            unresolved=proposal.questions,
+            sales_inquiry=proposal.questions,
+            source_provenance=[
+                ref.model_dump(mode="json")
+                for allocation in proposal.allocations
+                for ref in allocation.evidence
+            ],
+        )
+        self._store.save_artifact(
+            package.artifact_id,
+            run_id,
+            package.version,
+            "review_package",
+            package.model_dump(mode="json"),
+            digest,
+        )
+        self._store.append_trace(
+            run_id,
+            "artifact",
+            "publish_package",
+            {"artifact_id": package.artifact_id, "digest": digest},
+            decision_id=decision_id,
+        )
+
+    def _context(self, run_id: str) -> dict[str, Any]:
+        snapshot = self._simulator.observe()
+        return {
+            "mission": "資料を調査し、入金消込のレビューpackageを作る。台帳は更新しない。",
+            "run_id": run_id,
+            "world": {
+                "world_id": snapshot.world_id,
+                "revision": snapshot.revision,
+                "tenant_id": snapshot.tenant_id,
+                "as_of": snapshot.as_of.isoformat(),
+            },
+            "document_manifest": self._simulator.list_documents(snapshot.tenant_id),
+            "proposal_schema": ReconciliationProposal.model_json_schema(),
+            "trace": self._traces[run_id],
+            "operator_answers": self._answers[run_id],
+        }
+
+    def _require_run(self, run_id: str) -> dict[str, Any]:
+        value = self._store.get_run(run_id)
+        if value is None:
+            raise AccountingDomainError("unknown_run")
+        return value
+
+    def _set_status(self, run_id: str, status: str) -> None:
+        self._store.set_status(run_id, status)
