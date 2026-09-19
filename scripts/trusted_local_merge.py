@@ -192,11 +192,20 @@ class SystemAdapter:
 
     def _run(self, *args: str) -> str:
         try:
-            return subprocess.run(
-                args, check=True, capture_output=True, text=True, env=self._safe_env()
-            ).stdout.strip()
-        except (OSError, subprocess.CalledProcessError) as error:
+            result = subprocess.run(
+                args,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                env=self._safe_env(),
+            )
+        except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as error:
             raise Stop(f"preflight observation is unknown: {args[0]}") from error
+        if not isinstance(result.stdout, str):
+            raise Stop(f"preflight observation is unknown: {args[0]}")
+        return result.stdout.strip()
 
     def _run_bytes(self, *args: str) -> bytes:
         """git objectの内容は末尾改行を含む真正bytesのまま読む。"""
