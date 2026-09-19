@@ -27,6 +27,7 @@
 - すべて揃った時だけexpected SHA付きsquash merge APIを1回呼ぶ。native auto-mergeは条件変化後も有効状態が残る可能性があるため無効のままにする。API結果が不明なら再送せず、同じheadのmerge完了をread-onlyで1回だけ確認する。
 - `GITHUB_TOKEN`によるmerge pushは別workflowを起動しないため、merge成功後にmain CIを`workflow_dispatch`し、`agent-world-merged` repository dispatchへPR番号、PR head、merge commit SHAを渡す。Azure deployはpayloadと現行main/PRを再検証する。どちらかのdispatchが失敗または不明なら再送せず、merge済みであることと各dispatchの`sent` / `failed` / `unknown` / `not_run`を明示して止める。
 - CI待ちは60秒以上の間隔で最大10回とする。権限不足、取得不能、100件を超えて全量を確認できないコメント／thread、書き込み結果不明、head/baseのraceは失敗として止め、書き込みを再送しない。
+- 正式 local entry を将来採用する場合も、review済みmainのwrapper、rootの個別approval packet、remote main SHAとclean detached sourceの完全一致を必須にする。現在この入口は未承認であり、初回bootstrapとして未merge sourceを使うにはreview済みcommit/tree hashとtrusted launcherをrootが明示承認する別例外が必要である。
 
 ## 初回bootstrap
 
@@ -34,4 +35,4 @@
 
 ## トレードオフ
 
-常駐sweepやコメント起点の連鎖がないため、dispatchを開始する主体は必要である。一度開始すればCI待ちからmergeまで有界に完走する。独立性そのものはGitHubアカウントで証明せず、PMが別会話で割り当てたreviewerの報告を統合workerが証跡化する運用と組み合わせる。gateはその証跡の投稿者、書式、current headとの一致を検査する。ruleset詳細の`bypass_actors`はwrite accessがないidentityには返らないため、workflow tokenで空配列を取得できることを初回live実行で確認する。欠落時はmergeせず、より広いtokenへ自動fallbackしない。
+常駐sweepやコメント起点の連鎖がないため、dispatchを開始する主体は必要である。一度開始すればCI待ちからmergeまで有界に完走する。独立性そのものはGitHubアカウントで証明せず、PMが別会話で割り当てたreviewerの報告を統合workerが証跡化する運用と組み合わせる。gateはその証跡の投稿者、書式、current headとの一致を検査する。ruleset詳細の`bypass_actors`はwrite accessがないidentityには返らないため、workflow tokenで空配列を取得できることを初回live実行で確認する。欠落時はmergeせず、より広いtokenへ自動fallbackしない。local entryを採用しても新credentialを足さず、親tokenを除去して指定ownerのstored `gh` authだけを使う。owner authのmerge pushはdeploy workflowを起動し得るため、merge前にremote deploy flag、workflow guard、environment approvalを限定確認し、unknownなら止める。post-merge dispatchはlocal entryから行わない。
