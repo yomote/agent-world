@@ -82,16 +82,30 @@ class StandaloneReviewDelivery:
             receipt = self.github.call("publish_pr_review", arguments)
         except Stop as error:
             state = "initial_unknown" if error.state == "unknown" else error.state
-            self._set_state(pr, head, state)
+            self._transition_if(pr, head, "initial_reserved", state)
             raise
-        self._save_receipt(pr, head, "postcondition_pending", receipt, final=False)
+        self._save_receipt(
+            pr,
+            head,
+            "postcondition_pending",
+            receipt,
+            final=False,
+            expected=("initial_reserved",),
+        )
         return receipt
 
     def reconcile_initial(self, pr, head):
-        row = self._require(pr, head, "initial_unknown")
+        row = self._require_one_of(pr, head, ("initial_reserved", "initial_unknown"))
         review = json.loads(row["initial_json"])
         receipt = self.github.call("reconcile_pr_review", self._arguments(pr, head, review))
-        self._save_receipt(pr, head, "postcondition_pending", receipt, final=False)
+        self._save_receipt(
+            pr,
+            head,
+            "postcondition_pending",
+            receipt,
+            final=False,
+            expected=("initial_reserved", "initial_unknown"),
+        )
         return receipt
 
     def publish_final(self, pr, head, source):
@@ -120,9 +134,10 @@ class StandaloneReviewDelivery:
         ]
         final_json = json.dumps(final_review, ensure_ascii=False, sort_keys=True)
         with self.db:
-            self.db.execute(
+            cursor = self.db.execute(
                 "UPDATE standalone_review_stages SET state='final_reserved',current_json=?,"
-                "final_review_json=?,updated_at=? WHERE pr=? AND head=?",
+                "final_review_json=?,updated_at=? WHERE pr=? AND head=? "
+                "AND state='postcondition_pending'",
                 (
                     json.dumps(updated, ensure_ascii=False, sort_keys=True),
                     final_json,
@@ -131,24 +146,40 @@ class StandaloneReviewDelivery:
                     head,
                 ),
             )
+        if cursor.rowcount != 1:
+            raise Stop("stopped", "standalone_review_stage_conflict")
         try:
             receipt = self.github.call("publish_pr_review", self._arguments(pr, head, final_review))
         except Stop as error:
-            self._set_state(pr, head, "final_unknown" if error.state == "unknown" else error.state)
+            state = "final_unknown" if error.state == "unknown" else error.state
+            self._transition_if(pr, head, "final_reserved", state)
             raise
-        self._save_receipt(pr, head, "complete", receipt, final=True)
+        self._save_receipt(pr, head, "complete", receipt, final=True, expected=("final_reserved",))
         return receipt
 
     def reconcile_final(self, pr, head):
-        row = self._require(pr, head, "final_unknown")
+        row = self._require_one_of(pr, head, ("final_reserved", "final_unknown"))
         review = json.loads(row["final_review_json"])
         receipt = self.github.call("reconcile_pr_review", self._arguments(pr, head, review))
-        self._save_receipt(pr, head, "complete", receipt, final=True)
+        self._save_receipt(
+            pr,
+            head,
+            "complete",
+            receipt,
+            final=True,
+            expected=("final_reserved", "final_unknown"),
+        )
         return receipt
 
     def _require(self, pr, head, state):
         row = self._row(pr, head)
         if row is None or row["state"] != state:
+            raise Stop("stopped", "standalone_review_stage_invalid")
+        return row
+
+    def _require_one_of(self, pr, head, states):
+        row = self._row(pr, head)
+        if row is None or row["state"] not in states:
             raise Stop("stopped", "standalone_review_stage_invalid")
         return row
 
@@ -161,23 +192,27 @@ class StandaloneReviewDelivery:
             "review": review,
         }
 
-    def _set_state(self, pr, head, state):
+    def _transition_if(self, pr, head, expected, state):
         with self.db:
             self.db.execute(
-                "UPDATE standalone_review_stages SET state=?,updated_at=? WHERE pr=? AND head=?",
-                (state, time.time(), pr, head),
+                "UPDATE standalone_review_stages SET state=?,updated_at=? "
+                "WHERE pr=? AND head=? AND state=?",
+                (state, time.time(), pr, head, expected),
             )
 
-    def _save_receipt(self, pr, head, state, receipt, *, final):
+    def _save_receipt(self, pr, head, state, receipt, *, final, expected):
         if receipt.get("head") != head:
             raise Stop("unknown", "standalone_review_receipt_invalid")
         field = "final_receipt_json" if final else "prior_receipt_json"
+        placeholders = ",".join("?" for _ in expected)
         with self.db:
-            self.db.execute(
+            cursor = self.db.execute(
                 f"UPDATE standalone_review_stages SET state=?,{field}=?,updated_at=? "
-                "WHERE pr=? AND head=?",
-                (state, json.dumps(receipt, sort_keys=True), time.time(), pr, head),
+                f"WHERE pr=? AND head=? AND state IN ({placeholders})",
+                (state, json.dumps(receipt, sort_keys=True), time.time(), pr, head, *expected),
             )
+        if cursor.rowcount != 1:
+            raise Stop("unknown", "standalone_review_stage_conflict")
 
 
 def main():

@@ -2,6 +2,7 @@
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -197,3 +198,83 @@ def test_unknown_write_requires_explicit_read_only_reconcile(tmp_path, stage):
         assert result["review_id"] == 2
     assert [call[0] for call in github.calls] == ["publish_pr_review", "reconcile_pr_review"]
     delivery.close()
+
+
+@pytest.mark.parametrize("stage", ["initial", "final"])
+def test_reserved_stage_after_process_loss_is_read_only_reconcilable(tmp_path, stage):
+    """予約保存直後のprocess消失を再POSTせずremote照合だけで回収する。"""
+    source = write(tmp_path / "initial.json", review())
+    if stage == "initial":
+        delivery = StandaloneReviewDelivery(
+            tmp_path,
+            tmp_path / "state.db",
+            github=FakeGitHub([RuntimeError("process lost")]),
+        )
+        with pytest.raises(RuntimeError, match="process lost"):
+            delivery.publish_initial(93, HEAD, source)
+        assert delivery._row(93, HEAD)["state"] == "initial_reserved"
+        delivery.close()
+        recovered = StandaloneReviewDelivery(
+            tmp_path, tmp_path / "state.db", github=FakeGitHub([receipt(1)])
+        )
+        assert recovered.reconcile_initial(93, HEAD)["review_id"] == 1
+    else:
+        seed = StandaloneReviewDelivery(
+            tmp_path, tmp_path / "state.db", github=FakeGitHub([receipt(1)])
+        )
+        prior = seed.publish_initial(93, HEAD, source)
+        seed.close()
+        delivery = StandaloneReviewDelivery(
+            tmp_path,
+            tmp_path / "state.db",
+            github=FakeGitHub([RuntimeError("process lost")]),
+        )
+        packet = write(tmp_path / "final.json", final_packet(review(), prior))
+        with pytest.raises(RuntimeError, match="process lost"):
+            delivery.publish_final(93, HEAD, packet)
+        assert delivery._row(93, HEAD)["state"] == "final_reserved"
+        delivery.close()
+        recovered = StandaloneReviewDelivery(
+            tmp_path, tmp_path / "state.db", github=FakeGitHub([receipt(2)])
+        )
+        assert recovered.reconcile_final(93, HEAD)["review_id"] == 2
+    recovered.close()
+
+
+def test_final_stage_cas_allows_only_one_concurrent_publisher(tmp_path):
+    """同じpending stageの並行2processがfinal COMMENTを二重POSTする回帰を防ぐ。"""
+    source = write(tmp_path / "initial.json", review())
+    seed = StandaloneReviewDelivery(
+        tmp_path, tmp_path / "state.db", github=FakeGitHub([receipt(1)])
+    )
+    prior = seed.publish_initial(93, HEAD, source)
+    seed.close()
+    packet = write(tmp_path / "final.json", final_packet(review(), prior))
+    barrier, results, calls = threading.Barrier(2), [], []
+
+    class RacingDelivery(StandaloneReviewDelivery):
+        def _require(self, pr, head, state):
+            row = super()._require(pr, head, state)
+            barrier.wait(5)
+            return row
+
+    def worker(number):
+        github = FakeGitHub([receipt(number)])
+        delivery = RacingDelivery(tmp_path, tmp_path / "state.db", github=github)
+        try:
+            delivery.publish_final(93, HEAD, packet)
+            results.append("published")
+        except Stop as error:
+            results.append(error.reason)
+        finally:
+            calls.extend(github.calls)
+            delivery.close()
+
+    threads = [threading.Thread(target=worker, args=(number,)) for number in (2, 3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(results) == ["published", "standalone_review_stage_conflict"]
+    assert [call[0] for call in calls] == ["publish_pr_review"]
