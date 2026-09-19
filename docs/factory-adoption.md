@@ -23,7 +23,7 @@
 | 合成ユーザー / UX自律改善    | [#304](https://github.com/yomote/mind-inbox/issues/304)に構想と着手条件                                                                                                                                              | 後続候補。まずSandboxの操作仕様と再現可能なブラウザ検証を確立し、探索と評価・コスト上限を決める                                                       |
 | Azure / deploy / コスト監視  | 環境再構築の宣言・runbookが存在                                                                                                                                                                                      | 配備先が未決定。クラウドを導入する時点でネットワーク、権限、予算、state保管を同じIaC方針で追加                                                        |
 
-2026-09-06に、手作業の単一課題ループを[runbook](runbooks/single-task-loop.md)として採用した。Issueの目的・状態、PRのcurrent headに結び付くreviewと検証証跡、短い振返りを定型化する。その後、条件成立後も人手で止まる不足を補うため[信頼済みmerge gate](adr/0005-trusted-merge-gate.md)を追加した。Mind Inboxの常駐sweep、advisory bot、claim/CAS/WIP、大きなjournalは持ち込まない。
+2026-09-06に、手作業の単一課題ループを[runbook](runbooks/single-task-loop.md)として採用した。Issueの目的・状態、PRのcurrent headに結び付くreviewと検証証跡、短い振返りを定型化する。その後、条件成立後も人手で止まる不足を補うため[信頼済みmerge gateの判断記録](development-operations.md#0005-trusted-sourceからcurrent-headを統合する)を追加した。Mind Inboxの常駐sweep、advisory bot、claim/CAS/WIP、大きなjournalは持ち込まない。
 
 ## 実行する
 

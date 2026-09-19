@@ -2,7 +2,7 @@
 
 明示起動したときだけ、許可済みの根拠データから候補packetを作り、固定したローカル修正を1件実行・検証する。Python 3.11以上の標準ライブラリと既存Gitだけを使う。World、Actor、Web、API生成物、既存wrapperとは独立している。
 
-これはMind Inbox由来の改善ループをagent-worldの境界に縮めた最小実装である。既存Mind Inboxコードを直接コピーしたものではない。採否は以下のscout提供結果に記録する。設計理由は[ADR 0009](../adr/0009-bounded-local-improvement.md)、課題全体のreview・納品は[単一課題の完遂ループ](single-task-loop.md)を参照する。
+これはMind Inbox由来の改善ループをagent-worldの境界に縮めた最小実装である。既存Mind Inboxコードを直接コピーしたものではない。採否は以下のscout提供結果に記録する。背景、構造上の制約、代案は[開発・運用基盤の判断記録](../development-operations.md#0009-bounded-local改善runner)、課題全体のreview・納品は[単一課題の完遂ループ](single-task-loop.md)を参照する。
 
 ## 実jobと通常GitHub統合
 

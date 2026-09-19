@@ -35,14 +35,14 @@ PM分散実行セッションの担当境界を確認した。現時点で未解
 
 ### 取り込み対象
 
-| 範囲        | ファイル・変更内容                                                                                                                                                                                                   |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 工場検査    | `scripts/check_api.mjs`、`scripts/factory.py`、`scripts/check_tools.py`、`scripts/tests/test_factory.py`                                                                                                             |
-| 検査設定    | `.lychee.toml`、`.gitignore` のTerraform生成物除外、`.prettierignore` の `.terraform/` 除外、`pyproject.toml` の `scripts/tests` 追加                                                                                |
-| npm scripts | `package.json` の `api:check`、`factory:check`、`test:factory`、`docs:check`、`iac:check`、`check` のAPI検査追加。依存・バージョン・Volta設定はアプリ担当の変更を保持                                                |
-| GitHub      | `.github/workflows/ci.yml`、`.github/dependabot.yml`、`.github/PULL_REQUEST_TEMPLATE.md`                                                                                                                             |
-| Terraform   | `infra/github/versions.tf`、`variables.tf`、`main.tf`、`imports.tf`、`.terraform.lock.hcl`、`terraform.tfvars.example`、`tests/policy.tftest.hcl`、`README.md`（いずれも `infra/github/` 配下）                      |
-| 文書        | `docs/factory-adoption.md`、`docs/adr/0004-github-settings-as-code.md`、`docs/porting-plan.md` の追加依頼による採否更新、`docs/runbooks/ci.md`、`docs/codex/handoff-factory.md`、`docs/codex/handoff-factory-iac.md` |
+| 範囲        | ファイル・変更内容                                                                                                                                                                                         |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 工場検査    | `scripts/check_api.mjs`、`scripts/factory.py`、`scripts/check_tools.py`、`scripts/tests/test_factory.py`                                                                                                   |
+| 検査設定    | `.lychee.toml`、`.gitignore` のTerraform生成物除外、`.prettierignore` の `.terraform/` 除外、`pyproject.toml` の `scripts/tests` 追加                                                                      |
+| npm scripts | `package.json` の `api:check`、`factory:check`、`test:factory`、`docs:check`、`iac:check`、`check` のAPI検査追加。依存・バージョン・Volta設定はアプリ担当の変更を保持                                      |
+| GitHub      | `.github/workflows/ci.yml`、`.github/dependabot.yml`、`.github/PULL_REQUEST_TEMPLATE.md`                                                                                                                   |
+| Terraform   | `infra/github/versions.tf`、`variables.tf`、`main.tf`、`imports.tf`、`.terraform.lock.hcl`、`terraform.tfvars.example`、`tests/policy.tftest.hcl`、`README.md`（いずれも `infra/github/` 配下）            |
+| 文書        | `docs/factory-adoption.md`、`docs/development-operations.md`、`docs/porting-plan.md` の追加依頼による採否更新、`docs/runbooks/ci.md`、`docs/codex/handoff-factory.md`、`docs/codex/handoff-factory-iac.md` |
 
 `infra/github/.terraform.lock.hcl` はWindows/Linux向けのprovider lockとして取り込む。`artifacts/`、`.terraform/`、state、plan、実設定のtfvarsは取り込まない。アプリ、API生成物、依存lock、PM文書、`AGENTS.md`、`.codex/` など他担当の成果は、この一覧の工場担当範囲とは別に保持する。API検査の生成ヘッダー・整形に関するアプリ担当の修正も保持する。
 

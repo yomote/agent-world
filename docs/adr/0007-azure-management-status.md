@@ -9,7 +9,7 @@
 
 ## 判断
 
-管理専用Resource Group `rg-agent-world-mgmt-jpe`へAzure Container Apps Consumptionを1 app置く。既存FastAPIと静的UIを単一imageでそのまま動かし、0.25 vCPU / 0.5 GiB、min replica 0、max replica 1とする。最新snapshot 1件だけをStandard_LRS Storageの非公開Blobへ保存し、Container Appのuser-assigned managed identityへ対象container scopeのBlob data権限を与える。Storage shared keyとBlob匿名公開は無効にする。
+管理専用Resource GroupへAzure Container Apps Consumptionを1 app置く。既存FastAPIと静的UIを単一imageで動かし、最新snapshot 1件だけを非公開Blobへ保存する。Container Appのmanaged identityは対象container scopeだけに限定し、Storage shared keyと匿名公開は使わない。現在のResource Group名、CPU・memory・replica、Storage SKU、resource設定は[Azure管理status IaC](../../infra/azure-status/README.md)を正本とする。
 
 Container AppsのEasy Authをsingle-tenant Entraへ接続し、`/healthz`以外を認証必須にする。許可principalは本人OIDと専用ingest service principalだけとし、backendでもGET・静的UIは本人OID、PUTはingest OIDへ分ける。Container Appsが渡すprincipal headerは外部requestから設定できないというplatform境界を使う。ingest appには`Status.Ingest` application roleだけを与える。credentialの発行・保管・rotation条件は[Azure管理status 初回公開packet](../runbooks/azure-management-status.md)を正本とする。
 

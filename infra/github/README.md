@@ -15,7 +15,7 @@
 | 配備environment | `azure-production`を管理者bypassなし・custom policyの`main`だけに限定                                                                                   |
 | 更新対象と頻度  | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない                                                 |
 
-CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。[ADR 0005](../../docs/adr/0005-trusted-merge-gate.md)はmerge主体の信頼境界を説明し、markerとmergeの実行条件は[CI運用](../../docs/runbooks/ci.md#merge-gateとformal-local-entryの運用)を正本とする。
+CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。merge主体の信頼境界と代案は[開発・運用基盤の判断記録](../../docs/development-operations.md#0005-trusted-sourceからcurrent-headを統合する)、markerとmergeの実行条件は[CI運用](../../docs/runbooks/ci.md#merge-gateとformal-local-entryの運用)を正本とする。
 
 ## ローカル検証
 

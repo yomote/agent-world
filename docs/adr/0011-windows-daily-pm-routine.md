@@ -1,12 +1,3 @@
-# 0011. Windows Task Schedulerで日次PM棚卸しを起動する
+# 移転記録 0011: 日次PM棚卸し
 
-- Status: Accepted
-- Date: 2026-09-13
-
-## 決定
-
-公開repositoryを読むPM棚卸しcollectorは、worker runtime、Dashboard、CI証跡と分離したread-onlyの観測者として置く。Taskの登録、時刻、読取り予算、reportの状態分類は[日次PM棚卸し](../runbooks/pm-routine.md)を正本とする。
-
-## 境界
-
-worker runtime、Dashboard、CI証跡は未接続であり未観測と明記する。PM判断はreportを読むPMがIssue/PR正本と突合して行う。投稿、label更新、claim、worker dispatch、token保存、常駐daemon、再試行は行わない。
+この旧ADR番号は既存リンクを保つnoticeであり、製品アプリのADRではない。背景、観測者の責務、除外した操作は[開発・運用基盤の判断記録](../development-operations.md#0011-windowsの日次pm棚卸し)へ移転した。Task登録、読取り予算、reportの状態分類は[日次PM棚卸し](../runbooks/pm-routine.md)を正本とする。

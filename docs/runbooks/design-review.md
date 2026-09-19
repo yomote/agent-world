@@ -182,10 +182,9 @@ Front DeskはIssueと設計revisionを含むリンクを届けます。ユーザ
 - 製品内の非同期Action: [ADR 0002](../adr/0002-async-agent-world.md) — Proposed・段階実装前。
 - 共有Action Trace: [ADR 0008](../adr/0008-shared-action-trace.md) — 採用済み・メモリ内80件まで実装済み。
 - Azure管理status: [ADR 0007](../adr/0007-azure-management-status.md) — 製品Actionとは別系統。公開状況は[運用packet](azure-management-status.md)を参照。
-- Codexのbounded local改善: [ADR 0009](../adr/0009-bounded-local-improvement.md) — 開発用の実行系で、製品のAction/jobではない。
 
 ## 開発task側の非同期性
 
 開発ではIssueが目的・DoD・状態、PRが差分・review・検証の正本です。PMがpacketを作り、launcherがtask-primary ownerを明示的に起動または再開します。queueへのmessage保存だけではwake、受信、着工、ユーザー通知を保証しません。bounded local改善runnerにはSQLiteの状態、期限、lease、重複キーがありますが、明示起動制であり常駐schedulerではありません。現在、停止したsessionを常時wakeするserviceや、完了をユーザーへ周期配送してACKを取る仕組みは成立していません。
 
-この不足は製品のADR 0002へ混ぜず、[PMワークフロー](pm-workflow.md)と別Issueで扱います。設計節目ではPMがreview依頼を作り、Front Deskが閲覧用リンクと判断点を届けます。ユーザー回答はIssueへ反映し、決定ならADR、実装結果ならPRへ記録します。現在の管理statusもagent processのリアルタイム表示や自動通知を実現したものではなく、別work itemで接続が必要です。
+この不足は製品のADR 0002へ混ぜず、[PMワークフロー](pm-workflow.md)と別Issueで扱います。設計節目ではPMがreview依頼を作り、Front Deskが閲覧用リンクと判断点を届けます。ユーザー回答はIssueへ反映し、製品・インフラの構造決定ならADR、開発・運用の決定なら該当する専用文書またはrunbook、実装結果ならPRへ記録します。現在の管理statusもagent processのリアルタイム表示や自動通知を実現したものではなく、別work itemで接続が必要です。

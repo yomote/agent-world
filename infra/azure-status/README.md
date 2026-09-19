@@ -20,3 +20,7 @@ docker run --rm -p 127.0.0.1:8020:8000 `
 local Dockerを使えない環境では、mainへreview済み変更をmergeした後、`Management status image` workflowを承認済み40文字headで手動実行する。最初は`publish=false`でbuildとhealth smokeだけを確認し、HITL承認後の1回だけ`publish=true`にする。workflowはimage jobに限定した既存`GITHUB_TOKEN`の`packages:write`だけを使い、新しいPATやAzure resourceを要求しない。push結果が不明なら再dispatchせず、GHCR actualをread-onlyで一度確認する。push後のpackageは公開状態を確認し、匿名pullできなければAzure what-ifへ進まない。
 
 依存するPR #16はmain `910952672fcfef1e2e0626a402e51646b9d5fe1c`へ統合済み。PR #18 merge後のmainは別のSHAとして承認・固定する。`publish=false`ではregistry digestは得られず、`publish=true`は再buildするため、実際にpushしたrunのsmokeとdigestを証跡にする。digest確定用の非公開pushは、対象packageの非公開確認とその操作の承認後だけ行う。digest確定後にpackage public化・Azure公開の承認を得て、匿名pull、what-if、phase別plan/parameter承認、applyへ進む。未確認値、必要な本人入力、初回rollbackは[初回公開packet](../../docs/runbooks/azure-management-status.md)に従う。
+
+## 現在の構成値
+
+`resources.bicep`と`protected-resources.bicep`のContainer Appは0.25 vCPU、0.5 GiB、min replicas 0、max replicas 1を宣言する。snapshotは非公開Blobの`current.json`だけを対象にし、managed identityはそのcontainer scopeに限定する。管理statusをWorld公開から分離し、Blob・identity・Easy Authを組み合わせる理由と代案は[ADR 0007](../../docs/adr/0007-azure-management-status.md)に記録する。

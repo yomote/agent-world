@@ -9,11 +9,11 @@
 
 ## 判断
 
-Reactのbuild成果をFastAPIが配信する単一imageをAzure Container Apps Consumptionへ置く。0.25 vCPU / 0.5 GiB、worker 1、min replicas 0、max replicas 1、active revision 1とする。再起動やscale-to-zero後はWorldが初期化される。
+Reactのbuild成果をFastAPIが配信する単一imageをAzure Container Apps Consumptionへ置く。WorldStateが1プロセスのメモリ内にあるため、同時に複数replicaを動かさず、再起動やscale-to-zero後はWorldが初期化される。現在のCPU・memory・replica・revision設定は[Azure IaC](../../infra/azure/README.md)を正本とする。
 
-Azure Resource Managerの宣言とactualを直接比較でき、共有state backendを増やさないBicepを採用する。coreはResource Group、Container Apps environment/app、Log Analytics、Key Vault、managed identity、Budgetを管理し、`what-if`をdriftの正本にする。Entra app registrationはMicrosoft Graph資源なのでbootstrap scriptで作り、Bicepの`authConfigs`とread-only検査で期待値を固定する。
+Azure Resource Managerの宣言とactualを直接比較でき、共有state backendを増やさないBicepを採用する。Resource Group、Container Apps environment/app、Log Analytics、Key Vault、managed identity、Budgetの関係と、Graph資源をbootstrap scriptで分ける境界を置く。現在のresource設定と検査項目は[Azure IaC](../../infra/azure/README.md)を正本とする。
 
-GitHub Actionsはenvironment subjectのOIDCで専用Resource GroupだけのContributorを使う。imageは公開GHCRのdigestで参照し、ACRの固定費とregistry credentialを持たない。本人限定時はsingle-tenant Entra registration、enterprise app assignment必須、Easy Authの本人object ID allowlistを重ねる。client secretはKey Vaultだけに保存し、GitHubへ渡さない。
+deploy identityは専用Resource Groupだけに限定し、imageはdigestで参照してregistry credentialを持ち回らない。本人限定時はEntraとEasy Authを重ね、client secretはKey Vaultだけに保存する。現在のOIDC、認証、image設定は[Azure IaC](../../infra/azure/README.md)を正本とする。
 
 初回ingress、what-if/apply、Graph伝播の回復、公開後のdrift照合、費用・請求通貨の確認は、[Azure初回bootstrap](../runbooks/azure-bootstrap.md)、[Azure deploy・検証・rollback](../runbooks/azure-deploy.md)、[Azure cost・構成ドリフト](../runbooks/azure-cost-drift.md)を正本とする。
 

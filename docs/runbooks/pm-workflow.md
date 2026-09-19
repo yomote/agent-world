@@ -63,7 +63,7 @@ review: <固定commit、read-only child最大1名、fork_turns=none、再review�
 
 ownerは起動後にpacket、worktree、branch、base、既存ownerと関連PRを確認し、handoffで担当を確認します。activation待ちが指定されている場合は受付と着工を分けます。queue保存の成功だけで受信・合意・実行開始と扱わず、[セッション間の同期](codex-team.md#セッション間の同期)に従います。
 
-Issueは目的・DoD・状態、PRは差分・証跡の正本です。長期状態を会話だけに置かず、再開時はownerがこれらとpacketから復元します。architecture判断はADR、運用判断はrunbookに置きます。
+Issueは目的・DoD・状態、PRは差分・証跡の正本です。長期状態を会話だけに置かず、再開時はownerがこれらとpacketから復元します。製品・インフラのarchitecture判断はADR、開発・運用の判断は専用文書またはrunbookに置きます。
 
 ## task-primary sessionの完遂ループ
 
