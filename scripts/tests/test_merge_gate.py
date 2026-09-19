@@ -157,6 +157,59 @@ def test_ruleset_requires_strict_check_threads_and_no_bypass():
             merge_gate.validate_ruleset([ruleset])
 
 
+def test_ruleset_diagnostic_reports_shape_without_actor_contents():
+    """可視性不足を診断してもbypass actorやruleset本文の値を漏らさない。"""
+
+    ruleset = protected_ruleset()
+    ruleset["bypass_actors"] = [{"actor_id": "sensitive-actor"}]
+    rendered = merge_gate.redacted_ruleset_diagnostic([ruleset], 200)
+    assert "status=200" in rendered
+    assert "bypass_actors=array:1" in rendered
+    assert "keys=[" in rendered
+    assert "sensitive-actor" not in rendered
+    assert "actor_id" not in rendered
+
+
+def test_ruleset_unknown_keeps_merge_blocked_and_adds_redacted_diagnostic():
+    """HTTP 200でもbypass情報が欠ければ許可せず、必要最小の診断だけを残す。"""
+
+    class Client:
+        last_http_status = 200
+
+    ruleset = protected_ruleset()
+    ruleset.pop("bypass_actors")
+    with pytest.raises(merge_gate.GateError, match="status=200.*bypass_actors=missing"):
+        merge_gate.validate_rulesets_with_diagnostic(Client(), [ruleset])
+
+
+def test_ruleset_diagnostic_reads_only_listing_and_detail_shapes():
+    """専用診断はPR・repositoryのeligibilityを読まずruleset形だけを出す。"""
+
+    class Client:
+        repository = "owner/repo"
+        last_http_status = 200
+
+        def __init__(self):
+            self.paths = []
+
+        def get(self, path):
+            self.paths.append(path)
+            if path.endswith("/rulesets?per_page=100"):
+                return [{"id": 123}]
+            return {"id": 123, "bypass_actors": [{"actor_id": "sensitive-actor"}]}
+
+    client = Client()
+    rendered = merge_gate.diagnose_rulesets(client)
+    assert client.paths == [
+        "/repos/owner/repo/rulesets?per_page=100",
+        "/repos/owner/repo/rulesets/123",
+    ]
+    assert "status=200" in rendered
+    assert "bypass_actors=array:1" in rendered
+    assert "sensitive-actor" not in rendered
+    assert "actor_id" not in rendered
+
+
 def test_cli_enforces_bounded_ci_polling():
     """外部APIを短間隔または上限なしでpollする設定を許さない。"""
     args = merge_gate.parse_args(["7", SHA])
@@ -164,18 +217,29 @@ def test_cli_enforces_bounded_ci_polling():
     for argv in (["7", SHA, "--ci-attempts", "11"], ["7", SHA, "--ci-interval", "59"]):
         with pytest.raises(SystemExit):
             merge_gate.parse_args(argv)
+    assert merge_gate.parse_args(["--ruleset-diagnostic"]).ruleset_diagnostic
+    for argv in (["7", SHA, "--ruleset-diagnostic"], ["--ruleset-diagnostic", "--execute"]):
+        with pytest.raises(SystemExit):
+            merge_gate.parse_args(argv)
 
 
-def test_privileged_workflow_has_only_explicit_main_dispatch():
-    """PRコード・コメント・scheduleから特権merge処理が起動する回帰を防ぐ。"""
+def test_merge_is_main_only_and_diagnosis_is_pinned_read_only():
+    """merge入口をmain限定のままにし、診断を固定sourceのread-onlyに保つ。"""
     workflow = (Path(__file__).parents[2] / ".github/workflows/merge-gate.yml").read_text(
         encoding="utf-8"
     )
     assert "workflow_dispatch:" in workflow
-    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "if: github.ref == 'refs/heads/main' && inputs.execute_merge" in workflow
     assert "pull_request:" not in workflow
     assert "issue_comment:" not in workflow
     assert "schedule:" not in workflow
+    merge_section, diagnose_section = workflow.split("  diagnose:", maxsplit=1)
+    assert "--execute --dispatch-after-merge" in merge_section
+    assert "if: inputs.execute_merge == false" in diagnose_section
+    assert '[[ "$GITHUB_SHA" != "$DIAGNOSTIC_SOURCE" ]]' in diagnose_section
+    assert "python scripts/merge_gate.py --ruleset-diagnostic" in diagnose_section
+    assert "--execute" not in diagnose_section
+    assert "contents: write" not in diagnose_section
 
 
 def test_execute_uses_expected_sha_once_and_dispatches_verified_merge(monkeypatch):

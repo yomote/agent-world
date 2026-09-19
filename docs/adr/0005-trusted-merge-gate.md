@@ -9,7 +9,8 @@
 
 ## 決定
 
-- 信頼済み`main`の`workflow_dispatch`だけを入口にする。PR番号、40桁のexpected head、merge実行の真偽を明示入力し、`ref=main`以外ではjobを実行しない。
+- squash mergeの入口は信頼済み`main`の`workflow_dispatch`だけにする。PR番号、40桁のexpected head、merge実行の真偽を明示入力し、`ref=main`以外ではmerge jobを実行しない。
+- `execute_merge=false`のruleset可視性診断だけは、同一repoのレビュー済みbranch/refから手動dispatchできる。`diagnostic_source`の40桁SHAと`GITHUB_SHA`を一致検査し、`--execute`とmerge後dispatchを渡さず、ruleset listing/detailのread-only APIだけを使う。repositoryやPRのmerge eligibilityは診断しない。これはmerge入口ではない。診断を実行できることはbranch自体のreview済みをGitHub上で証明しないため、独立reviewと固定SHAの記録を運用上の前提にする。
 - gateはopenかつReady、base=`main`、同一repo、merge可能、対象外labelなしを検査する。`needs-human`と`release`は対象外とし、merge可否が未知の間も実行しない。
 - 独立Sol reviewは、信頼できる投稿者がPRコメントの先頭へ次の証跡を記録する。40桁headが変われば失効する。
 
@@ -34,4 +35,4 @@
 
 ## トレードオフ
 
-常駐sweepやコメント起点の連鎖がないため、dispatchを開始する主体は必要である。一度開始すればCI待ちからmergeまで有界に完走する。独立性そのものはGitHubアカウントで証明せず、PMが別会話で割り当てたreviewerの報告を統合workerが証跡化する運用と組み合わせる。gateはその証跡の投稿者、書式、current headとの一致を検査する。ruleset詳細の`bypass_actors`はwrite accessがないidentityには返らないため、workflow tokenで空配列を取得できることを初回live実行で確認する。欠落時はmergeせず、より広いtokenへ自動fallbackしない。
+常駐sweepやコメント起点の連鎖がないため、dispatchを開始する主体は必要である。一度開始すればCI待ちからmergeまで有界に完走する。独立性そのものはGitHubアカウントで証明せず、PMが別会話で割り当てたreviewerの報告を統合workerが証跡化する運用と組み合わせる。gateはその証跡の投稿者、書式、current headとの一致を検査する。ruleset詳細の`bypass_actors`はwrite accessがないidentityには返らないため、workflow tokenで空配列を取得できることを初回live実行で確認する。欠落時はmergeせず、より広いtokenへ自動fallbackしない。HTTP 200でもrulesetの形が不足している場合は、HTTP status、本文のkey、`bypass_actors`の有無・配列性・件数だけをredacted診断として残す。actorの内容、token、ruleset本文の値は出力しない。

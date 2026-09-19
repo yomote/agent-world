@@ -331,6 +331,42 @@ def validate_ruleset(rulesets: list[dict[str, Any]]) -> None:
     )
 
 
+def redacted_ruleset_diagnostic(rulesets: list[dict[str, Any]], status: int | None) -> str:
+    """ruleset本文の値やactorを出さず、可視性に必要な形だけを記録する。"""
+
+    details = []
+    for index, ruleset in enumerate(rulesets):
+        if not isinstance(ruleset, dict):
+            details.append(f"{index}:body=non-object")
+            continue
+        keys = ",".join(sorted(key for key in ruleset if isinstance(key, str)))
+        if "bypass_actors" not in ruleset:
+            bypass = "missing"
+        elif isinstance(ruleset["bypass_actors"], list):
+            bypass = f"array:{len(ruleset['bypass_actors'])}"
+        else:
+            bypass = "non-array"
+        details.append(f"{index}:keys=[{keys}] bypass_actors={bypass}")
+    rendered_status = "unknown" if status is None else str(status)
+    return f"ruleset diagnostic status={rendered_status}; {'; '.join(details)}"
+
+
+def validate_rulesets_with_diagnostic(client: GitHubClient, rulesets: list[dict[str, Any]]) -> None:
+    try:
+        validate_ruleset(rulesets)
+    except GateError as error:
+        raise GateError(
+            f"{error}; {redacted_ruleset_diagnostic(rulesets, client.last_http_status)}"
+        ) from error
+
+
+def diagnose_rulesets(client: GitHubClient) -> str:
+    """merge可否の検査を経ずにruleset listing/detailの形だけを観測する。"""
+
+    rulesets = fetch_rulesets(client)
+    return redacted_ruleset_diagnostic(rulesets, client.last_http_status)
+
+
 def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
     matching = [
         run
@@ -426,7 +462,8 @@ def evaluate(client: GitHubClient, target: GateTarget, *, require_ci: bool = Tru
     reviewer = validate_review(comments, target.expected_head)
     if unresolved_threads(client, target.number):
         raise GateError("unresolved review threads remain")
-    validate_ruleset(fetch_rulesets(client))
+    rulesets = fetch_rulesets(client)
+    validate_rulesets_with_diagnostic(client, rulesets)
     if require_ci and not validate_ci(fetch_runs(client, target), target):
         raise GateError("current-head CI is still running")
     return reviewer
@@ -556,15 +593,31 @@ def execute(
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pr_number", type=int)
-    parser.add_argument("expected_head")
+    parser.add_argument("pr_number", type=int, nargs="?")
+    parser.add_argument("expected_head", nargs="?")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--dispatch-after-merge", action="store_true")
     parser.add_argument("--bootstrap-source", action="store_true")
+    parser.add_argument("--ruleset-diagnostic", action="store_true")
     parser.add_argument("--ci-attempts", type=int, default=10)
     parser.add_argument("--ci-interval", type=int, default=60)
     args = parser.parse_args(argv)
-    if args.pr_number < 1 or not FULL_SHA_RE.fullmatch(args.expected_head):
+    if args.ruleset_diagnostic:
+        if (
+            args.pr_number is not None
+            or args.expected_head is not None
+            or args.execute
+            or args.dispatch_after_merge
+            or args.bootstrap_source
+        ):
+            parser.error("ruleset diagnostic cannot be combined with merge gate arguments")
+        return args
+    if (
+        args.pr_number is None
+        or args.expected_head is None
+        or args.pr_number < 1
+        or not FULL_SHA_RE.fullmatch(args.expected_head)
+    ):
         parser.error("positive PR number and lowercase 40-character SHA are required")
     if not 1 <= args.ci_attempts <= 10 or args.ci_interval < 60:
         parser.error("CI budget is at most 10 checks, at intervals of at least 60 seconds")
@@ -581,7 +634,9 @@ def main(argv: list[str] | None = None) -> int:
     client: GitHubClient | None = None
     try:
         client = GitHubClient(repository, token)
-        if args.execute:
+        if args.ruleset_diagnostic:
+            print(diagnose_rulesets(client))
+        elif args.execute:
             if args.bootstrap_source:
                 verify_bootstrap_source(args.expected_head)
             reviewer = execute(
