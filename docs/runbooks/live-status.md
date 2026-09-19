@@ -95,7 +95,9 @@ Azure公開の構成、停止条件、credential境界、rollbackは[Azure管理
 
 依頼選択時、`runtime_connection=connected`かつ現在treeとのmember交差がある依頼だけを現在接続として扱う。`record-only`や`unknown`の過去依頼へ同じagent aliasの最新treeを流用しない。capacityはroot runtime全体の観測であり、依頼別へ合算・再ラベルしない。handoverと復元の手順は[Front Desk依頼registry運用](request-registry.md)に従う。
 
-画面上部の「PM管理タスク」は既存status snapshot内のread-only boardである。Issueの目的・ACとPRの差分・証跡を正本とし、有効なFront Desk claimがある依頼はrequest registryから表示する。registryは既存schemaにあるowner、task lifecycle、現在step、次手、blocker、誰待ち、復帰条件を表示し、未導入のclosureやPO状態を「対象外」と推測しない。各requestの`report_updated_at`が120秒を超えればstale、未来または解釈不能ならunknownと表示し、snapshot全体の受信時刻でfreshへ上書きしない。owner、次手、復帰条件の欠落は「未報告」または`unresolved`として残す。
+初期画面は既存status snapshotから「いま進めていること」「止まっていること」「あなたの確認が必要」「最近できたこと」を各3件以内で表示する。人向け名称と一文状況だけを出し、worker識別子、source version、digest、receipt、全証跡、runtime treeは初期表示しない。PO確認は`waiting_on=po`の明示があるtaskだけに限定し、進行中・停止中・完了へ重複させない。sourceの状態から依存関係や完了を推測しない。既存の管理情報は一段の「詳しい管理情報を見る」に保持する。
+
+詳細内の「PM管理タスク」は既存status snapshot内のread-only boardである。Issueの目的・ACとPRの差分・証跡を正本とし、有効なFront Desk claimがある依頼はrequest registryから表示する。registryは既存schemaにあるowner、task lifecycle、現在step、次手、blocker、誰待ち、復帰条件を表示し、未導入のclosureやPO状態を「対象外」と推測しない。各requestの`report_updated_at`が120秒を超えればstale、未来または解釈不能ならunknownと表示し、snapshot全体の受信時刻でfreshへ上書きしない。owner、次手、復帰条件の欠落は「未報告」または`unresolved`として残す。
 
 有効なFront Desk claimがないPM確認taskは、同じstatus snapshotの`pm_task_projection`へ`source_kind=pm-observation`、正本参照、source version、観測時刻付きで保存する。これは再生成可能なread-only cacheであり、request registry、root claim、handoffへ昇格しない。各rowのcanonical JSONから`content_digest`を生成・照合し、同じtyped projectionからIssue comment用Markdownも生成する。source commentとcacheを別々に手編集しない。画面はPM観測とFront Desk依頼registryを別見出しで表示し、「PM snapshot受領時・GitHub live同期ではない」と明示する。隔離保存先へ投影して開く例は次の通りである。
 
@@ -122,8 +124,8 @@ python scripts/python_env.py scripts/publish_status_snapshot.py `
   --state artifacts/status/pm-task-board-publish-state.json
 ```
 
-ブラウザでは同じURLを再読込し、owner、状態、現在step、次手、blocker、誰待ち、source version、観測の鮮度、Issue/PR、PO確認を確認する。停止はserver processで`Ctrl+C`を実行する。既存`artifacts/status/current.json`やactive registryを上書きしない。
+ブラウザでは同じURLを再読込し、初期要約の進行中、停止理由と次手、PO確認、直近完了を確認する。source version、観測時刻、Issue/PR、owner、証跡は「詳しい管理情報を見る」で確認する。停止はserver processで`Ctrl+C`を実行する。既存`artifacts/status/current.json`やactive registryを上書きしない。
 
 request lifecycleの`review-wait`はworkerのturn終了後にPM内部受入を待つ状態、`stopped`は中止であり目的達成ではない。agent runtimeの`idle`や`task_complete`をrequestの`completed`へ変換しない。PO確認対象でaccepted receiptがなければ「PO確認待ち」と表示する。PO outboxの`ready` / `notified` / `notification_unknown`は別storeが正本であり、このGET sourceへ接続していない間は配送状態をunknownと表示し、POへ通知済みとは推測しない。
 
-ローカルbackendを停止すれば画面は読めず、この構成だけで24時間可用性を保証しない。Azureの実FQDNは未公開である。ブラウザは同一originの保存snapshotだけを読み、renderごとにGitHub APIへ接続しない。
+ローカルbackendを停止すればローカル画面は読めない。Azure版も保存済みsnapshotを表示し、PC停止中に自動更新する汎用PM loopは持たない。ブラウザは同一originの保存snapshotだけを読み、renderごとにGitHub APIへ接続しない。

@@ -516,6 +516,57 @@ export function pmTaskBoardStatus(task, now = Date.now()) {
   };
 }
 
+function shortSentence(value, fallback, limit = 120) {
+  const normalized = String(value || fallback)
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+export function pmBriefing(projection) {
+  const tasks = Array.isArray(projection?.tasks) ? projection.tasks : [];
+  const newest = (rows) =>
+    [...rows]
+      .sort((left, right) => Date.parse(right.observed_at) - Date.parse(left.observed_at))
+      .slice(0, 3);
+  const present = (task, detail, link = null) => ({
+    title: shortSentence(task.title, "名称未取得", 48),
+    detail: shortSentence(detail, "状況未報告"),
+    url: link,
+  });
+  const po = newest(tasks.filter((task) => task.waiting_on === "po")).map((task) =>
+    present(task, task.next_action || task.current_step, task.pr_url || task.issue_url),
+  );
+  const poIds = new Set(
+    tasks.filter((task) => task.waiting_on === "po").map((task) => task.task_id),
+  );
+  const active = newest(
+    tasks.filter((task) => task.state === "running" && !poIds.has(task.task_id)),
+  ).map((task) => present(task, task.current_step || task.next_action));
+  const blockedTasks = [...tasks]
+    .filter(
+      (task) =>
+        !poIds.has(task.task_id) && ["blocked", "review-wait", "stopped"].includes(task.state),
+    )
+    .sort((left, right) => Date.parse(right.observed_at) - Date.parse(left.observed_at));
+  const blocked = blockedTasks.slice(0, blockedTasks.length > 2 ? 2 : 3).map((task) => {
+    const reason = task.blocker || task.waiting_detail || "停止理由は未報告";
+    const next = task.next_action ? ` 次: ${task.next_action}` : "";
+    return present(task, `${reason}${next}`);
+  });
+  if (blockedTasks.length > 2) {
+    blocked.push({
+      title: `ほか${blockedTasks.length - 2}件の保留を見る`,
+      detail: "詳細な状態と再開条件は正本で確認できます",
+      url: projection.source_refs?.[0] || blockedTasks[0].issue_url,
+    });
+  }
+  const done = newest(
+    tasks.filter((task) => task.state === "completed" && !poIds.has(task.task_id)),
+  ).map((task) => present(task, "この作業は完了しました", task.pr_url || task.issue_url));
+  return { active, blocked, po, done };
+}
+
 export function requestFocusDescription(request) {
   return {
     purpose: request.public_purpose,
@@ -735,10 +786,36 @@ function renderPmTaskProjection(projection) {
   }
 }
 
+function renderBriefing(projection) {
+  const briefing = pmBriefing(projection);
+  for (const [kind, rows] of Object.entries(briefing)) {
+    const list = document.querySelector(`#briefing-${kind}`);
+    list.replaceChildren();
+    if (!rows.length) {
+      const item = text("li", "ありません", "briefing-empty");
+      list.append(item);
+      continue;
+    }
+    for (const row of rows) {
+      const item = document.createElement("li");
+      const title = row.url ? optionalLink(row.title, row.url) : text("strong", row.title);
+      if (typeof title === "string") item.append(text("strong", title));
+      else item.append(title);
+      item.append(text("span", row.detail));
+      list.append(item);
+    }
+  }
+  const observedAt = projection?.observed_at;
+  document.querySelector("#summary-updated").textContent = observedAt
+    ? `更新 ${elapsed(observedAt)}`
+    : "更新時刻 未取得";
+}
+
 function renderRequestRegistry(snapshot) {
   const section = document.querySelector("#request-registry");
   const registry = snapshot.request_registry;
   const projection = snapshot.pm_task_projection;
+  renderBriefing(projection);
   if (!registry && !projection) {
     section.hidden = true;
     selectedRequestId = null;
