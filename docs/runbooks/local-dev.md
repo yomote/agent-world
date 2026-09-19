@@ -4,7 +4,7 @@
 
 Node.js 22.13以上・npm・Python 3.11以上をPATHに用意し、リポジトリ直下で `python scripts/dev.py`。
 初回と依存ファイル変更時のみインストールする。認証情報は不要。
-Windows/macOS/Linux用のvenvパスを自動選択する。UIは [5173](http://127.0.0.1:5173)、APIは [8000](http://127.0.0.1:8000/docs)。
+Windows/macOS/Linux用のvenvパスを自動選択する。UIは [5173](http://127.0.0.1:5173)、World APIは [8000](http://127.0.0.1:8000/docs)、Agent APIは [8011](http://127.0.0.1:8011/docs)。
 
 Ctrl+Cで両サーバーを終了。片方の異常終了時ももう片方を終了し、失敗を報告する。
 フロントはHMR、Pythonの変更は再起動で反映する。
@@ -13,6 +13,7 @@ Ctrl+Cで両サーバーを終了。片方の異常終了時ももう片方を�
 
 ```sh
 npm run dev:world
+npm run dev:agent
 npm run dev:web
 ```
 
@@ -44,11 +45,14 @@ venvを手動作成するなら `python -m venv .venv`、その環境で `python
 
 ## 動作確認
 
-1. 右ボタンでAが1マス移動し、Traceに同じActionのsuccessと位置変化が出る。
-2. 右端でさらに右ボタンを押すとfailureになり、確定位置とrevisionが変わらない。
-3. randomを開始し、Traceが増えてWorldが追従する。停止後、新しいActionが出ない。
-4. APIを止めた場合、未接続/結果不明の表示が出て成功には見えない。
-5. API再起動後は新world_id・初期位置・revision 0を採用する。
+1. Incident Recoveryを開き、障害番号1を初期化する。実モデル未接続時は成功表示にならない。
+2. Agent判断loopでmodel選択とtool/evidenceが交互に増え、proposal前には実行承認が表示される。
+3. 承認後、未完了0、重複0、canaryを含むartifactを確認する。別の故障ではtoolまたは差分が変わる。
+4. 右ボタンでAが1マス移動し、Traceに同じActionのsuccessと位置変化が出る。
+5. 右端でさらに右ボタンを押すとfailureになり、確定位置とrevisionが変わらない。
+6. randomを開始し、Traceが増えてWorldが追従する。停止後、新しいActionが出ない。
+7. APIを止めた場合、未接続/結果不明の表示が出て成功には見えない。
+8. API再起動後は新world_id・初期位置・revision 0を採用する。
 
 ## トラブルシュート
 

@@ -352,6 +352,254 @@ code {
   padding: 5px 12px;
   margin-left: 12px;
 }
+.lab-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.lab-nav button {
+  padding: 8px 14px;
+  color: #98aec8;
+}
+.lab-nav button[aria-pressed="true"] {
+  border-color: #58dfc2;
+  color: #79e8ce;
+  background: #133b3b;
+}
+.incident-lab {
+  display: grid;
+  gap: 18px;
+}
+.incident-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border: 1px solid #2a3d56;
+  border-radius: 12px;
+  background: linear-gradient(125deg, #10243a, #111b2b 65%);
+}
+.incident-hero h2 {
+  font-size: 1.45rem;
+}
+.incident-mission {
+  max-width: 720px;
+  margin-top: 12px;
+  color: #b5c5d8;
+  line-height: 1.7;
+}
+.mode-badge {
+  min-width: 154px;
+  padding: 9px 12px;
+  border: 1px solid #58dfc266;
+  border-radius: 8px;
+  color: #79e8ce;
+  font-family: monospace;
+  text-align: center;
+  background: #58dfc20d;
+}
+.mode-badge.baseline {
+  color: #ffcd92;
+  border-color: #a37544;
+  background: #4d342333;
+}
+.mode-badge small {
+  display: block;
+  margin-top: 4px;
+  color: #98aec8;
+}
+.incident-controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.incident-controls label {
+  display: grid;
+  gap: 5px;
+  color: #98aec8;
+  font-size: 0.78rem;
+}
+.incident-controls select,
+.incident-controls button,
+.human-gate button {
+  min-height: 39px;
+  padding: 8px 12px;
+}
+.incident-controls select {
+  color: #e4edf8;
+  background: #101e30;
+  border: 1px solid #3c536c;
+  border-radius: 7px;
+}
+.primary-action {
+  color: #79e8ce;
+  background: #133b3b;
+  border-color: #2b7267;
+}
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #2a3d56;
+  border-radius: 10px;
+  background: #2a3d56;
+}
+.metric-strip > div {
+  padding: 14px 16px;
+  background: #101e30;
+}
+.metric-strip span,
+.metric-strip strong {
+  display: block;
+}
+.metric-strip span {
+  color: #8da6c2;
+  font-size: 0.75rem;
+}
+.metric-strip strong {
+  margin-top: 6px;
+  font-size: 1rem;
+}
+.incident-grid {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 18px;
+}
+.incident-card {
+  padding: 20px;
+  border: 1px solid #2a3d56;
+  border-radius: 10px;
+  background: #101e30;
+}
+.incident-card h3 {
+  margin: 0 0 15px;
+  font-size: 1rem;
+}
+.service-list,
+.evidence-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.service-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #26384e;
+}
+.service-list small {
+  grid-column: 1 / -1;
+  color: #8da6c2;
+}
+.health {
+  color: #79e8ce;
+  font-family: monospace;
+}
+.health.degraded,
+.health.limited {
+  color: #ffbd78;
+}
+.run-meta {
+  margin: 16px 0 0;
+}
+.run-meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 0;
+}
+.run-meta dd {
+  font-size: 0.78rem;
+  text-align: right;
+}
+.latest-reason {
+  color: #d9e6f4;
+  line-height: 1.65;
+}
+.human-gate {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #ffbd7866;
+  border-radius: 8px;
+  background: #332719;
+}
+.human-gate p,
+.human-gate small {
+  display: block;
+  margin-top: 9px;
+  line-height: 1.55;
+}
+.human-gate small {
+  color: #d1b68f;
+}
+.human-gate > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.human-gate pre {
+  overflow: auto;
+  max-height: 220px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #0d1929;
+  font-size: 0.75rem;
+}
+.evidence-card {
+  padding: 0;
+  overflow: hidden;
+}
+.evidence-list {
+  max-height: 430px;
+  overflow: auto;
+}
+.evidence-list li {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 12px;
+  padding: 13px 20px;
+  border-bottom: 1px solid #26384e;
+}
+.evidence-list p {
+  margin: 5px 0;
+  color: #b5c5d8;
+}
+.evidence-list small {
+  color: #7189a4;
+}
+.trace-kind {
+  height: fit-content;
+  padding: 3px 7px;
+  border-radius: 4px;
+  color: #8debd6;
+  background: #58dfc212;
+  font-family: monospace;
+  font-size: 0.73rem;
+  text-align: center;
+}
+.trace-kind.failure {
+  color: #ef9ba6;
+  background: #ef9ba612;
+}
+.incident-empty,
+.incident-note {
+  padding: 20px;
+  color: #98aec8;
+  line-height: 1.6;
+}
+.incident-note {
+  padding: 0;
+  font-size: 0.75rem;
+}
+.failure-text {
+  margin-top: 14px;
+  color: #ef9ba6;
+}
 @media (max-width: 820px) {
   main {
     width: calc(100% - 28px);
@@ -377,5 +625,14 @@ code {
   }
   .world-canvas {
     max-height: none;
+  }
+  .incident-hero {
+    flex-direction: column;
+  }
+  .incident-grid {
+    grid-template-columns: 1fr;
+  }
+  .metric-strip {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

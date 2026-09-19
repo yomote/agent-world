@@ -5,6 +5,7 @@ import type { Action, WorldEvent } from "./api/types";
 import { handleMoveKeyDown } from "./moveKeyboard";
 import { SandboxSession, type TraceEntry } from "./session";
 import { WorldCanvas } from "./world/WorldCanvas";
+import { IncidentLab } from "./incident/IncidentLab";
 
 const reasons: Record<WorldEvent["reason"], string> = {
   moved: "移動を確定",
@@ -49,6 +50,7 @@ function TraceRow({ entry }: { entry: TraceEntry }) {
 }
 
 export default function App() {
+  const [view, setView] = useState<"incident" | "world">("incident");
   const [session] = useState(() => new SandboxSession(worldApi));
   const [actor] = useState(() => createRandomActor());
   const [running, setRunning] = useState(false);
@@ -83,165 +85,182 @@ export default function App() {
 
   return (
     <main>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">WORLD OBSERVATORY / 01</p>
-          <h1>AI Agent Sandbox</h1>
-        </div>
-        <div className={`connection ${connection}`} role="status">
-          <span className="status-dot" />
-          {connection === "online"
-            ? "World 接続中"
-            : connection === "offline"
-              ? "World 未接続"
-              : "World 接続待ち"}
-        </div>
-      </header>
+      <nav className="lab-nav" aria-label="Lab切替">
+        <button aria-pressed={view === "incident"} onClick={() => setView("incident")}>
+          Incident Recovery
+        </button>
+        <button aria-pressed={view === "world"} onClick={() => setView("world")}>
+          Move Sandbox
+        </button>
+      </nav>
+      {view === "incident" ? (
+        <IncidentLab />
+      ) : (
+        <>
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">WORLD OBSERVATORY / 01</p>
+              <h1>AI Agent Sandbox</h1>
+            </div>
+            <div className={`connection ${connection}`} role="status">
+              <span className="status-dot" />
+              {connection === "online"
+                ? "World 接続中"
+                : connection === "offline"
+                  ? "World 未接続"
+                  : "World 接続待ち"}
+            </div>
+          </header>
 
-      {error && (
-        <div className="error" role="alert">
-          {error}。{world ? "最後に確認した状態を表示しています。" : "起動後に自動で再接続します。"}
-          <button onClick={() => void session.refresh()}>再取得</button>
-        </div>
-      )}
-
-      <div className="workspace">
-        <section
-          className="world-panel"
-          aria-labelledby="world-title"
-          aria-describedby="world-keyboard-hint"
-          tabIndex={0}
-          onClick={(event) => {
-            // PhaserのCanvas入力が既定のフォーカス移動を抑えるため、明示的に選択する。
-            if (event.target instanceof HTMLCanvasElement) event.currentTarget.focus();
-          }}
-          onKeyDown={(event) => handleMoveKeyDown(event, available && !running, move)}
-        >
-          <div className="panel-heading">
-            <h2 id="world-title">World</h2>
-            <span>
-              {world ? `${world.width} × ${world.height} · rev ${world.revision}` : "接続待ち"}
-            </span>
-          </div>
-          {world ? (
-            <WorldCanvas world={world} />
-          ) : (
-            <div className="loading">SimulatorからWorldを取得しています…</div>
+          {error && (
+            <div className="error" role="alert">
+              {error}。
+              {world ? "最後に確認した状態を表示しています。" : "起動後に自動で再接続します。"}
+              <button onClick={() => void session.refresh()}>再取得</button>
+            </div>
           )}
-          <div className="world-footer">
-            <span>● Agent A</span>
-            <span>原点: 左上 / x → / y ↓</span>
-          </div>
-          <p className="world-footer" id="world-keyboard-hint">
-            このWorld領域をクリック、またはTabで選択して矢印キーでmove。長押しでは連続発行しません。
-          </p>
-        </section>
 
-        <aside className="actor-panel" aria-labelledby="actor-title">
-          <p className="eyebrow">RESIDENT</p>
-          <div className="actor-heading">
-            <span className="avatar">A</span>
-            <div>
-              <h2 id="actor-title">Agent A</h2>
-              <p>Manual / Random actor</p>
-            </div>
-          </div>
-          <dl className="observation">
-            <div>
-              <dt>確定位置</dt>
-              <dd>{entity ? `(${entity.position.x}, ${entity.position.y})` : "—"}</dd>
-            </div>
-            <div>
-              <dt>World revision</dt>
-              <dd>{world?.revision ?? "—"}</dd>
-            </div>
-          </dl>
-          <p className="control-label">move を発行</p>
-          <div className="direction-pad">
-            <button
-              className="up"
-              aria-label="上に移動"
-              disabled={!available || running}
-              onClick={() => move(0, -1)}
+          <div className="workspace">
+            <section
+              className="world-panel"
+              aria-labelledby="world-title"
+              aria-describedby="world-keyboard-hint"
+              tabIndex={0}
+              onClick={(event) => {
+                // PhaserのCanvas入力が既定のフォーカス移動を抑えるため、明示的に選択する。
+                if (event.target instanceof HTMLCanvasElement) event.currentTarget.focus();
+              }}
+              onKeyDown={(event) => handleMoveKeyDown(event, available && !running, move)}
             >
-              ↑
-            </button>
-            <button
-              className="left"
-              aria-label="左に移動"
-              disabled={!available || running}
-              onClick={() => move(-1, 0)}
-            >
-              ←
-            </button>
-            <span className="pad-center">A</span>
-            <button
-              className="right"
-              aria-label="右に移動"
-              disabled={!available || running}
-              onClick={() => move(1, 0)}
-            >
-              →
-            </button>
-            <button
-              className="down"
-              aria-label="下に移動"
-              disabled={!available || running}
-              onClick={() => move(0, 1)}
-            >
-              ↓
-            </button>
-          </div>
-          <button
-            className="random-button"
-            aria-pressed={running}
-            disabled={!running && !available}
-            onClick={() => setRunning(!running)}
-          >
-            {running ? "■ Random actor を停止" : "▶ Random actor を開始"}
-          </button>
-          <p className="hint">
-            約0.7秒ごとに上下左右を選択。端の外へのActionも発行し、Worldの判定を観察します。
-          </p>
-          <div className="dispatch-status" role="status">
-            {busy ? "Action送信中…" : running ? "次のActionを待機中" : "手動操作を待機中"}
-          </div>
-        </aside>
-      </div>
+              <div className="panel-heading">
+                <h2 id="world-title">World</h2>
+                <span>
+                  {world ? `${world.width} × ${world.height} · rev ${world.revision}` : "接続待ち"}
+                </span>
+              </div>
+              {world ? (
+                <WorldCanvas world={world} />
+              ) : (
+                <div className="loading">SimulatorからWorldを取得しています…</div>
+              )}
+              <div className="world-footer">
+                <span>● Agent A</span>
+                <span>原点: 左上 / x → / y ↓</span>
+              </div>
+              <p className="world-footer" id="world-keyboard-hint">
+                このWorld領域をクリック、またはTabで選択して矢印キーでmove。長押しでは連続発行しません。
+              </p>
+            </section>
 
-      <section className="trace-panel" aria-labelledby="trace-title">
-        <div className="panel-heading">
-          <h2 id="trace-title">Action Trace</h2>
-          <span>共有Worldの履歴 {trace.length} / 80 件 · 結果不明はこのタブのみ · 新しい順</span>
-        </div>
-        <div className="causal-path">
-          <span>Agent</span>
-          <span>→</span>
-          <span>Action</span>
-          <span>→</span>
-          <span>World Simulator</span>
-          <span>→</span>
-          <span>Event + World Change</span>
-        </div>
-        {trace.length ? (
-          <ol className="trace-list" aria-label="Actionの実行履歴">
-            {trace.map((entry) => (
-              <TraceRow
-                key={entry.kind === "event" ? entry.event.event_id : entry.action.action_id}
-                entry={entry}
-              />
-            ))}
-          </ol>
-        ) : (
-          <p className="empty-trace">
-            まだActionはありません。矢印ボタンかRandom actorでAを動かしてください。
-          </p>
-        )}
-      </section>
-      <footer className="page-footer">
-        <span>メモリ内World · 休止や再起動でAの位置と履歴はリセット</span>
-        <span>World Simulator is authoritative.</span>
-      </footer>
+            <aside className="actor-panel" aria-labelledby="actor-title">
+              <p className="eyebrow">RESIDENT</p>
+              <div className="actor-heading">
+                <span className="avatar">A</span>
+                <div>
+                  <h2 id="actor-title">Agent A</h2>
+                  <p>Manual / Random actor</p>
+                </div>
+              </div>
+              <dl className="observation">
+                <div>
+                  <dt>確定位置</dt>
+                  <dd>{entity ? `(${entity.position.x}, ${entity.position.y})` : "—"}</dd>
+                </div>
+                <div>
+                  <dt>World revision</dt>
+                  <dd>{world?.revision ?? "—"}</dd>
+                </div>
+              </dl>
+              <p className="control-label">move を発行</p>
+              <div className="direction-pad">
+                <button
+                  className="up"
+                  aria-label="上に移動"
+                  disabled={!available || running}
+                  onClick={() => move(0, -1)}
+                >
+                  ↑
+                </button>
+                <button
+                  className="left"
+                  aria-label="左に移動"
+                  disabled={!available || running}
+                  onClick={() => move(-1, 0)}
+                >
+                  ←
+                </button>
+                <span className="pad-center">A</span>
+                <button
+                  className="right"
+                  aria-label="右に移動"
+                  disabled={!available || running}
+                  onClick={() => move(1, 0)}
+                >
+                  →
+                </button>
+                <button
+                  className="down"
+                  aria-label="下に移動"
+                  disabled={!available || running}
+                  onClick={() => move(0, 1)}
+                >
+                  ↓
+                </button>
+              </div>
+              <button
+                className="random-button"
+                aria-pressed={running}
+                disabled={!running && !available}
+                onClick={() => setRunning(!running)}
+              >
+                {running ? "■ Random actor を停止" : "▶ Random actor を開始"}
+              </button>
+              <p className="hint">
+                約0.7秒ごとに上下左右を選択。端の外へのActionも発行し、Worldの判定を観察します。
+              </p>
+              <div className="dispatch-status" role="status">
+                {busy ? "Action送信中…" : running ? "次のActionを待機中" : "手動操作を待機中"}
+              </div>
+            </aside>
+          </div>
+
+          <section className="trace-panel" aria-labelledby="trace-title">
+            <div className="panel-heading">
+              <h2 id="trace-title">Action Trace</h2>
+              <span>
+                共有Worldの履歴 {trace.length} / 80 件 · 結果不明はこのタブのみ · 新しい順
+              </span>
+            </div>
+            <div className="causal-path">
+              <span>Agent</span>
+              <span>→</span>
+              <span>Action</span>
+              <span>→</span>
+              <span>World Simulator</span>
+              <span>→</span>
+              <span>Event + World Change</span>
+            </div>
+            {trace.length ? (
+              <ol className="trace-list" aria-label="Actionの実行履歴">
+                {trace.map((entry) => (
+                  <TraceRow
+                    key={entry.kind === "event" ? entry.event.event_id : entry.action.action_id}
+                    entry={entry}
+                  />
+                ))}
+              </ol>
+            ) : (
+              <p className="empty-trace">
+                まだActionはありません。矢印ボタンかRandom actorでAを動かしてください。
+              </p>
+            )}
+          </section>
+          <footer className="page-footer">
+            <span>メモリ内World · 休止や再起動でAの位置と履歴はリセット</span>
+            <span>World Simulator is authoritative.</span>
+          </footer>
+        </>
+      )}
     </main>
   );
 }

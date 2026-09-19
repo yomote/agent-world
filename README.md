@@ -1,7 +1,7 @@
 # AI Agent Sandbox
 
 Agent → Action → World Change の因果を観察する、最初のVertical Slice。
-React + Vite / Phaser 2D / Python + FastAPI。LLM、APIキー、Docker、クラウドサービスは不要。
+React + Vite / Phaser 2D / Python + FastAPI。move SandboxはLLM不要。Incident Recovery LabのActual modeだけ、既存ChatGPTログイン済みの公式Codex CLIを使う。
 
 ## 起動
 
@@ -13,7 +13,9 @@ python scripts/dev.py
 
 初回はnpm依存と専用 `.venv` を自動セットアップするためネットワークが必要。
 以後は同じコマンド（または `npm run dev`）で起動。
-[Sandbox](http://127.0.0.1:5173) / [API仕様](http://127.0.0.1:8000/docs)。停止はCtrl+C。
+[Sandbox](http://127.0.0.1:5173) / [World API](http://127.0.0.1:8000/docs) / [Agent API](http://127.0.0.1:8011/docs)。停止はCtrl+C。
+
+Incident Recoveryでは「実モデルAgent」または同条件の「決定的runbook」を選び、障害番号だけを指定する。実モデルは観測ごとに次toolを選び、変更差分は人間の承認後だけSimulatorへ適用される。対象はローカル合成serviceで、本番serviceへ接続しない。Codex未ログイン、model通信失敗、予算切れはunknown/停止になり、成功として表示しない。
 
 ## 観察する
 
@@ -36,7 +38,7 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 新しく開いたタブにも保持中の履歴が表示される。80件を超えた古いEventは破棄され、取得間隔中に上限を超えた場合は取りこぼし得る。再起動でworld_idが変わると各タブの旧履歴も消える。
 通信失敗は「結果不明」としてそのタブだけに残し、success/failureを捏造せず自動再送もしない。表示は結果不明を含め最大80件。
 
-認証・永続化・複数worker・LLM・God Agent・マルチエージェント・文明・経済・戦闘は未実装。
+認証・永続化・複数worker・God Agent・マルチエージェント・文明・経済・戦闘は未実装。Incident Recoveryの人間operator名はローカル表示用で本人性を認証しない。
 ローカル開発用として127.0.0.1にbindする。
 
 ## 開発資料

@@ -72,6 +72,125 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/incidents/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start Incident */
+    post: operations["start_incident_api_incidents_runs_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Observe Incident */
+    get: operations["observe_incident_api_incidents_runs__run_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}/tools": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Incident Tool */
+    post: operations["incident_tool_api_incidents_runs__run_id__tools_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}/proposals/validate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Validate Proposal */
+    post: operations["validate_proposal_api_incidents_runs__run_id__proposals_validate_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}/proposals": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Request Execution */
+    post: operations["request_execution_api_incidents_runs__run_id__proposals_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}/approval": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Approve Execution */
+    post: operations["approve_execution_api_incidents_runs__run_id__approval_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/incidents/runs/{run_id}/apply": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Apply Execution */
+    post: operations["apply_execution_api_incidents_runs__run_id__apply_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -101,6 +220,32 @@ export interface components {
       /** Events */
       events: components["schemas"]["Event"][];
       event: components["schemas"]["Event"];
+    };
+    /** ApplyRequest */
+    ApplyRequest: {
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      /** Proposal Hash */
+      proposal_hash: string;
+      /** Expected Revision */
+      expected_revision: number;
+    };
+    /** ApprovalRequest */
+    ApprovalRequest: {
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      /** Proposal Hash */
+      proposal_hash: string;
+      /** Expected Revision */
+      expected_revision: number;
+      /** Approve */
+      approve: boolean;
     };
     /** Entity */
     Entity: {
@@ -142,10 +287,121 @@ export interface components {
       /** Events */
       events: components["schemas"]["Event"][];
     };
+    /** EvidenceItem */
+    EvidenceItem: {
+      /** Ref */
+      ref: string;
+      /** Source */
+      source: string;
+      /** Timestamp */
+      timestamp: string;
+      /** Data */
+      data: {
+        [key: string]: unknown;
+      };
+    };
+    /** ExecutionRequest */
+    ExecutionRequest: {
+      /**
+       * Action Id
+       * Format: uuid
+       */
+      action_id: string;
+      proposal: components["schemas"]["RecoveryProposal"];
+    };
     /** HTTPValidationError */
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /** IncidentRunRequest */
+    IncidentRunRequest: {
+      /** Scenario Number */
+      scenario_number: number;
+    };
+    /** IncidentSnapshot */
+    IncidentSnapshot: {
+      /** Scenario Number */
+      scenario_number: number;
+      summary: components["schemas"]["IncidentSummary"];
+      /** Services */
+      services: {
+        [key: string]: {
+          [key: string]: unknown;
+        };
+      };
+      /** Evidence */
+      evidence: components["schemas"]["EvidenceItem"][];
+      pending_proposal?: components["schemas"]["RecoveryProposal"] | null;
+      /** Proposal Hash */
+      proposal_hash?: string | null;
+      /** Approved Hash */
+      approved_hash?: string | null;
+      /**
+       * Applied Changes
+       * @default []
+       */
+      applied_changes: components["schemas"]["RecoveryChange"][];
+    };
+    /** IncidentSummary */
+    IncidentSummary: {
+      /**
+       * Run Id
+       * Format: uuid
+       */
+      run_id: string;
+      /** Revision */
+      revision: number;
+      /** Accepted */
+      accepted: number;
+      /** Incomplete */
+      incomplete: number;
+      /** Completed */
+      completed: number;
+      /** Duplicate Count */
+      duplicate_count: number;
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        "investigating" | "waiting_approval" | "applying" | "verifying" | "recovered" | "stopped";
+    };
+    /** IncidentToolRequest */
+    IncidentToolRequest: {
+      /**
+       * Tool
+       * @enum {string}
+       */
+      tool:
+        | "observe_system"
+        | "query_events"
+        | "inspect_queue"
+        | "read_service_config"
+        | "list_changes"
+        | "search_knowledge"
+        | "probe_dependency"
+        | "advance_and_verify"
+        | "lookup_action_status";
+      /** Args */
+      args?: {
+        [key: string]: unknown;
+      };
+    };
+    /** IncidentToolResult */
+    IncidentToolResult: {
+      /** Tool */
+      tool: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "success" | "failure" | "denied";
+      summary: components["schemas"]["IncidentSummary"];
+      /** Evidence */
+      evidence: components["schemas"]["EvidenceItem"][];
+      /** Error */
+      error?: string | null;
     };
     /** Position */
     Position: {
@@ -153,6 +409,83 @@ export interface components {
       x: number;
       /** Y */
       y: number;
+    };
+    /** ProposalResult */
+    ProposalResult: {
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        "valid" | "invalid" | "waiting_approval" | "approved" | "applied" | "failure" | "stale";
+      /** Proposal Hash */
+      proposal_hash: string;
+      summary: components["schemas"]["IncidentSummary"];
+      /**
+       * Violations
+       * @default []
+       */
+      violations: string[];
+      /**
+       * Event Refs
+       * @default []
+       */
+      event_refs: string[];
+    };
+    /** RecoveryChange */
+    RecoveryChange: {
+      /**
+       * Operation
+       * @enum {string}
+       */
+      operation: "set_config" | "select_deployment" | "requeue";
+      /**
+       * Service
+       * @enum {string}
+       */
+      service: "worker" | "carrier" | "queue";
+      /** Key */
+      key?: string | null;
+      /** Value */
+      value?: string | null;
+      /**
+       * Order Ids
+       * @default []
+       */
+      order_ids: string[];
+      /** Expected State */
+      expected_state?: string | null;
+    };
+    /** RecoveryProposal */
+    RecoveryProposal: {
+      /** Expected Revision */
+      expected_revision: number;
+      /** Diagnosis */
+      diagnosis: string;
+      /** Evidence Refs */
+      evidence_refs: string[];
+      /** Changes */
+      changes: components["schemas"]["RecoveryChange"][];
+      /** Rollback */
+      rollback: string;
+      /**
+       * Verification Ticks
+       * @default 4
+       * @constant
+       */
+      verification_ticks: 4;
+      /**
+       * Canary Count
+       * @default 2
+       * @constant
+       */
+      canary_count: 2;
+      /**
+       * Verification Scope
+       * @default affected_orders_and_canaries
+       * @constant
+       */
+      verification_scope: "affected_orders_and_canaries";
     };
     /** ValidationError */
     ValidationError: {
@@ -283,6 +616,259 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["EventHistory"];
+        };
+      };
+    };
+  };
+  start_incident_api_incidents_runs_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["IncidentRunRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentSnapshot"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  observe_incident_api_incidents_runs__run_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentSnapshot"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  incident_tool_api_incidents_runs__run_id__tools_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["IncidentToolRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IncidentToolResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  validate_proposal_api_incidents_runs__run_id__proposals_validate_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RecoveryProposal"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProposalResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  request_execution_api_incidents_runs__run_id__proposals_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExecutionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProposalResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  approve_execution_api_incidents_runs__run_id__approval_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApprovalRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProposalResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  apply_execution_api_incidents_runs__run_id__apply_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-lab-capability"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApplyRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProposalResult"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

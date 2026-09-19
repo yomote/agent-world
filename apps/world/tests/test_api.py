@@ -3,6 +3,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from world.api import create_app
+from world.local_auth import LabCapabilities
 
 
 def action(**updates):
@@ -128,3 +129,32 @@ def test_other_clients_receive_bounded_success_and_failure_history():
         fresh = restarted.get("/api/events").json()
         assert fresh["events"] == []
         assert fresh["world"]["world_id"] != bounded["world"]["world_id"]
+
+
+def test_incident_capabilities_are_server_enforced_and_roles_are_not_client_claims():
+    """modelやraw clientがrole名の自己申告だけでWorld writeへ昇格する回帰を防ぐ。"""
+    caps = LabCapabilities("read-secret", "proposal-secret", "human-secret", "write-secret")
+    with TestClient(create_app(capabilities=caps)) as client:
+        assert client.post("/api/incidents/runs", json={"scenario_number": 1}).status_code == 403
+        assert (
+            client.post(
+                "/api/incidents/runs",
+                json={"scenario_number": 1},
+                headers={"X-Lab-Capability": caps.observer, "X-Lab-Role": "human"},
+            ).status_code
+            == 403
+        )
+        started = client.post(
+            "/api/incidents/runs",
+            json={"scenario_number": 1},
+            headers={"X-Lab-Capability": caps.operator},
+        )
+        assert started.status_code == 200
+        run_id = started.json()["summary"]["run_id"]
+        assert (
+            client.get(
+                f"/api/incidents/runs/{run_id}",
+                headers={"X-Lab-Capability": caps.observer},
+            ).status_code
+            == 200
+        )

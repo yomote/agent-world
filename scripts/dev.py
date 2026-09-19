@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from secrets import token_urlsafe
 
 from python_env import PYTHON, ROOT
 
@@ -29,7 +30,7 @@ def main() -> int:
     major, minor, *_ = map(int, version.lstrip("v").split("."))
     if major < 22 or (major == 22 and minor < 13):
         raise RuntimeError(f"Node.js 22.13以上が必要です（現在 {version}）。")
-    for port in (8000, 5173):
+    for port in (8000, 8011, 5173):
         with socket.socket() as probe:
             try:
                 probe.bind(("127.0.0.1", port))
@@ -49,6 +50,9 @@ def main() -> int:
         ROOT / "node_modules/.sandbox-lock",
         [npm, "ci"],
     )
+    lab_environment = os.environ.copy()
+    for name in ("OBSERVER", "PROPOSER", "OPERATOR", "EXECUTOR"):
+        lab_environment[f"LAB_{name}_CAPABILITY"] = token_urlsafe(24)
     commands = [
         [
             str(PYTHON),
@@ -62,13 +66,35 @@ def main() -> int:
             "--port",
             "8000",
         ],
+        [
+            str(PYTHON),
+            "-m",
+            "uvicorn",
+            "incident_agent.api:app",
+            "--app-dir",
+            "apps",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8011",
+        ],
         [node, "node_modules/vite/bin/vite.js", "--config", "apps/web/vite.config.ts"],
     ]
     children: list[subprocess.Popen] = []
     try:
         for command in commands:
-            children.append(subprocess.Popen(command, cwd=ROOT, start_new_session=os.name != "nt"))
-        print("\nSandbox: http://127.0.0.1:5173  API: http://127.0.0.1:8000/docs", flush=True)
+            children.append(
+                subprocess.Popen(
+                    command,
+                    cwd=ROOT,
+                    env=lab_environment,
+                    start_new_session=os.name != "nt",
+                )
+            )
+        print(
+            "\nSandbox: http://127.0.0.1:5173  World API: http://127.0.0.1:8000/docs  Agent API: http://127.0.0.1:8011/docs",
+            flush=True,
+        )
         print("停止: Ctrl+C。Pythonの変更は再起動すると反映されます。", flush=True)
         while all(child.poll() is None for child in children):
             time.sleep(0.25)

@@ -1,5 +1,23 @@
 # 最小Vertical Sliceの設計
 
+## Agentic Incident Recovery Lab（Proposed）
+
+既存move sliceを保ったまま、ローカル合成serviceの障害復旧を追加する。構成は[ADR 0012](adr/0012-agentic-incident-recovery-lab.md)、進捗と評価境界は[着工packet](codex/agentic-incident-recovery-packet.md)を正とする。
+
+```mermaid
+flowchart LR
+  M[実model: 次toolを選択] --> H[Agent host: schema / budget / HITL]
+  H -->|typed read tool| W[World API]
+  W --> S[Incident Simulator]
+  S -->|公開projection| H
+  H -->|typed proposal| V[複製World validation]
+  V --> A[人間の実行承認]
+  A -->|hash + revision + action ID| S
+  S --> R[ledger / event / verification artifact]
+```
+
+`apps/world` はmodel runtimeを知らない。`apps/incident_agent` はWorld HTTPと公開projectionだけを使い、modelはtoolを直接実行しない。真因・期待解はSimulator内部のevaluator情報で、run ID、tool出力、Agent contextへ含めない。
+
 ```mermaid
 flowchart LR
   Manual[React 手動操作] --> Action

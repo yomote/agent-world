@@ -100,6 +100,442 @@
           }
         }
       }
+    },
+    "/api/incidents/runs": {
+      "post": {
+        "summary": "Start Incident",
+        "operationId": "start_incident_api_incidents_runs_post",
+        "parameters": [
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentSnapshot"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}": {
+      "get": {
+        "summary": "Observe Incident",
+        "operationId": "observe_incident_api_incidents_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentSnapshot"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}/tools": {
+      "post": {
+        "summary": "Incident Tool",
+        "operationId": "incident_tool_api_incidents_runs__run_id__tools_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentToolRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentToolResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}/proposals/validate": {
+      "post": {
+        "summary": "Validate Proposal",
+        "operationId": "validate_proposal_api_incidents_runs__run_id__proposals_validate_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryProposal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}/proposals": {
+      "post": {
+        "summary": "Request Execution",
+        "operationId": "request_execution_api_incidents_runs__run_id__proposals_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}/approval": {
+      "post": {
+        "summary": "Approve Execution",
+        "operationId": "approve_execution_api_incidents_runs__run_id__approval_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents/runs/{run_id}/apply": {
+      "post": {
+        "summary": "Apply Execution",
+        "operationId": "apply_execution_api_incidents_runs__run_id__apply_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "x-lab-capability",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lab-Capability"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -157,6 +593,52 @@
         "type": "object",
         "required": ["world", "events", "event"],
         "title": "ActionResult"
+      },
+      "ApplyRequest": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "proposal_hash": {
+            "type": "string",
+            "title": "Proposal Hash"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["action_id", "proposal_hash", "expected_revision"],
+        "title": "ApplyRequest"
+      },
+      "ApprovalRequest": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "proposal_hash": {
+            "type": "string",
+            "title": "Proposal Hash"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          },
+          "approve": {
+            "type": "boolean",
+            "title": "Approve"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["action_id", "proposal_hash", "expected_revision", "approve"],
+        "title": "ApprovalRequest"
       },
       "Entity": {
         "properties": {
@@ -256,6 +738,47 @@
         "required": ["world", "events"],
         "title": "EventHistory"
       },
+      "EvidenceItem": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["ref", "source", "timestamp", "data"],
+        "title": "EvidenceItem"
+      },
+      "ExecutionRequest": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Action Id"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/RecoveryProposal"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["action_id", "proposal"],
+        "title": "ExecutionRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -268,6 +791,210 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IncidentRunRequest": {
+        "properties": {
+          "scenario_number": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 1.0,
+            "title": "Scenario Number"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["scenario_number"],
+        "title": "IncidentRunRequest"
+      },
+      "IncidentSnapshot": {
+        "properties": {
+          "scenario_number": {
+            "type": "integer",
+            "title": "Scenario Number"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/IncidentSummary"
+          },
+          "services": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Services"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "pending_proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposal_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Hash"
+          },
+          "approved_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Hash"
+          },
+          "applied_changes": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryChange"
+            },
+            "type": "array",
+            "title": "Applied Changes",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["scenario_number", "summary", "services", "evidence"],
+        "title": "IncidentSnapshot"
+      },
+      "IncidentSummary": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "incomplete": {
+            "type": "integer",
+            "title": "Incomplete"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "duplicate_count": {
+            "type": "integer",
+            "title": "Duplicate Count"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "investigating",
+              "waiting_approval",
+              "applying",
+              "verifying",
+              "recovered",
+              "stopped"
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "revision",
+          "accepted",
+          "incomplete",
+          "completed",
+          "duplicate_count",
+          "state"
+        ],
+        "title": "IncidentSummary"
+      },
+      "IncidentToolRequest": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "enum": [
+              "observe_system",
+              "query_events",
+              "inspect_queue",
+              "read_service_config",
+              "list_changes",
+              "search_knowledge",
+              "probe_dependency",
+              "advance_and_verify",
+              "lookup_action_status"
+            ],
+            "title": "Tool"
+          },
+          "args": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Args"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["tool"],
+        "title": "IncidentToolRequest"
+      },
+      "IncidentToolResult": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "failure", "denied"],
+            "title": "Status"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/IncidentSummary"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Evidence"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["tool", "status", "summary", "evidence"],
+        "title": "IncidentToolResult"
       },
       "Position": {
         "properties": {
@@ -284,6 +1011,169 @@
         "type": "object",
         "required": ["x", "y"],
         "title": "Position"
+      },
+      "ProposalResult": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "invalid",
+              "waiting_approval",
+              "approved",
+              "applied",
+              "failure",
+              "stale"
+            ],
+            "title": "Status"
+          },
+          "proposal_hash": {
+            "type": "string",
+            "title": "Proposal Hash"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/IncidentSummary"
+          },
+          "violations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Violations",
+            "default": []
+          },
+          "event_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Refs",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["status", "proposal_hash", "summary"],
+        "title": "ProposalResult"
+      },
+      "RecoveryChange": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": ["set_config", "select_deployment", "requeue"],
+            "title": "Operation"
+          },
+          "service": {
+            "type": "string",
+            "enum": ["worker", "carrier", "queue"],
+            "title": "Service"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "order_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Order Ids",
+            "default": []
+          },
+          "expected_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["operation", "service"],
+        "title": "RecoveryChange"
+      },
+      "RecoveryProposal": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          },
+          "diagnosis": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Diagnosis"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Evidence Refs"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryChange"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Changes"
+          },
+          "rollback": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Rollback"
+          },
+          "verification_ticks": {
+            "type": "integer",
+            "const": 4,
+            "title": "Verification Ticks",
+            "default": 4
+          },
+          "canary_count": {
+            "type": "integer",
+            "const": 2,
+            "title": "Canary Count",
+            "default": 2
+          },
+          "verification_scope": {
+            "type": "string",
+            "const": "affected_orders_and_canaries",
+            "title": "Verification Scope",
+            "default": "affected_orders_and_canaries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["expected_revision", "diagnosis", "evidence_refs", "changes", "rollback"],
+        "title": "RecoveryProposal"
       },
       "ValidationError": {
         "properties": {
