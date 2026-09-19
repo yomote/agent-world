@@ -127,12 +127,16 @@ def test_persistent_receipt_forbids_restart_after_unknown(tmp_path):
     receipt = local.execute_with_runner(
         approval,
         adapter,
-        lambda token, approved: calls.append((token, approved.pr_number)) or "unknown",
+        lambda token, approved, mark_put_started: (
+            mark_put_started() or calls.append((token, approved.pr_number)) or "unknown"
+        ),
         local.ReceiptStore(receipt_path),
     )
     assert calls == [("not-printed", 91)]
     assert receipt.merge_result == "unknown"
-    assert json.loads(receipt_path.read_text(encoding="utf-8"))["merge_result"] == "unknown"
+    persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert persisted["merge_result"] == "unknown"
+    assert persisted["phase"] == "put_started"
     with pytest.raises(local.Stop, match="retry"):
         local.execute_with_runner(
             approval, adapter, lambda *args: "merged", local.ReceiptStore(receipt_path)
@@ -143,7 +147,86 @@ def test_persistent_receipt_forbids_restart_after_unknown(tmp_path):
         ("token",),
         ("inspect", "approval-1"),
         ("evidence", HEAD),
+        ("token",),
     ]
+
+
+def test_gate_rejection_before_put_is_failed_not_attempted(tmp_path):
+    """strict gateの決定的preflight拒否をunknown receiptへ誤分類しない。"""
+    approval = local.load_approval(packet())
+    receipt_path = tmp_path / "receipt.json"
+    with pytest.raises(local.Stop, match="rejected before merge PUT"):
+        local.execute_with_runner(
+            approval,
+            FakeAdapter(),
+            lambda *_: (_ for _ in ()).throw(local.StrictGateRejected()),
+            local.ReceiptStore(receipt_path),
+        )
+    persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert persisted["merge_result"] == "failed"
+    assert persisted["phase"] == "not_attempted"
+    assert persisted["failure_code"] == "gate_rejected"
+
+
+def test_transport_unknown_after_put_journal_is_unknown(tmp_path):
+    """PUT開始をfsync済みなら通信断を決定的failureへ誤分類しない。"""
+    approval = local.load_approval(packet())
+    receipt_path = tmp_path / "receipt.json"
+
+    def transport_unknown(_token, _approval, mark_put_started):
+        mark_put_started()
+        raise OSError("transport not recorded")
+
+    with pytest.raises(local.Stop, match="result is unknown"):
+        local.execute_with_runner(
+            approval, FakeAdapter(), transport_unknown, local.ReceiptStore(receipt_path)
+        )
+    persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert persisted["merge_result"] == "unknown"
+    assert persisted["phase"] == "put_started"
+
+
+def test_gate_rejection_after_put_journal_is_unknown(tmp_path):
+    """PUT開始後のGateErrorは型ではなくphaseを優先してunknownにする。"""
+    approval = local.load_approval(packet())
+    receipt_path = tmp_path / "receipt.json"
+
+    def rejected_after_put(_token, _approval, mark_put_started):
+        mark_put_started()
+        raise local.StrictGateRejected()
+
+    with pytest.raises(local.Stop, match="result is unknown"):
+        local.execute_with_runner(
+            approval, FakeAdapter(), rejected_after_put, local.ReceiptStore(receipt_path)
+        )
+    persisted = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert persisted["merge_result"] == "unknown"
+    assert persisted["phase"] == "put_started"
+
+
+def test_put_journal_write_failure_never_calls_original_put(tmp_path, monkeypatch):
+    """PUT開始journalの保存失敗時にmerge requestを送る回帰を防ぐ。"""
+    approval = local.load_approval(packet())
+    receipt_path = tmp_path / "receipt.json"
+    store = local.ReceiptStore(receipt_path)
+    calls = []
+
+    def fail_persist(receipt):
+        assert receipt.phase == "put_started"
+        raise local.Stop("journal write failed")
+
+    monkeypatch.setattr(store, "_persist", fail_persist)
+
+    def runner(_token, approved, mark_put_started):
+        guarded = local._expiry_guarded_put(
+            approved, lambda *args: calls.append(args), mark_put_started
+        )
+        guarded(f"/repos/{local.REPOSITORY}/pulls/{approved.pr_number}/merge", {"sha": HEAD})
+        return "merged"
+
+    with pytest.raises(local.Stop):
+        local.execute_with_runner(approval, FakeAdapter(), runner, store)
+    assert calls == []
 
 
 def test_cli_execute_connects_only_after_fake_preflight_and_receipt(tmp_path, monkeypatch):
@@ -156,13 +239,18 @@ def test_cli_execute_connects_only_after_fake_preflight_and_receipt(tmp_path, mo
     monkeypatch.setattr(
         local,
         "run_existing_strict_gate",
-        lambda token, approved: calls.append((token, approved.pr_number)) or "merged",
+        lambda token, approved, mark_put_started: (
+            mark_put_started() or calls.append((token, approved.pr_number)) or "merged"
+        ),
     )
     receipt = tmp_path / "receipt.json"
     monkeypatch.setattr(local, "receipt_path_for", lambda approval: receipt)
     assert local.main([str(source), "--execute"]) == 0
     assert calls == [("not-printed", 91)]
-    assert json.loads(receipt.read_text(encoding="utf-8"))["post_dispatch"] == "not_run"
+    persisted = json.loads(receipt.read_text(encoding="utf-8"))
+    assert persisted["post_dispatch"] == "not_run"
+    assert persisted["merge_result"] == "merged"
+    assert persisted["phase"] == "put_started"
 
 
 def test_system_adapter_removes_parent_tokens_before_gh_calls(monkeypatch):
@@ -470,6 +558,7 @@ class GateTarget:
         assert (number, head) == (91, 'b' * 40)
 def execute(client, target, attempts, interval, dispatch_after_merge):
     assert attempts == 10 and interval == 60 and dispatch_after_merge is False
+    client.put('/repos/yomote/agent-world/pulls/91/merge', {'sha': 'b' * 40})
 """
 
     def fake_run(args, **kwargs):
@@ -478,7 +567,44 @@ def execute(client, target, attempts, interval, dispatch_after_merge):
         return type("Result", (), {"stdout": source.encode("utf-8")})()
 
     monkeypatch.setattr(local.subprocess, "run", fake_run)
-    assert local.run_existing_strict_gate("token", local.load_approval(packet())) == "merged"
+    marks = []
+    assert (
+        local.run_existing_strict_gate(
+            "token", local.load_approval(packet()), lambda: marks.append("put_started")
+        )
+        == "merged"
+    )
+    assert marks == ["put_started"]
+
+
+def test_fixed_gate_preflight_rejection_is_typed_before_put(monkeypatch):
+    """固定strict gateのPUT前GateErrorをphaseなしunknownへ落とさない。"""
+    source = """\
+class GateError(RuntimeError):
+    pass
+class GitHubClient:
+    def __init__(self, repository, token):
+        pass
+    def put(self, path, payload):
+        raise AssertionError('preflight rejection must not PUT')
+class GateTarget:
+    def __init__(self, number, head):
+        pass
+def execute(client, target, attempts, interval, dispatch_after_merge):
+    raise GateError('deterministic rejection')
+"""
+
+    def fake_run(args, **kwargs):
+        assert args == ("git", "show", f"{SHA}:scripts/merge_gate.py")
+        return type("Result", (), {"stdout": source.encode("utf-8")})()
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    marks = []
+    with pytest.raises(local.StrictGateRejected):
+        local.run_existing_strict_gate(
+            "token", local.load_approval(packet()), lambda: marks.append("put_started")
+        )
+    assert marks == []
 
 
 def test_current_gate_module_loads_utf8_dataclasses_without_network():
@@ -498,11 +624,22 @@ def test_canonical_receipt_ignores_packet_id_and_caller_path(monkeypatch, tmp_pa
     assert local.receipt_path_for(first) == local.receipt_path_for(second)
 
 
+def test_legacy_receipt_is_rejected_without_phase_inference(tmp_path):
+    """旧receiptにphaseを後付けして同authorityを再実行する回帰を防ぐ。"""
+    approval = local.load_approval(packet())
+    path = tmp_path / "legacy.json"
+    path.write_text('{"merge_result":"unknown"}', encoding="utf-8")
+    with pytest.raises(local.Stop, match="retry"):
+        local.ReceiptStore(path).reserve(approval)
+
+
 def test_expiry_guard_stops_before_merge_put_after_wait():
     """CI待機後に期限切れならPUTを発行しない。"""
     expired = replace(local.load_approval(packet()), expires_at=datetime(2000, 1, 1, tzinfo=UTC))
     calls = []
-    guarded = local._expiry_guarded_put(expired, lambda *args: calls.append(args))
+    guarded = local._expiry_guarded_put(
+        expired, lambda *args: calls.append(args), lambda: calls.append("journal")
+    )
     with pytest.raises(local.Stop, match="expired"):
         guarded("/repos/yomote/agent-world/pulls/91/merge", {"sha": HEAD})
     assert calls == []

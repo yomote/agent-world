@@ -35,6 +35,14 @@ class Stop(RuntimeError):
     pass
 
 
+class StrictGateRejected(RuntimeError):
+    """strict gateがPUT前またはPUT後に返した決定的な拒否を分類する。"""
+
+
+class PhaseJournalFailed(RuntimeError):
+    """PUT前journalの永続化が失敗し、original PUTを呼べない。"""
+
+
 @dataclass(frozen=True)
 class Approval:
     packet_id: str
@@ -79,6 +87,8 @@ class OperationReceipt:
     execution_mode: str
     authority_receipt: str
     merge_result: str
+    phase: str = "not_attempted"
+    failure_code: str | None = None
     post_dispatch: str = "not_run"
 
 
@@ -91,10 +101,23 @@ class Adapter(Protocol):
 
 
 class ReceiptStore:
-    """一度でもmergeを試みたpacketを再起動後もterminalとして扱う。"""
+    """永続receiptでPUT開始前後を区別し、再起動後の再送を防ぐ。"""
 
     def __init__(self, path: Path):
         self.path = path
+
+    def _persist(self, receipt: OperationReceipt) -> OperationReceipt:
+        temporary = self.path.with_name(f".{self.path.name}.tmp-{os.getpid()}")
+        try:
+            with temporary.open("x", encoding="utf-8") as output:
+                json.dump(asdict(receipt), output, sort_keys=True)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.path)
+        except Exception as error:
+            temporary.unlink(missing_ok=True)
+            raise Stop("operation receipt persistence is unknown; retry is forbidden") from error
+        return receipt
 
     def reserve(self, approval: Approval) -> OperationReceipt:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,10 +130,12 @@ class ReceiptStore:
             approval.execution_mode,
             approval.authority_receipt,
             "in_progress",
+            "not_attempted",
         )
         try:
             descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError as error:
+            # Legacy receipts without phase are immutable terminal evidence as well.
             raise Stop(
                 "merge operation was already attempted or is unknown; retry is forbidden"
             ) from error
@@ -120,36 +145,49 @@ class ReceiptStore:
                 output.flush()
                 os.fsync(output.fileno())
         except Exception as error:
-            # A partially recorded reservation is still terminal: never remove it automatically.
+            # Partially recorded reservation is terminal; do not remove it automatically.
             raise Stop("operation receipt reservation is unknown; retry is forbidden") from error
         return receipt
 
-    def finish(self, receipt: OperationReceipt, merge_result: str) -> OperationReceipt:
+    def mark_put_started(self, receipt: OperationReceipt) -> OperationReceipt:
+        if receipt.merge_result != "in_progress" or receipt.phase != "not_attempted":
+            raise Stop("strict gate receipt phase is invalid")
+        # This fsync must succeed before the original merge PUT is callable.
+        return self._persist(
+            OperationReceipt(
+                receipt.repository,
+                receipt.packet_id,
+                receipt.pr_number,
+                receipt.trusted_source,
+                receipt.expected_head,
+                receipt.execution_mode,
+                receipt.authority_receipt,
+                "in_progress",
+                "put_started",
+            )
+        )
+
+    def finish(
+        self, receipt: OperationReceipt, merge_result: str, failure_code: str | None = None
+    ) -> OperationReceipt:
         if merge_result not in {"merged", "failed", "unknown"}:
             raise Stop("strict gate receipt is invalid")
-        final = OperationReceipt(
-            receipt.repository,
-            receipt.packet_id,
-            receipt.pr_number,
-            receipt.trusted_source,
-            receipt.expected_head,
-            receipt.execution_mode,
-            receipt.authority_receipt,
-            merge_result,
+        if failure_code not in {None, "gate_rejected", "runner_unknown"}:
+            raise Stop("strict gate receipt failure code is invalid")
+        return self._persist(
+            OperationReceipt(
+                receipt.repository,
+                receipt.packet_id,
+                receipt.pr_number,
+                receipt.trusted_source,
+                receipt.expected_head,
+                receipt.execution_mode,
+                receipt.authority_receipt,
+                merge_result,
+                receipt.phase,
+                failure_code,
+            )
         )
-        temporary = self.path.with_name(f".{self.path.name}.tmp-{os.getpid()}")
-        try:
-            with temporary.open("x", encoding="utf-8") as output:
-                json.dump(asdict(final), output, sort_keys=True)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, self.path)
-        except Exception as error:
-            temporary.unlink(missing_ok=True)
-            raise Stop(
-                "merge result is unknown; receipt persistence failed and retry is forbidden"
-            ) from error
-        return final
 
 
 def _comment(value: str, field: str) -> tuple[str, int, str]:
@@ -523,24 +561,52 @@ def validate_runtime(approval: Approval, runtime: Runtime) -> None:
 def execute_with_runner(
     approval: Approval,
     adapter: Adapter,
-    runner: Callable[[str, Approval], str],
+    runner: Callable[[str, Approval, Callable[[], None]], str],
     receipt_store: ReceiptStore,
 ) -> OperationReceipt:
-    """承認後に固定sourceの既存 strict gateへ繋ぐ一点。testsはfake runnerだけを渡す。"""
+    """固定sourceのstrict gateへ繋ぎ、PUT開始の永続phaseを先に記録する。"""
 
     runtime = adapter.inspect(approval)
     validate_runtime(approval, runtime)
     adapter.verify_evidence(approval)
-    receipt = receipt_store.reserve(approval)
+    # Token取得はPUT以前の決定的preflightであり、receiptを残さず停止する。
     token = adapter.stored_token()
     if not token:
         raise Stop("stored gh token is unavailable")
+    receipt = receipt_store.reserve(approval)
+    current_receipt = receipt
+
+    def mark_put_started() -> None:
+        nonlocal current_receipt
+        try:
+            current_receipt = receipt_store.mark_put_started(current_receipt)
+        except Stop as error:
+            # A second or crashed-after-journal call must not claim no PUT occurred.
+            if current_receipt.phase == "put_started":
+                raise StrictGateRejected() from error
+            raise PhaseJournalFailed() from error
+
     try:
-        result = runner(token, approval)
+        result = runner(token, approval, mark_put_started)
+    except StrictGateRejected as error:
+        if current_receipt.phase == "put_started":
+            receipt_store.finish(current_receipt, "unknown", "runner_unknown")
+            raise Stop("strict gate result is unknown; retry is forbidden") from error
+        receipt_store.finish(current_receipt, "failed", "gate_rejected")
+        raise Stop("strict gate rejected before merge PUT") from error
+    except PhaseJournalFailed as error:
+        # The original PUT is sequenced after the journal; reservation remains terminal.
+        raise Stop("merge PUT was not sent; receipt journal persistence failed") from error
     except Exception as error:
-        receipt_store.finish(receipt, "unknown")
+        # A journaled PUT may have reached GitHub even when its result is unreadable.
+        receipt_store.finish(current_receipt, "unknown", "runner_unknown")
         raise Stop("strict gate result is unknown; retry is forbidden") from error
-    return receipt_store.finish(receipt, result)
+    if current_receipt.phase != "put_started":
+        receipt_store.finish(current_receipt, "failed", "gate_rejected")
+        raise Stop("strict gate completed without merge PUT")
+    return receipt_store.finish(
+        current_receipt, result, "runner_unknown" if result == "unknown" else None
+    )
 
 
 def _trusted_gate_module(trusted_source: str) -> Any:
@@ -571,29 +637,40 @@ def _trusted_gate_module(trusted_source: str) -> Any:
         return module
 
 
-def _expiry_guarded_put(approval: Approval, original_put: Callable[[str, dict[str, Any]], Any]):
+def _expiry_guarded_put(
+    approval: Approval,
+    original_put: Callable[[str, dict[str, Any]], Any],
+    mark_put_started: Callable[[], None],
+):
     def guarded_put(path: str, payload: dict[str, Any]) -> Any:
         if path == f"/repos/{REPOSITORY}/pulls/{approval.pr_number}/merge":
             ensure_not_expired(approval)
+            # If this persistence fails, the original PUT has not been called.
+            mark_put_started()
         return original_put(path, payload)
 
     return guarded_put
 
 
-def run_existing_strict_gate(token: str, approval: Approval) -> str:
-    """fixed sourceのstrict gateにPUT直前expiry hookを追加する。"""
+def run_existing_strict_gate(
+    token: str, approval: Approval, mark_put_started: Callable[[], None]
+) -> str:
+    """fixed sourceのstrict gateにPUT直前expiry/phase hookを追加する。"""
     module = _trusted_gate_module(approval.trusted_source)
     client = module.GitHubClient(REPOSITORY, token)
     original_put = client.put
 
-    client.put = _expiry_guarded_put(approval, original_put)
-    module.execute(
-        client,
-        module.GateTarget(approval.pr_number, approval.expected_head),
-        attempts=10,
-        interval=60,
-        dispatch_after_merge=False,
-    )
+    client.put = _expiry_guarded_put(approval, original_put, mark_put_started)
+    try:
+        module.execute(
+            client,
+            module.GateTarget(approval.pr_number, approval.expected_head),
+            attempts=10,
+            interval=60,
+            dispatch_after_merge=False,
+        )
+    except module.GateError as error:
+        raise StrictGateRejected() from error
     return "merged"
 
 
