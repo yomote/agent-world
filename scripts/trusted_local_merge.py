@@ -198,6 +198,15 @@ class SystemAdapter:
         except (OSError, subprocess.CalledProcessError) as error:
             raise Stop(f"preflight observation is unknown: {args[0]}") from error
 
+    def _run_bytes(self, *args: str) -> bytes:
+        """git objectの内容は末尾改行を含む真正bytesのまま読む。"""
+        try:
+            return subprocess.run(
+                args, check=True, capture_output=True, env=self._safe_env()
+            ).stdout
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise Stop(f"preflight observation is unknown: {args[0]}") from error
+
     def _api_json(self, path: str) -> Any:
         try:
             return json.loads(self._run("gh", "api", path))
@@ -289,9 +298,9 @@ class SystemAdapter:
         remote = self._run("git", "ls-remote", "origin", "refs/heads/main").split()
         if len(remote) != 2 or remote[1] != "refs/heads/main":
             raise Stop("remote main SHA is unavailable")
-        trusted_workflow = self._run(
+        trusted_workflow = self._run_bytes(
             "git", "show", f"{approval.trusted_source}:.github/workflows/deploy-azure.yml"
-        ).encode("utf-8")
+        )
         trusted_tree = self._local_workflow_tree(
             self._run("git", "ls-tree", "-r", approval.trusted_source, "--", ".github/workflows")
         )

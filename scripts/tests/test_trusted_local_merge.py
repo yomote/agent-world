@@ -248,11 +248,30 @@ jobs:
         return responses[args]
 
     monkeypatch.setattr(adapter, "_run", fake_run)
+    monkeypatch.setattr(
+        adapter,
+        "_run_bytes",
+        lambda *args: workflow,
+    )
     observed = adapter.inspect(local.load_approval(packet()))
     assert observed.candidate_deploy_matches_trusted is True
     assert observed.candidate_has_known_deploy_guard is True
     assert observed.deploy_enabled is False
     assert observed.candidate_workflow_tree_matches_trusted is True
+
+
+@pytest.mark.parametrize("workflow", [b"guard\n", b"guard\r\n", b"guard"])
+def test_system_adapter_compares_trusted_workflow_bytes_without_normalizing(monkeypatch, workflow):
+    """git showとContentsの同じ真正bytesだけを一致として扱う。"""
+    adapter = local.SystemAdapter()
+    monkeypatch.setattr(adapter, "_run", lambda *args: "")
+    monkeypatch.setattr(adapter, "_run_bytes", lambda *args: workflow)
+    candidate = {"encoding": "base64", "content": base64.b64encode(workflow).decode()}
+    assert adapter._workflow_bytes(candidate) == adapter._run_bytes("git", "show", "fixed")
+    assert adapter._workflow_bytes(candidate) == workflow
+    assert adapter._workflow_bytes(
+        {"encoding": "base64", "content": base64.b64encode(workflow + b"x").decode()}
+    ) != adapter._run_bytes("git", "show", "fixed")
 
 
 @pytest.mark.parametrize("environment", [{}, {"protection_rules": {}}, []])
@@ -316,6 +335,7 @@ test "${DEPLOY_ENABLED}" = "true"
         return responses[args]
 
     monkeypatch.setattr(adapter, "_run", fake_run)
+    monkeypatch.setattr(adapter, "_run_bytes", lambda *args: workflow)
     observed = adapter.inspect(local.load_approval(packet()))
     assert observed.environment_approval_required is None
     with pytest.raises(local.Stop, match="environment protection"):
