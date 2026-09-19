@@ -19,16 +19,22 @@ OWNER = "01a07c68-367d-75e3-b267-3ae46db963ac"
 HEAD = "a" * 40
 REVIEW_INPUT = {
     "scope_id": "delivery-test-slice-v1",
+    "scope_issue": "#91",
     "scope_definition": "delivery回帰testの下位workunit",
     "required_acceptance_ids": ["AC-TEST"],
     "parent_residuals": [
-        {"id": "PARENT-REMAINING", "owner": "/root/pm", "trigger": "別testで確認"}
+        {
+            "id": "PARENT-REMAINING",
+            "issue": "#45",
+            "owner": "/root/pm",
+            "trigger": "別testで確認",
+        }
     ],
     "acceptance_map": [
         {
             "requirement_id": "REQ-TEST",
             "acceptance_id": "AC-TEST",
-            "issue": "#test",
+            "issue": "#91",
             "pm_owner": "/root/pm-controller",
             "source": "https://github.com/yomote/agent-world/issues/1",
             "source_version": "test-v1",

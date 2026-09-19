@@ -879,6 +879,14 @@ class Campaign:
         }
         self.save_event(data, "normal_merge_confirmed")
         if data.get("issue"):
+            from scripts.automation.review_delivery import issue_close_gate
+
+            close_gate = issue_close_gate(data.get("review_input", {}), data["issue"])
+            if not close_gate["may_close"]:
+                data["issue_close_skipped"] = close_gate
+                self.save_event(data, "issue_kept_open_after_partial_merge")
+                self.finish_step("merged", "normal_protected_merge_confirmed_issue_open")
+                return
             closed = self.transport.call(
                 "close_issue",
                 {

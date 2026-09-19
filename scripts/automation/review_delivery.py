@@ -71,6 +71,9 @@ def validate_review_input(value):
     if not isinstance(value, dict):
         raise Stop("stopped", "review_input_missing")
     scope_id = _text(value.get("scope_id"), "scope_id", limit=200)
+    scope_issue = _text(value.get("scope_issue"), "scope_issue", limit=50)
+    if not re.fullmatch(r"#[1-9][0-9]*", scope_issue):
+        raise Stop("stopped", "review_scope_issue_invalid")
     _text(value.get("scope_definition"), "scope_definition")
     acceptance_map = value.get("acceptance_map")
     if not isinstance(acceptance_map, list) or not acceptance_map:
@@ -92,6 +95,9 @@ def validate_review_input(value):
         _text(item.get("definition"), "acceptance_definition")
         _text(item.get("evidence"), "acceptance_evidence")
         acceptance_pairs.add((requirement, acceptance))
+    acceptance_ids = [item["acceptance_id"] for item in acceptance_map]
+    if len(set(acceptance_ids)) != len(acceptance_ids):
+        raise Stop("stopped", "review_acceptance_id_duplicate")
     author_plan = value.get("author_review_plan")
     if not isinstance(author_plan, list) or not author_plan:
         raise Stop("stopped", "review_author_plan_missing")
@@ -106,22 +112,32 @@ def validate_review_input(value):
         or not required
         or len(set(required)) != len(required)
         or any(not isinstance(identifier, str) or not identifier for identifier in required)
-        or not set(required).issubset({item["acceptance_id"] for item in acceptance_map})
+        or not set(required).issubset(set(acceptance_ids))
     ):
         raise Stop("stopped", "review_required_acceptance_invalid")
+    if any(
+        item["acceptance_id"] in required and item["issue"] != scope_issue
+        for item in acceptance_map
+    ):
+        raise Stop("stopped", "review_required_acceptance_scope_mismatch")
     residuals = value.get("parent_residuals")
     if not isinstance(residuals, list):
         raise Stop("stopped", "review_parent_residuals_invalid")
     for item in residuals:
         if not isinstance(item, dict):
             raise Stop("stopped", "review_parent_residuals_invalid")
-        for name in ("id", "owner", "trigger"):
+        for name in ("id", "issue", "owner", "trigger"):
             _text(item.get(name), "parent_residual_" + name)
-    return acceptance_map, author_plan, acceptance_pairs, required, scope_id
+        if not re.fullmatch(r"#[1-9][0-9]*", item["issue"]):
+            raise Stop("stopped", "review_parent_residual_issue_invalid")
+    allowed_issues = {scope_issue, *(item["issue"] for item in residuals)}
+    if any(item["issue"] not in allowed_issues for item in acceptance_map):
+        raise Stop("stopped", "review_acceptance_issue_unbound")
+    return acceptance_map, author_plan, acceptance_pairs, required, scope_id, scope_issue
 
 
 def acceptance_gate(value):
-    acceptance_map, _, _, required, scope_id = validate_review_input(value)
+    acceptance_map, _, _, required, scope_id, scope_issue = validate_review_input(value)
     by_id = {item["acceptance_id"]: item for item in acceptance_map}
     unmet = [
         {
@@ -133,13 +149,36 @@ def acceptance_gate(value):
         for identifier in required
         if by_id[identifier]["status"] != "achieved"
     ]
-    return {"scope_id": scope_id, "required": required, "unmet": unmet, "ready": not unmet}
+    return {
+        "scope_id": scope_id,
+        "scope_issue": scope_issue,
+        "required": required,
+        "unmet": unmet,
+        "ready": not unmet,
+    }
+
+
+def issue_close_gate(value, issue_number):
+    """PR scopeが完了したIssueだけを閉じ、親の残DoDを保持する。"""
+    _, _, _, _, _, scope_issue = validate_review_input(value)
+    scope_number = int(scope_issue[1:])
+    residual_numbers = sorted(int(item["issue"][1:]) for item in value["parent_residuals"])
+    may_close = issue_number == scope_number and issue_number not in residual_numbers
+    return {
+        "may_close": may_close,
+        "reason": None if may_close else "issue_not_completed_by_pr_scope",
+        "scope_issue": scope_issue,
+        "parent_residual_issues": residual_numbers,
+    }
 
 
 def render_review_input(value):
     """PR作者が公開するAC対応と変更固有review観点を短いMarkdownへする。"""
-    acceptance_map, author_plan, _, _, scope_id = validate_review_input(value)
-    lines = [f"## PR scope `{scope_id}` のAC対応（Issue責任者 / PM管理）", ""]
+    acceptance_map, author_plan, _, _, scope_id, scope_issue = validate_review_input(value)
+    lines = [
+        f"## PR scope `{scope_id}` / `{scope_issue}` のAC対応（Issue責任者 / PM管理）",
+        "",
+    ]
     for item in acceptance_map:
         lines.append(
             f"- `{item['requirement_id']} / {item['acceptance_id']}` "
@@ -156,7 +195,10 @@ def render_review_input(value):
     if value["parent_residuals"]:
         lines.extend(["", "## 親Issueに残るDoD", ""])
         for item in value["parent_residuals"]:
-            lines.append(f"- `{item['id']}`: owner `{item['owner']}` / trigger: {item['trigger']}")
+            lines.append(
+                f"- `{item['id']}` / `{item['issue']}`: owner `{item['owner']}` / "
+                f"trigger: {item['trigger']}"
+            )
     lines.extend(
         [
             "",
@@ -177,6 +219,11 @@ def review_key(review, head):
         "suppressed": review.get("suppressed", []),
         "acceptance_map": review.get("acceptance_map"),
         "author_review_plan": review.get("author_review_plan"),
+        "scope_id": review.get("scope_id"),
+        "scope_issue": review.get("scope_issue"),
+        "scope_definition": review.get("scope_definition"),
+        "required_acceptance_ids": review.get("required_acceptance_ids"),
+        "parent_residuals": review.get("parent_residuals"),
     }
     return hashlib.sha256(
         json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -202,7 +249,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
         raise Stop("stopped", "review_verdict_invalid")
     _text(proxy_login, "proxy_login", limit=100)
     _text(pr_author, "pr_author", limit=100)
-    acceptance_map, author_plan, acceptance_pairs, _, _ = validate_review_input(review)
+    acceptance_map, author_plan, acceptance_pairs, _, _, _ = validate_review_input(review)
 
     file_lines = {}
     for item in files:
@@ -299,7 +346,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
     }
 
 
-def find_receipt(reviews, *, key, head, expected_proxy_login):
+def find_receipt(reviews, *, key, head, expected_proxy_login, expected_body, pr_number):
     marker = f"<!-- {MARKER}:{key} -->"
     matches = [item for item in reviews if marker in (item.get("body") or "")]
     if len(matches) > 1:
@@ -314,8 +361,13 @@ def find_receipt(reviews, *, key, head, expected_proxy_login):
         or item.get("user", {}).get("login") != expected_proxy_login
     ):
         raise Stop("stopped", "review_delivery_provenance_mismatch")
+    if item.get("body") != expected_body:
+        raise Stop("stopped", "review_delivery_body_mismatch")
     url = item.get("html_url")
-    if not isinstance(url, str) or not url.startswith("https://github.com/"):
+    if not isinstance(url, str) or not re.fullmatch(
+        rf"https://github\.com/yomote/agent-world/pull/{pr_number}#pullrequestreview-[1-9][0-9]*",
+        url,
+    ):
         raise Stop("unknown", "review_delivery_receipt_invalid")
     return {"url": url, "head": head, "review_id": item.get("id"), "key": key}
 

@@ -430,7 +430,14 @@ class GitHub:
         reviews = self.request(
             "review_list", "GET", f"{PREFIX}/pulls/{number}/reviews?per_page=100"
         )
-        receipt = find_receipt(reviews, key=prepared["key"], head=head, expected_proxy_login=actor)
+        receipt = find_receipt(
+            reviews,
+            key=prepared["key"],
+            head=head,
+            expected_proxy_login=actor,
+            expected_body=prepared["payload"]["body"],
+            pr_number=number,
+        )
         if receipt is None and not publish:
             raise Stop("stopped", "review_delivery_receipt_not_found")
         if receipt is None:
@@ -442,7 +449,12 @@ class GitHub:
                 prepared["payload"],
             )
             receipt = find_receipt(
-                [result], key=prepared["key"], head=head, expected_proxy_login=actor
+                [result],
+                key=prepared["key"],
+                head=head,
+                expected_proxy_login=actor,
+                expected_body=prepared["payload"]["body"],
+                pr_number=number,
             )
         assert_current_head()
         if not isinstance(receipt.get("review_id"), int):

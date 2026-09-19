@@ -11,9 +11,11 @@ from scripts.automation.github_adapter import GitHub  # noqa: E402
 from scripts.automation.review_delivery import (  # noqa: E402
     acceptance_gate,
     find_receipt,
+    issue_close_gate,
     prepare,
     render_review_input,
     resolution_mutation,
+    review_key,
 )
 from scripts.automation.transport import Stop  # noqa: E402
 
@@ -45,10 +47,16 @@ def review(**updates):
     }
     value = {
         "scope_id": "accounting-package-slice-v1",
+        "scope_issue": "#90",
         "scope_definition": "read-only review packageの最小縦切り",
         "required_acceptance_ids": ["ACC-2"],
         "parent_residuals": [
-            {"id": "ISSUE-89-COMBINED", "owner": "/root/pm", "trigger": "別unitで再開"}
+            {
+                "id": "ISSUE-89-COMBINED",
+                "issue": "#89",
+                "owner": "/root/pm",
+                "trigger": "別unitで再開",
+            }
         ],
         "head": HEAD,
         "reviewer": "/root/reviewer",
@@ -61,7 +69,7 @@ def review(**updates):
             {
                 "requirement_id": "REQ-9",
                 "acceptance_id": "ACC-2",
-                "issue": "#89",
+                "issue": "#90",
                 "pm_owner": "/root/pm_controller",
                 "source": "https://github.com/yomote/agent-world/issues/89",
                 "source_version": "issue-comment-1",
@@ -137,6 +145,7 @@ def test_required_acceptance_must_be_achieved_before_ready():
     achieved["acceptance_map"][0]["status"] = "achieved"
     assert acceptance_gate(achieved) == {
         "scope_id": "accounting-package-slice-v1",
+        "scope_issue": "#90",
         "required": ["ACC-2"],
         "unmet": [],
         "ready": True,
@@ -149,15 +158,20 @@ def test_exact_remote_receipt_is_reused_but_stale_or_duplicate_stops():
     item = {
         "id": 7,
         "commit_id": HEAD,
-        "html_url": "https://github.com/yomote/agent-world/pull/1#pullrequestreview-7",
+        "html_url": "https://github.com/yomote/agent-world/pull/9#pullrequestreview-7",
         "body": prepared["payload"]["body"],
         "state": "COMMENTED",
         "user": {"login": "owner"},
     }
     assert (
-        find_receipt([item], key=prepared["key"], head=HEAD, expected_proxy_login="owner")[
-            "review_id"
-        ]
+        find_receipt(
+            [item],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="owner",
+            expected_body=item["body"],
+            pr_number=9,
+        )["review_id"]
         == 7
     )
     with pytest.raises(Stop, match="stale"):
@@ -166,6 +180,8 @@ def test_exact_remote_receipt_is_reused_but_stale_or_duplicate_stops():
             key=prepared["key"],
             head=HEAD,
             expected_proxy_login="owner",
+            expected_body=item["body"],
+            pr_number=9,
         )
     with pytest.raises(Stop, match="duplicate"):
         find_receipt(
@@ -173,9 +189,60 @@ def test_exact_remote_receipt_is_reused_but_stale_or_duplicate_stops():
             key=prepared["key"],
             head=HEAD,
             expected_proxy_login="owner",
+            expected_body=item["body"],
+            pr_number=9,
         )
     with pytest.raises(Stop, match="provenance"):
-        find_receipt([item], key=prepared["key"], head=HEAD, expected_proxy_login="other")
+        find_receipt(
+            [item],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="other",
+            expected_body=item["body"],
+            pr_number=9,
+        )
+    with pytest.raises(Stop, match="body_mismatch"):
+        find_receipt(
+            [{**item, "body": item["body"] + " altered"}],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="owner",
+            expected_body=item["body"],
+            pr_number=9,
+        )
+    with pytest.raises(Stop, match="receipt_invalid"):
+        find_receipt(
+            [{**item, "html_url": "https://github.com/other/repo/pull/9#pullrequestreview-7"}],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="owner",
+            expected_body=item["body"],
+            pr_number=9,
+        )
+
+
+def test_acceptance_ids_are_unique_and_full_contract_changes_dedup_key():
+    """重複ACの後勝ちやscope/residual差を同じreview keyへ潰す回帰を防ぐ。"""
+    value = review()
+    duplicate = review()
+    duplicate["acceptance_map"].append({**duplicate["acceptance_map"][0]})
+    with pytest.raises(Stop, match="acceptance_id_duplicate"):
+        prepare(duplicate, head=HEAD, files=FILES, proxy_login="owner", pr_author="owner")
+    changed = review()
+    changed["scope_definition"] = "別の下位scope"
+    assert review_key(value, HEAD) != review_key(changed, HEAD)
+
+
+def test_issue_close_is_bound_to_scope_and_parent_residuals():
+    """部分PRのmergeが親Issueを完了扱いして閉じる回帰を防ぐ。"""
+    value = review()
+    assert issue_close_gate(value, 90)["may_close"] is True
+    assert issue_close_gate(value, 89) == {
+        "may_close": False,
+        "reason": "issue_not_completed_by_pr_scope",
+        "scope_issue": "#90",
+        "parent_residual_issues": [89],
+    }
 
 
 def test_resolution_is_one_graphql_write_for_exact_original_threads():
