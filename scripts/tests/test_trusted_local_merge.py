@@ -375,6 +375,76 @@ def test_system_adapter_binds_review_ci_and_authority_to_packet(monkeypatch):
     adapter.verify_evidence(approval)
 
 
+def test_system_adapter_reads_utf8_evidence_through_text_subprocess(monkeypatch):
+    """Windows既定code pageで日本語のreview根拠を読めない回帰を防ぐ。"""
+    adapter = local.SystemAdapter({"GH_TOKEN": "parent", "GITHUB_TOKEN": "parent"})
+    approval = local.load_approval(packet())
+    responses = {
+        "repos/yomote/agent-world/issues/comments/456": {
+            "body": f"{local.REVIEW_MARKER}\nhead: {HEAD}\nverdict: pass\n独立確認済み"
+        },
+        "repos/yomote/agent-world/actions/runs/789": {
+            "head_sha": HEAD,
+            "conclusion": "success",
+            "event": "pull_request",
+            "pull_requests": [{"number": 91}],
+        },
+        "repos/yomote/agent-world/issues/comments/123": {
+            "body": "\n".join(
+                (
+                    local.APPROVAL_MARKER,
+                    "packet: approval-1",
+                    f"trusted_source: {SHA}",
+                    f"expected_head: {HEAD}",
+                    "pr_number: 91",
+                    "execution_mode: normal",
+                    f"expires_at: {approval.expires_at.isoformat()}",
+                    "日本語の承認記録",
+                )
+            ),
+            "user": {"login": "owner"},
+        },
+    }
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        assert kwargs["text"] is True
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "strict"
+        assert "GH_TOKEN" not in kwargs["env"]
+        assert "GITHUB_TOKEN" not in kwargs["env"]
+        assert kwargs["env"]["GITHUB_REPOSITORY"] == local.REPOSITORY
+        return subprocess.CompletedProcess(
+            args, 0, stdout=json.dumps(responses[args[2]], ensure_ascii=False)
+        )
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    adapter.verify_evidence(approval)
+    assert [args[:2] for args, _ in calls] == [("gh", "api")] * 3
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        UnicodeDecodeError("utf-8", b"\x81", 0, 1, "invalid start byte"),
+        subprocess.CompletedProcess(("gh", "api", "user"), 0, stdout=None),
+    ),
+)
+def test_system_adapter_text_observation_stops_on_decode_or_missing_stdout(monkeypatch, failure):
+    """decode失敗やstdout欠落をAttributeErrorでなくunknownとして止める。"""
+    adapter = local.SystemAdapter()
+
+    def fake_run(*args, **kwargs):
+        if isinstance(failure, BaseException):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    with pytest.raises(local.Stop, match="preflight observation is unknown: gh"):
+        adapter._run("gh", "api", "user")
+
+
 def test_variable_listing_allows_absent_but_rejects_incomplete(monkeypatch):
     """404等を不在と誤認せず、完全な一覧でだけmissingをdisabledと扱う。"""
     adapter = local.SystemAdapter()
