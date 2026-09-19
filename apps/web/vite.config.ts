@@ -10,6 +10,7 @@ export default defineConfig({
     port: Number(process.env.AGENT_WORLD_WEB_PORT ?? 5173),
     strictPort: true,
     proxy: {
+      "/api/accounting": `http://127.0.0.1:${process.env.ACCOUNTING_API_PORT ?? "8020"}`,
       "/api": `http://127.0.0.1:${process.env.AGENT_WORLD_API_PORT ?? "8000"}`,
     },
   },

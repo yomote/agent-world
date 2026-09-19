@@ -539,6 +539,117 @@ code {
   padding: 5px 12px;
   margin-left: 12px;
 }
+.accounting-lab {
+  margin-top: 24px;
+  padding: 24px;
+  border: 1px solid #35536d;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #101c2a, #111821);
+}
+.scope-badge {
+  padding: 7px 10px;
+  border: 1px solid #4e7896;
+  border-radius: 999px;
+  color: #b9dff4;
+  font-size: 0.75rem;
+}
+.accounting-intro {
+  margin: 18px 0;
+  padding: 18px;
+  border-left: 4px solid #5cc8a1;
+  background: #162635;
+  line-height: 1.65;
+}
+.accounting-intro h3,
+.review-package h3 {
+  margin-top: 0;
+}
+.accounting-actions,
+.operator-question div,
+.accounting-status,
+.package-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.accounting-actions button,
+.operator-question button {
+  padding: 10px 14px;
+}
+.accounting-status {
+  margin: 16px 0;
+  color: #a9bfd2;
+  font-size: 0.8rem;
+}
+.accounting-status span {
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: #203144;
+}
+.accounting-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+.accounting-comparison button {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  text-align: left;
+  color: #b9cada;
+  border: 1px solid #34546a;
+  background: #132231;
+}
+.accounting-comparison button.selected {
+  border-color: #68d6ad;
+}
+.accounting-comparison p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9db4c7;
+  font-size: 0.8rem;
+}
+.accounting-error,
+.operator-question {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #895c55;
+  border-radius: 8px;
+  background: #322425;
+}
+.package-kpis > div {
+  min-width: 160px;
+  padding: 12px;
+  border: 1px solid #34546a;
+  border-radius: 8px;
+  background: #132231;
+}
+.package-kpis span,
+.package-kpis strong {
+  display: block;
+}
+.package-kpis span {
+  color: #9db4c7;
+  font-size: 0.75rem;
+}
+.package-kpis strong {
+  margin-top: 5px;
+  color: #d9f8ec;
+  font-size: 1.1rem;
+}
+.review-package article {
+  margin-top: 12px;
+  padding: 12px;
+  border-bottom: 1px solid #2d4659;
+}
+.scope-note {
+  color: #f2c987;
+}
+.accounting-trace {
+  margin-top: 18px;
+  color: #a9bfd2;
+}
 @media (max-width: 820px) {
   main {
     width: calc(100% - 28px);
@@ -574,5 +685,11 @@ code {
   }
   .lab-kpi {
     text-align: left;
+  }
+  .accounting-comparison {
+    grid-template-columns: 1fr;
+  }
+  .accounting-comparison p {
+    grid-column: auto;
   }
 }

@@ -63,3 +63,5 @@ venvを手動作成するなら `python -m venv .venv`、その環境で `python
 - PythonはUTF-8ソース。Windowsのコンソールが日本語を文字化け表示してもソースを別エンコードに変更しない。
 
 `vite preview` やdist単体のホストはAPIを提供しない。このSliceの通し動作には上記開発サーバー構成を使う。本番デプロイは対象外。
+
+会計Labを含む `npm run dev` はWorld API `127.0.0.1:8000`、Accounting API `127.0.0.1:8020`、Web `127.0.0.1:5173`を起動する。実モデル実行は既存ChatGPTログインのCodex CLI通常利用枠を消費する。追加課金や新しい認証設定は行わず、rate limit・認証拒否・結果不明では停止する。
