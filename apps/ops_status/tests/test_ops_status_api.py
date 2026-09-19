@@ -428,6 +428,48 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
     assert "immutable" in replaced.json()["detail"]
 
 
+def test_request_registry_rejects_stale_domain_requirement_at_api_boundary():
+    """CLIを迂回して古いDoD版のdomain判定をcompleted保存する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    running = request_record("request-45", now, lifecycle="running")
+    initialized = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [running],
+        },
+    )
+    assert initialized.status_code == 200
+
+    completed_at = now + timedelta(seconds=1)
+    completed = request_record("request-45", completed_at, lifecycle="completed")
+    completed["closure_audit"] = accepted_closure_audit("request-45", completed_at)
+    completed["closure_audit"]["requirements"][0]["source_version"] = "issue-updated:stale"
+
+    rejected = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "update",
+            "expected_generation": 1,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": completed_at.isoformat(),
+            "requests": [completed],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert "audited DoD version" in rejected.text
+    assert store.write_count == 1
+    assert store.value.request_registry.requests[0].lifecycle == "running"
+
+
 def test_legacy_completed_snapshot_remains_readable_without_closure_audit():
     """導入前のcompleted記録を新しい保存guardで読めなくする回帰を防ぐ。"""
     now = datetime.now(UTC)

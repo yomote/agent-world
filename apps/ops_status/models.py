@@ -343,6 +343,11 @@ class ClosureAudit(BaseModel):
             raise ValueError("closure requirement identifiers must be unique")
         if any(item.evidence_head != self.evidence_head for item in self.requirements):
             raise ValueError("closure requirement evidence must use the audited head")
+        if any(
+            item.category in {"domain", "value"} and item.source_version != self.dod_source_version
+            for item in self.requirements
+        ):
+            raise ValueError("domain and value requirements must use the audited DoD version")
         requirement_results = [item.result for item in self.requirements]
         derived = (
             "reject"
