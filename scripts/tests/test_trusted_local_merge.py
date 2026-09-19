@@ -3,6 +3,7 @@
 import base64
 import importlib.util
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -323,9 +324,12 @@ def execute(client, target, attempts, interval, dispatch_after_merge):
     assert local.run_existing_strict_gate("token", local.load_approval(packet())) == "merged"
 
 
-def test_real_trusted_gate_module_loads_utf8_dataclasses_without_network():
-    """Windows既定codepageに依存せず実trusted sourceをimportできる。"""
-    module = local._trusted_gate_module("031288738cd2efe5d929060926ffd1470afd3133")
+def test_current_gate_module_loads_utf8_dataclasses_without_network():
+    """Windows既定codepageに依存せず現在checkoutのgateをimportできる。"""
+    source = subprocess.run(
+        ("git", "rev-parse", "HEAD"), check=True, capture_output=True, text=True
+    ).stdout.strip()
+    module = local._trusted_gate_module(source)
     assert module.GateTarget(91, HEAD).number == 91
 
 
