@@ -28,7 +28,7 @@ PRの検証とmain / masterの検証は、マージ前後の異なる内容を�
 
 merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。GitHub clientは直列で、使用数・最終成功・defer時刻だけをjob logへ残す。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
 
-`execute_merge=false`のruleset可視性診断は、独立review済みの同一repo branch/refからだけ手動dispatchできる。`diagnostic_source`へその実行sourceの40桁SHAを入力し、workflowの`GITHUB_SHA`との一致を確認する。診断jobはread-onlyで、mergeとmerge後dispatchを実行しない。実行は独立review後に1回だけ判断し、結果不明なら再送しない。
+`execute_merge=false`のruleset可視性診断は、独立review済みの同一repo branch/refからだけ手動dispatchできる。`diagnostic_source`へその実行sourceの40桁SHAを入力し、workflowの`GITHUB_SHA`との一致を確認する。診断jobはruleset listing/detailだけをread-onlyで取得し、repositoryやPRのmerge eligibility、merge、merge後dispatchを実行しない。実行は独立review後に1回だけ判断し、結果不明なら再送しない。
 
 ## 開発エージェントの確認予算
 

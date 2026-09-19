@@ -360,6 +360,13 @@ def validate_rulesets_with_diagnostic(client: GitHubClient, rulesets: list[dict[
         ) from error
 
 
+def diagnose_rulesets(client: GitHubClient) -> str:
+    """merge可否の検査を経ずにruleset listing/detailの形だけを観測する。"""
+
+    rulesets = fetch_rulesets(client)
+    return redacted_ruleset_diagnostic(rulesets, client.last_http_status)
+
+
 def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
     matching = [
         run
@@ -586,15 +593,31 @@ def execute(
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pr_number", type=int)
-    parser.add_argument("expected_head")
+    parser.add_argument("pr_number", type=int, nargs="?")
+    parser.add_argument("expected_head", nargs="?")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--dispatch-after-merge", action="store_true")
     parser.add_argument("--bootstrap-source", action="store_true")
+    parser.add_argument("--ruleset-diagnostic", action="store_true")
     parser.add_argument("--ci-attempts", type=int, default=10)
     parser.add_argument("--ci-interval", type=int, default=60)
     args = parser.parse_args(argv)
-    if args.pr_number < 1 or not FULL_SHA_RE.fullmatch(args.expected_head):
+    if args.ruleset_diagnostic:
+        if (
+            args.pr_number is not None
+            or args.expected_head is not None
+            or args.execute
+            or args.dispatch_after_merge
+            or args.bootstrap_source
+        ):
+            parser.error("ruleset diagnostic cannot be combined with merge gate arguments")
+        return args
+    if (
+        args.pr_number is None
+        or args.expected_head is None
+        or args.pr_number < 1
+        or not FULL_SHA_RE.fullmatch(args.expected_head)
+    ):
         parser.error("positive PR number and lowercase 40-character SHA are required")
     if not 1 <= args.ci_attempts <= 10 or args.ci_interval < 60:
         parser.error("CI budget is at most 10 checks, at intervals of at least 60 seconds")
@@ -611,7 +634,9 @@ def main(argv: list[str] | None = None) -> int:
     client: GitHubClient | None = None
     try:
         client = GitHubClient(repository, token)
-        if args.execute:
+        if args.ruleset_diagnostic:
+            print(diagnose_rulesets(client))
+        elif args.execute:
             if args.bootstrap_source:
                 verify_bootstrap_source(args.expected_head)
             reviewer = execute(

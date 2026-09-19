@@ -10,7 +10,7 @@
 ## 決定
 
 - squash mergeの入口は信頼済み`main`の`workflow_dispatch`だけにする。PR番号、40桁のexpected head、merge実行の真偽を明示入力し、`ref=main`以外ではmerge jobを実行しない。
-- `execute_merge=false`のruleset可視性診断だけは、同一repoのレビュー済みbranch/refから手動dispatchできる。`diagnostic_source`の40桁SHAと`GITHUB_SHA`を一致検査し、`--execute`とmerge後dispatchを渡さず、read-only APIとGraphQL queryだけを使う。これはmerge入口ではない。診断を実行できることはbranch自体のreview済みをGitHub上で証明しないため、独立reviewと固定SHAの記録を運用上の前提にする。
+- `execute_merge=false`のruleset可視性診断だけは、同一repoのレビュー済みbranch/refから手動dispatchできる。`diagnostic_source`の40桁SHAと`GITHUB_SHA`を一致検査し、`--execute`とmerge後dispatchを渡さず、ruleset listing/detailのread-only APIだけを使う。repositoryやPRのmerge eligibilityは診断しない。これはmerge入口ではない。診断を実行できることはbranch自体のreview済みをGitHub上で証明しないため、独立reviewと固定SHAの記録を運用上の前提にする。
 - gateはopenかつReady、base=`main`、同一repo、merge可能、対象外labelなしを検査する。`needs-human`と`release`は対象外とし、merge可否が未知の間も実行しない。
 - 独立Sol reviewは、信頼できる投稿者がPRコメントの先頭へ次の証跡を記録する。40桁headが変われば失効する。
 

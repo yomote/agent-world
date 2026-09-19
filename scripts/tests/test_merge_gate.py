@@ -182,11 +182,43 @@ def test_ruleset_unknown_keeps_merge_blocked_and_adds_redacted_diagnostic():
         merge_gate.validate_rulesets_with_diagnostic(Client(), [ruleset])
 
 
+def test_ruleset_diagnostic_reads_only_listing_and_detail_shapes():
+    """専用診断はPR・repositoryのeligibilityを読まずruleset形だけを出す。"""
+
+    class Client:
+        repository = "owner/repo"
+        last_http_status = 200
+
+        def __init__(self):
+            self.paths = []
+
+        def get(self, path):
+            self.paths.append(path)
+            if path.endswith("/rulesets?per_page=100"):
+                return [{"id": 123}]
+            return {"id": 123, "bypass_actors": [{"actor_id": "sensitive-actor"}]}
+
+    client = Client()
+    rendered = merge_gate.diagnose_rulesets(client)
+    assert client.paths == [
+        "/repos/owner/repo/rulesets?per_page=100",
+        "/repos/owner/repo/rulesets/123",
+    ]
+    assert "status=200" in rendered
+    assert "bypass_actors=array:1" in rendered
+    assert "sensitive-actor" not in rendered
+    assert "actor_id" not in rendered
+
+
 def test_cli_enforces_bounded_ci_polling():
     """外部APIを短間隔または上限なしでpollする設定を許さない。"""
     args = merge_gate.parse_args(["7", SHA])
     assert (args.ci_attempts, args.ci_interval) == (10, 60)
     for argv in (["7", SHA, "--ci-attempts", "11"], ["7", SHA, "--ci-interval", "59"]):
+        with pytest.raises(SystemExit):
+            merge_gate.parse_args(argv)
+    assert merge_gate.parse_args(["--ruleset-diagnostic"]).ruleset_diagnostic
+    for argv in (["7", SHA, "--ruleset-diagnostic"], ["--ruleset-diagnostic", "--execute"]):
         with pytest.raises(SystemExit):
             merge_gate.parse_args(argv)
 
@@ -205,7 +237,7 @@ def test_merge_is_main_only_and_diagnosis_is_pinned_read_only():
     assert "--execute --dispatch-after-merge" in merge_section
     assert "if: inputs.execute_merge == false" in diagnose_section
     assert '[[ "$GITHUB_SHA" != "$DIAGNOSTIC_SOURCE" ]]' in diagnose_section
-    assert 'python scripts/merge_gate.py "$PR_NUMBER" "$EXPECTED_HEAD"' in diagnose_section
+    assert "python scripts/merge_gate.py --ruleset-diagnostic" in diagnose_section
     assert "--execute" not in diagnose_section
     assert "contents: write" not in diagnose_section
 

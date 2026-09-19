@@ -79,4 +79,4 @@ jobs:
             echo "workflow source does not match diagnostic_source" >&2
             exit 2
           fi
-          python scripts/merge_gate.py "$PR_NUMBER" "$EXPECTED_HEAD"
+          python scripts/merge_gate.py --ruleset-diagnostic
