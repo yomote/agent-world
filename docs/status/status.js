@@ -668,9 +668,18 @@ function renderPmTaskProjection(projection) {
     return;
   }
   section.hidden = false;
-  document.querySelector("#pm-task-projection-source").textContent =
-    `source: ${projection.source_kind} / version: ${projection.source_version} / ` +
-    `${dated(projection.observed_at)}。PM snapshot受領時の観測であり、GitHub live同期ではありません。`;
+  const source = document.querySelector("#pm-task-projection-source");
+  source.replaceChildren(
+    document.createTextNode(
+      `source: ${projection.source_kind} / version: ${projection.source_version} / ` +
+        `digest: ${projection.content_digest || "未取得"} / ${dated(projection.observed_at)}。` +
+        "PM snapshot受領時の観測であり、GitHub live同期ではありません。 source refs: ",
+    ),
+  );
+  for (const [index, ref] of (projection.source_refs || []).entries()) {
+    if (index) source.append(document.createTextNode(" / "));
+    source.append(optionalLink(`source ${index + 1}`, ref));
+  }
   const tasks = [...projection.tasks].sort((left, right) => {
     const leftDone = left.state === "completed";
     const rightDone = right.state === "completed";

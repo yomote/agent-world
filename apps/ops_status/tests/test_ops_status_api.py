@@ -119,6 +119,7 @@ def pm_task_projection(at: datetime) -> dict:
     return {
         "source_kind": "pm-observation",
         "source_version": "issue-45-pm-packet-v1",
+        "source_refs": ["https://github.com/yomote/agent-world/issues/45"],
         "observed_at": at.isoformat(),
         "tasks": [
             {
@@ -194,7 +195,28 @@ def test_pm_task_projection_rejects_older_or_ambiguous_full_replacement():
     response = TestClient(create_app(store)).put("/api/status", json=changed)
 
     assert response.status_code == 409
-    assert "ambiguous PM task projection" in response.json()["detail"]
+    assert "PM task cannot change at the same observation" in response.json()["detail"]
+
+    older_row = snapshot(now + timedelta(seconds=2))
+    older_row["source"] = "local-event-record"
+    older_row["pm_task_projection"] = pm_task_projection(now + timedelta(seconds=2))
+    older_row["pm_task_projection"]["tasks"][0]["observed_at"] = (
+        now - timedelta(seconds=1)
+    ).isoformat()
+    older = TestClient(create_app(store)).put("/api/status", json=older_row)
+    assert older.status_code == 409
+    assert "PM task observation cannot move backwards" in older.json()["detail"]
+
+
+def test_pm_task_projection_rejects_content_digest_from_other_rows():
+    """編集可能なsource URLだけで別内容を同じ版として受理しない。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["pm_task_projection"] = pm_task_projection(now)
+    data["pm_task_projection"]["content_digest"] = "sha256:" + "0" * 64
+
+    with pytest.raises(ValueError, match="content digest does not match"):
+        StatusSnapshot.model_validate(data)
 
 
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):

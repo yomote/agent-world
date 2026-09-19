@@ -1,3 +1,5 @@
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -452,6 +454,8 @@ class PmTaskProjection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_kind: Literal["pm-observation"]
     source_version: str = Field(min_length=1, max_length=200)
+    source_refs: list[HttpUrl] = Field(default_factory=list, max_length=16)
+    content_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     observed_at: AwareDatetime
     tasks: list[PmTaskObservation] = Field(min_length=1, max_length=64)
 
@@ -462,7 +466,33 @@ class PmTaskProjection(BaseModel):
             raise ValueError("PM task identifiers must be unique")
         if any(task.observed_at > self.observed_at for task in self.tasks):
             raise ValueError("PM task observation cannot be newer than its projection")
+        canonical = json.dumps(
+            [task.model_dump(mode="json") for task in self.tasks],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        expected = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+        if self.content_digest is not None and self.content_digest != expected:
+            raise ValueError("PM task projection content digest does not match its tasks")
+        self.content_digest = expected
         return self
+
+
+def validate_pm_task_projection_transition(
+    previous: PmTaskProjection, incoming: PmTaskProjection
+) -> None:
+    """projection全体の時計でtask rowの退行・同clock差替えを隠さない。"""
+
+    incoming_by_id = {task.task_id: task for task in incoming.tasks}
+    for old_task in previous.tasks:
+        new_task = incoming_by_id.get(old_task.task_id)
+        if new_task is None:
+            raise ValueError("PM task projection cannot silently remove a task")
+        if new_task.observed_at < old_task.observed_at:
+            raise ValueError("PM task observation cannot move backwards")
+        if new_task.observed_at == old_task.observed_at and new_task != old_task:
+            raise ValueError("PM task cannot change at the same observation")
 
 
 class StatusSnapshot(BaseModel):

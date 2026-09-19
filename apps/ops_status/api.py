@@ -26,6 +26,7 @@ from .models import (
     StatusUpsertReceipt,
     StatusUpsertRequest,
     WorkItem,
+    validate_pm_task_projection_transition,
 )
 from .store import (
     SnapshotConflictError,
@@ -186,6 +187,11 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
         if previous is not None:
             if replacement is None:
                 raise HTTPException(status_code=409, detail=f"full snapshot cannot clear {label}")
+            if field == "pm_task_projection":
+                try:
+                    validate_pm_task_projection_transition(previous, replacement)
+                except ValueError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
             reject_clocked_snapshot(previous, replacement, clock=clock, label=label)
     if (
         current.request_registry is not None

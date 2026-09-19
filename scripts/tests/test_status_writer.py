@@ -62,11 +62,13 @@ def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(
     root = Path(__file__).parents[2]
     output = tmp_path / "snapshot.json"
     projection = tmp_path / "pm-tasks.json"
+    comment = tmp_path / "pm-tasks.md"
     projection.write_text(
         json.dumps(
             {
                 "source_kind": "pm-observation",
                 "source_version": "issue-45-pm-packet-v1",
+                "source_refs": ["https://github.com/yomote/agent-world/issues/45"],
                 "observed_at": "2026-09-19T06:30:00Z",
                 "tasks": [
                     {
@@ -106,6 +108,8 @@ def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(
             str(projection),
             "--output",
             str(output),
+            "--pm-task-comment-output",
+            str(comment),
         ],
         cwd=root,
         input="[]",
@@ -117,10 +121,15 @@ def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert result.returncode == 0
     assert saved["pm_task_projection"]["tasks"][0]["task_id"] == "pr-92-continuity"
+    assert saved["pm_task_projection"]["content_digest"].startswith("sha256:")
     assert saved.get("request_registry") is None
+    rendered = comment.read_text(encoding="utf-8")
+    assert saved["pm_task_projection"]["content_digest"] in rendered
+    assert "pr-92-continuity" in rendered
 
     changed = json.loads(projection.read_text(encoding="utf-8"))
     changed["tasks"][0]["owner"] = "another-owner"
+    changed["observed_at"] = "2026-09-19T06:31:00Z"
     projection.write_text(json.dumps(changed), encoding="utf-8")
     rejected = subprocess.run(
         [
@@ -129,7 +138,7 @@ def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(
             "--source",
             "pm-confirmed",
             "--observed-at",
-            "2026-09-19T06:30:00Z",
+            "2026-09-19T06:31:00Z",
             "--pm-task-projection",
             str(projection),
             "--output",
@@ -142,4 +151,4 @@ def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(
         check=False,
     )
     assert rejected.returncode != 0
-    assert "same observation" in rejected.stderr
+    assert "PM task cannot change at the same observation" in rejected.stderr
