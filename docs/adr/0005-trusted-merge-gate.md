@@ -27,7 +27,10 @@
 - すべて揃った時だけexpected SHA付きsquash merge APIを1回呼ぶ。native auto-mergeは条件変化後も有効状態が残る可能性があるため無効のままにする。API結果が不明なら再送せず、同じheadのmerge完了をread-onlyで1回だけ確認する。
 - `GITHUB_TOKEN`によるmerge pushは別workflowを起動しないため、merge成功後にmain CIを`workflow_dispatch`し、`agent-world-merged` repository dispatchへPR番号、PR head、merge commit SHAを渡す。Azure deployはpayloadと現行main/PRを再検証する。どちらかのdispatchが失敗または不明なら再送せず、merge済みであることと各dispatchの`sent` / `failed` / `unknown` / `not_run`を明示して止める。
 - CI待ちは60秒以上の間隔で最大10回とする。権限不足、取得不能、100件を超えて全量を確認できないコメント／thread、書き込み結果不明、head/baseのraceは失敗として止め、書き込みを再送しない。
-- 正式 local entry を将来採用する場合も、review済みmainのwrapper、rootの個別approval packet、remote main SHAとclean detached sourceの完全一致を必須にする。現在この入口は未承認であり、初回bootstrapとして未merge sourceを使うにはreview済みcommit/tree hashとtrusted launcherをrootが明示承認する別例外が必要である。
+- 正式 local entry を将来採用する場合も、review済みmainのwrapper、rootの個別approval packet、remote main SHAとclean detached sourceの完全一致を必須にする。packetは対象headに結び付く独立review・CI・root approval commentと短いexpiryを含み、実行直前にAPIで照合する。同一GitHub accountのcommentは人間の独立性を暗号学的に保証しないため、rootのtrusted operator assertionを記録する運用上の根拠としてだけ扱う。
+- local entryはauthority/repository/PR/head/source/modeから導出した固定pathのoperation receiptをmerge API呼出し前に永続化する。`in_progress`、`unknown`、`failed`、`merged`の既存receiptはすべてterminalであり、packet IDやcaller指定pathを変えてもprocess再起動後に自動再送しない。strict gateは検証済みのgit objectから一時snapshotへ読込み、worktreeの変更後ファイルを実行しない。expiryは受付時とstrict gate内部のmerge PUT直前に検査する。
+- owner merge pushがdeploy workflowを起動し得るため、対象PR headの`.github/workflows` treeがtrusted sourceと完全一致し、`deploy-azure.yml` blobが監査済みdigestと一致することを確認する。その既知版で`AZURE_DEPLOY_ENABLED`のfalse時guardがcheckout/image build/OIDC/Azureより前にあることを検査し、実行直前に同変数を完全なrepository variables一覧から読む。変数が不在又は`true`以外なら、既知guardは空文字を`true`と扱わずAzure認証・設定値の使用より前に停止する。listingが不完全・取得不能、値が曖昧、又は`true`なら停止する。production environment保護は存在しても追加防御として許容する。この限定検査は管理者がpreflightからmerge APIまで設定を同時変更しないtrusted-operation前提に立つ。候補workflow tree、blob、guard、variable、environment、API読取りのいずれかが未知・変更なら停止する。動的variableだけを安全保証とはせず、固定workflow tree・監査済blob・既知guardと同時に要件とする。post-merge dispatchはlocal entryから行わない。
+- 現在この入口は未承認であり、初回bootstrapとして未merge sourceを使うにはreview済みcommit/tree hashとtrusted launcherをrootが明示承認する別例外が必要である。
 
 ## 初回bootstrap
 

@@ -28,7 +28,7 @@ PRの検証とmain / masterの検証は、マージ前後の異なる内容を�
 
 merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。GitHub clientは直列で、使用数・最終成功・defer時刻だけをjob logへ残す。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
 
-正式 local entry は未承認のproposalである。採用時はapproval packet、remote main SHA、clean detached source、指定ownerのstored `gh` auth、deploy非実行preflightを固定し、通常のmain workflow入口を緩和しない。root承認なしに実merge、credential追加、post-merge dispatchを行わない。
+正式 local entry は未承認のproposalである。採用時はexpiry付きapproval packet、remote main SHA、clean detached source、指定ownerのstored `gh` auth、対象headのreview/CI/root approval comment照合、deploy非実行preflightを固定し、通常のmain workflow入口を緩和しない。operation receiptは実merge前に排他的に保存し、unknownを含む既存receiptがあれば再起動後も停止する。root approval commentは同一GitHub accountでの人間承認を技術的に証明するものではなく、trusted operator assertionの記録として扱う。root承認なしに実merge、credential追加、post-merge dispatchを行わない。
 
 ## 開発エージェントの確認予算
 
