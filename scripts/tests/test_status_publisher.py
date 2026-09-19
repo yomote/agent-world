@@ -63,6 +63,38 @@ def snapshot(observed_at: datetime, status: str = "running") -> dict:
     }
 
 
+def pm_snapshot(observed_at: datetime) -> dict:
+    return {
+        "schema_version": 1,
+        "source": "pm-confirmed",
+        "observed_at": observed_at.isoformat(),
+        "received_at": observed_at.isoformat(),
+        "items": [],
+        "pm_task_projection": {
+            "source_kind": "pm-observation",
+            "source_version": "issue-45-comment-1",
+            "source_refs": ["https://github.com/yomote/agent-world/issues/45"],
+            "observed_at": observed_at.isoformat(),
+            "tasks": [
+                {
+                    "task_id": "pm-board",
+                    "title": "PM task board",
+                    "purpose": "PMのtask状態を表示する",
+                    "acceptance_summary": "Azureでread-only表示する",
+                    "owner": "governance-continuity",
+                    "state": "running",
+                    "current_step": "publisherを検証中",
+                    "next_action": "reviewへ渡す",
+                    "issue_url": "https://github.com/yomote/agent-world/issues/45",
+                    "source_version": "issue-45-comment-1",
+                    "observed_at": observed_at.isoformat(),
+                    "po_status": "pending",
+                }
+            ],
+        },
+    }
+
+
 def args(tmp_path, observed_at: datetime) -> argparse.Namespace:
     source = tmp_path / "snapshot.json"
     source.write_text(json.dumps(snapshot(observed_at)), encoding="utf-8")
@@ -197,15 +229,38 @@ def test_publisher_stops_after_interrupted_attempt(tmp_path):
     assert settings.state.read_bytes() == persisted
 
 
-def test_publisher_rejects_manual_snapshot(tmp_path):
-    """PM手動snapshotをevent sourceとして外部送信する回帰を防ぐ。"""
+def test_publisher_sends_projection_only_without_runtime_or_control_fields(tmp_path):
+    """PM観測publishがruntime/controlを混ぜて既存Blob状態を消す回帰を防ぐ。"""
     settings = args(tmp_path, datetime.now(UTC))
-    data = json.loads(settings.snapshot.read_text())
-    data["source"] = "pm-confirmed"
-    settings.snapshot.write_text(json.dumps(data), encoding="utf-8")
+    settings.snapshot.write_text(json.dumps(pm_snapshot(datetime.now(UTC))), encoding="utf-8")
+    sends = []
 
-    with pytest.raises(ValueError, match="local-event-record"):
-        publish_if_new(settings, lambda *_: "token", lambda *_: 200)
+    assert publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 200)
+    payload = json.loads(sends[0][2])
+    assert set(payload) == {"source", "pm_task_projection"}
+    assert payload["source"] == "pm-confirmed"
+    assert "request_registry" not in payload
+    assert "runtime_binding" not in payload
+
+
+@pytest.mark.parametrize("mutation", ["missing-projection", "runtime-item", "runtime-binding"])
+def test_publisher_rejects_invalid_pm_projection_snapshot(tmp_path, mutation):
+    """欠落projectionやruntime/control混在をtoken取得とPUTより前に止める。"""
+    current = datetime.now(UTC)
+    settings = args(tmp_path, current)
+    data = pm_snapshot(current)
+    if mutation == "missing-projection":
+        data.pop("pm_task_projection")
+    elif mutation == "runtime-item":
+        data["items"] = snapshot(current)["items"]
+    else:
+        data["runtime_binding"] = snapshot(current)["runtime_binding"]
+    settings.snapshot.write_text(json.dumps(data), encoding="utf-8")
+    sends = []
+
+    with pytest.raises(ValueError, match="PM task projection|runtime or control"):
+        publish_if_new(settings, lambda *_: "token", lambda *call: sends.append(call) or 200)
+    assert sends == []
 
 
 def test_publisher_stops_before_send_without_a_successful_claim_binding(tmp_path):

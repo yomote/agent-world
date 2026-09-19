@@ -541,20 +541,40 @@ class StatusResponse(StatusSnapshot):
 
 
 class StatusUpsertRequest(BaseModel):
-    """ingestが明示した行とcapacityだけを既存snapshotへ反映する。"""
+    """ingestが明示したruntime行またはPM観測だけを既存snapshotへ反映する。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["local-event-record"]
+    source: Literal["local-event-record", "pm-confirmed"]
     items: list[WorkItem] = Field(default_factory=list, max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")
     def check_targets(self) -> "StatusUpsertRequest":
+        projection_supplied = "pm_task_projection" in self.model_fields_set
+        if projection_supplied and self.pm_task_projection is None:
+            raise ValueError("pm_task_projection cannot be null when supplied")
+        runtime_fields = {
+            "runtime_capacity",
+            "focus_summary",
+            "session_tree",
+            "known_history",
+            "runtime_binding",
+        }
+        supplied_runtime_fields = runtime_fields.intersection(self.model_fields_set)
+        if self.source == "pm-confirmed":
+            if not projection_supplied:
+                raise ValueError("pm-confirmed upsert needs a PM task projection")
+            if self.items or supplied_runtime_fields:
+                raise ValueError("pm-confirmed upsert cannot mutate runtime or control fields")
+            return self
+        if projection_supplied:
+            raise ValueError("local-event-record cannot mutate PM task projection")
         agents = [item.agent for item in self.items]
         if len(agents) != len(set(agents)):
             raise ValueError("upsert items must have unique agent identifiers")
@@ -608,4 +628,5 @@ class StatusUpsertReceipt(BaseModel):
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None

@@ -448,11 +448,14 @@ export function requestBoardStatus(request, now = Date.now()) {
   if (["blocked", "review-wait", "stopped"].includes(request.lifecycle)) {
     if (!request.resume_trigger) missing.push("resume trigger");
   }
-  const poState = !request.po_review_required
-    ? "対象外"
-    : request.po_acceptance_receipt?.decision === "accepted"
-      ? "PO本人が確認済み"
-      : "PO確認待ち";
+  const poState =
+    request.po_review_required === undefined
+      ? "未確認"
+      : !request.po_review_required
+        ? "対象外"
+        : request.po_acceptance_receipt?.decision === "accepted"
+          ? "PO本人が確認済み"
+          : "PO確認待ち";
   return {
     freshness,
     ageSeconds,
@@ -849,11 +852,6 @@ function renderRequestRegistry(snapshot) {
       request.report_source === "manual-public-summary" ? "手動公開summary" : "未取得",
     );
     metaRow(dl, "次手", request.next_action || "未報告");
-    metaRow(dl, "DoD source version", request.dod_source_version || "未報告");
-    metaRow(dl, "成果head", request.expected_artifact_head || "未報告");
-    metaRow(dl, "内部closure", board.closure);
-    metaRow(dl, "PO確認", board.poState);
-    metaRow(dl, "PO package配送", board.poDelivery);
     metaRow(
       dl,
       "Issue",

@@ -95,7 +95,7 @@ Azure公開の構成、停止条件、credential境界、rollbackは[Azure管理
 
 依頼選択時、`runtime_connection=connected`かつ現在treeとのmember交差がある依頼だけを現在接続として扱う。`record-only`や`unknown`の過去依頼へ同じagent aliasの最新treeを流用しない。capacityはroot runtime全体の観測であり、依頼別へ合算・再ラベルしない。handoverと復元の手順は[Front Desk依頼registry運用](request-registry.md)に従う。
 
-画面上部の「PM管理タスク」は既存status snapshot内のread-only boardである。Issueの目的・ACとPRの差分・証跡を正本とし、有効なFront Desk claimがある依頼はrequest registryから表示する。registryはPMが確認したowner、task lifecycle、現在step、次手、blocker、誰待ち、復帰条件、DoD版、成果head、closure、PO確認要否を公開cacheとして保持する。各requestの`report_updated_at`が120秒を超えればstale、未来または解釈不能ならunknownと表示し、snapshot全体の受信時刻でfreshへ上書きしない。owner、次手、復帰条件の欠落は「未報告」または`unresolved`として残す。
+画面上部の「PM管理タスク」は既存status snapshot内のread-only boardである。Issueの目的・ACとPRの差分・証跡を正本とし、有効なFront Desk claimがある依頼はrequest registryから表示する。registryは既存schemaにあるowner、task lifecycle、現在step、次手、blocker、誰待ち、復帰条件を表示し、未導入のclosureやPO状態を「対象外」と推測しない。各requestの`report_updated_at`が120秒を超えればstale、未来または解釈不能ならunknownと表示し、snapshot全体の受信時刻でfreshへ上書きしない。owner、次手、復帰条件の欠落は「未報告」または`unresolved`として残す。
 
 有効なFront Desk claimがないPM確認taskは、同じstatus snapshotの`pm_task_projection`へ`source_kind=pm-observation`、正本参照、source version、観測時刻付きで保存する。これは再生成可能なread-only cacheであり、request registry、root claim、handoffへ昇格しない。各rowのcanonical JSONから`content_digest`を生成・照合し、同じtyped projectionからIssue comment用Markdownも生成する。source commentとcacheを別々に手編集しない。画面はPM観測とFront Desk依頼registryを別見出しで表示し、「PM snapshot受領時・GitHub live同期ではない」と明示する。隔離保存先へ投影して開く例は次の通りである。
 
@@ -109,6 +109,17 @@ python scripts/python_env.py scripts/write_status_snapshot.py `
   --output artifacts/status/pm-task-board.local.json
 $env:AGENT_WORLD_STATUS_SNAPSHOT = "artifacts/status/pm-task-board.local.json"
 npm run status:dev
+```
+
+Azureへ投影する場合も既存Status.Ingestの`PUT /api/status/upsert`だけを使う。`source=pm-confirmed`は`pm_task_projection`だけを受理し、runtime行、capacity、request registry、claim bindingの同時更新を拒否する。APIはtask単位のclockとdigestを検査し、既存Blobの他fieldを保持してETag CASで1回保存する。publisherは次のように専用stateを使い、応答不明なら`unknown`で停止する。GitHubの再pollや自動再送は行わない。
+
+```powershell
+python scripts/python_env.py scripts/publish_status_snapshot.py `
+  --base-url https://<existing-status-fqdn> `
+  --audience <existing-api-audience> `
+  --ingest-client-id <approved-ingest-client-id> `
+  --snapshot artifacts/status/pm-task-board.local.json `
+  --state artifacts/status/pm-task-board-publish-state.json
 ```
 
 ブラウザでは同じURLを再読込し、owner、状態、現在step、次手、blocker、誰待ち、source version、観測の鮮度、Issue/PR、PO確認を確認する。停止はserver processで`Ctrl+C`を実行する。既存`artifacts/status/current.json`やactive registryを上書きしない。

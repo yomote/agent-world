@@ -602,6 +602,18 @@ test("request freshnessは境界内だけfreshで不正clockをunknownにする"
   );
 });
 
+test("旧request schemaの欠落PO状態を対象外へ推測しない", async () => {
+  // PR92未導入のfield欠落をPO確認不要と誤表示する回帰を防ぐ。
+  const board = requestBoardStatus({ lifecycle: "running", report_updated_at: null });
+  assert.equal(board.poState, "未確認");
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  const registryRenderer = source.slice(
+    source.indexOf("function renderRequestRegistry"),
+    source.indexOf("function renderTree("),
+  );
+  assert.doesNotMatch(registryRenderer, /内部closure|DoD source version|成果head|PO package配送/);
+});
+
 test("PM観測projectionはcontrol registryと分離して不足とPO待ちを表示する", async () => {
   // claimのないread-only観測を架空Front Desk registryへ昇格する回帰を防ぐ。
   const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");

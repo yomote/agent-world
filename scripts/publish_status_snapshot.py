@@ -94,6 +94,11 @@ def snapshot_digest(snapshot: Any) -> str:
 
 def status_upsert_payload(snapshot: Any) -> bytes:
     """full snapshotからregistryを保持するpartial upsertだけを生成する。"""
+    if snapshot.source == "pm-confirmed":
+        payload = snapshot.model_dump(
+            mode="json", include={"source", "pm_task_projection"}, exclude_none=True
+        )
+        return json.dumps(payload, ensure_ascii=False).encode()
     fields = {
         "source",
         "items",
@@ -119,10 +124,28 @@ def publish_if_new(
     if state.get("outcome") in {"attempting", "unknown"}:
         raise RuntimeError("previous write result is unknown; inspect actual before continuing")
     snapshot = StatusSnapshot.model_validate_json(args.snapshot.read_bytes())
-    if snapshot.source != "local-event-record":
-        raise ValueError("only local-event-record snapshots can be published")
-    if snapshot.runtime_binding is None:
-        raise ValueError("successful Front Desk claim marker binding is required before publish")
+    if snapshot.source == "local-event-record":
+        if snapshot.runtime_binding is None:
+            raise ValueError(
+                "successful Front Desk claim marker binding is required before publish"
+            )
+    elif snapshot.source == "pm-confirmed":
+        if snapshot.pm_task_projection is None:
+            raise ValueError("pm-confirmed snapshot needs a PM task projection")
+        if snapshot.items or any(
+            value is not None
+            for value in (
+                snapshot.runtime_capacity,
+                snapshot.focus_summary,
+                snapshot.session_tree,
+                snapshot.known_history,
+                snapshot.request_registry,
+                snapshot.runtime_binding,
+            )
+        ):
+            raise ValueError("pm-confirmed snapshot cannot mutate runtime or control fields")
+    else:
+        raise ValueError("only local-event-record or pm-confirmed snapshots can be published")
     observed_at = snapshot.observed_at.isoformat()
     digest = snapshot_digest(snapshot)
     if state.get("last_confirmed_digest") == digest:
