@@ -26,9 +26,30 @@ lychee本体は固定バージョン・OS・CPUアーキテクチャをキーに
 
 PRの検証とmain / masterの検証は、マージ前後の異なる内容を確認するため両方残す。ドキュメントも整形チェックの対象なのでpath filterは設けない。workflow単位のスキップによって必須チェックがPendingのままになる運用も避ける。Draftのskipは検証成功を意味しない。Ready for review後の最新の結果を確認する。
 
-merge gateは単発dispatchの中だけで対象PRのCIを60秒以上の間隔・最大10回確認する。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。GitHub clientは直列で、使用数・最終成功・defer時刻だけをjob logへ残す。`GITHUB_TOKEN`によるmerge後はpushイベントがworkflowを起動しないため、同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。条件と異常時の扱いは[ADR 0005](../adr/0005-trusted-merge-gate.md)に従う。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+## Merge gateとformal local entryの運用
 
-正式 local entry は未承認のproposalである。採用時はexpiry付きapproval packet、remote main SHA、clean detached source、指定ownerのstored `gh` auth、対象headのreview/CI/root approval comment照合、deploy非実行preflightを固定し、通常のmain workflow入口を緩和しない。operation receiptは実merge前に排他的に保存し、unknownを含む既存receiptがあれば再起動後も停止する。root approval commentは同一GitHub accountでの人間承認を技術的に証明するものではなく、trusted operator assertionの記録として扱う。root承認なしに実merge、credential追加、post-merge dispatchを行わない。
+この節をmerge手順・承認条件・停止条件の正本とする。[ADR 0005](../adr/0005-trusted-merge-gate.md)は、trusted source、current head、確定主体を分離する設計上の理由だけを記録する。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+
+### main workflowのmerge gate
+
+- 入口は信頼済み`main`の`workflow_dispatch`だけである。PR番号、40桁のexpected head、merge実行の真偽を明示入力し、`ref=main`以外ではjobを実行しない。コメント、label、CI完了、scheduleから新しいworkflowを連鎖起動せず、全open PRを巡回しない。
+- gateはopenかつReady、base=`main`、同一repo、merge可能、対象外labelなしを検査する。`needs-human`と`release`は対象外とし、merge可否が未知の間も実行しない。独立review markerは対象head、`verdict: pass`、reviewer識別子を含むcurrent-head証跡である。同じGitHub accountからのmarkerはreviewerのidentityや独立性を認証しないため、PMが別会話で割り当てた独立reviewの受入記録として扱う。取り消すときは新しいtrusted declarationを`verdict: fail`で投稿し、gateは最新の宣言を優先する。
+- gateは対象headの`pull_request` CI runの`completed/success`、activeなmain rulesetのPR必須・未解決thread禁止・strictな`check`必須・管理者を含むbypassなしをAPIで照合する。`skipped`、古いhead、別PR、自己発行commit statusは根拠にしない。権限不足、取得不能、100件を超えて全量を確認できないcomment/thread、head/baseのraceは停止条件である。
+- 条件が揃ったときだけ、expected SHA付きsquash merge APIを1回呼ぶ。結果がunknownなら再送せず、同じheadのmerge完了をread-onlyで1回だけ確認する。CI待ちは60秒以上の間隔・最大10回、GitHub clientは直列とし、使用数・最終成功・defer時刻だけをjob logへ残す。
+- `GITHUB_TOKEN`によるmerge pushはpush workflowを起動しないため、merge成功後に同じgateがmain CIを`workflow_dispatch`し、配備側へ`agent-world-merged` repository dispatchを1回送る。いずれかのdispatchがfailedまたはunknownなら再送せず、merge済みであることと各dispatchの`sent`、`failed`、`unknown`、`not_run`を記録して停止する。
+
+### formal local entry
+
+formal local entryの構造は採用済みだが、採用は個別operationの承認や実行成功を意味しない。通常のmain workflow入口を緩和しない追加の実行入口として、既定はdry-runにする。`--execute`、有効なapproval packet、rootの明示承認がそろわなければ実mergeしない。新credentialや権限を追加せず、親の`GH_TOKEN` / `GITHUB_TOKEN`を除去した指定ownerのstored `gh` authだけを使う。normal modeによる実merge成功は未記録であり、個別実行の成否はoperation receiptとPRの記録で判断する。この節の記述やpreflightだけで成功済みと扱わない。
+
+- approval packetは対象PR、40桁expected head、trusted sourceとsource tree、指定owner、実行mode、expiry、対象headへ結び付く独立review・CI・root approval commentを含む。実行直前にAPIで照合する。root approval commentは同一GitHub accountの人間による独立承認を技術的に証明せず、trusted operator assertionの記録に限る。
+- remote main SHAとclean detached sourceをtrusted sourceへ完全一致させる。strict gateは検証済みgit objectから一時snapshotへ読み、worktreeの変更後ファイルを実行しない。authority、repository、PR、head、source、modeから導出する固定pathへ、merge APIの前にoperation receiptを排他的に永続化する。`in_progress`、`unknown`、`failed`、`merged`の既存receiptはすべてterminalであり、packet IDやcaller指定pathを変えても再起動後に自動再送しない。expiryは受付時とstrict gate内部のmerge PUT直前に確認する。
+- ownerのmerge pushがdeploy workflowを起動し得るため、対象PR headの`.github/workflows` treeがtrusted sourceと完全一致し、`deploy-azure.yml` blobが監査済みdigestと一致することを確認する。既知版で`AZURE_DEPLOY_ENABLED`のfalse時guardがcheckout、image build、OIDC、Azureより前にあることを検査し、実行直前に完全なrepository variables一覧から同変数を読む。完全な一覧で不在、または明示`false`なら既知guardが副作用前に停止する。listingが不完全・取得不能、値が曖昧・`true`、workflow tree/blob/guard/environment/API読取りが未知または変更なら停止する。production environment保護は存在しても追加防御として許容する。管理者がpreflightからmerge APIまで設定を同時変更しないことをtrusted-operation前提として記録し、動的variableだけを安全保証とは扱わない。
+- local entryはpost-merge dispatchを行わない。root承認なしに実merge、credential追加、post-merge dispatchを行わない。書き込み結果がunknownなら再送しない。
+
+### bootstrapの境界
+
+mainに存在しないsourceをformal local entryのtrusted sourceとして自己導入しない。未merge sourceを使うbootstrapは未承認であり、このrunbookは実行可能な代替手順を定めない。必要になった場合は、review済みcommit/tree hash、trusted launcher、rootの明示承認を含む別設計・別approval packetを先にレビューする。
 
 ## 開発エージェントの確認予算
 

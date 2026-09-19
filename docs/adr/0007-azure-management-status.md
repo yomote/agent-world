@@ -11,11 +11,11 @@
 
 管理専用Resource Group `rg-agent-world-mgmt-jpe`へAzure Container Apps Consumptionを1 app置く。既存FastAPIと静的UIを単一imageでそのまま動かし、0.25 vCPU / 0.5 GiB、min replica 0、max replica 1とする。最新snapshot 1件だけをStandard_LRS Storageの非公開Blobへ保存し、Container Appのuser-assigned managed identityへ対象container scopeのBlob data権限を与える。Storage shared keyとBlob匿名公開は無効にする。
 
-Container AppsのEasy Authをsingle-tenant Entraへ接続し、`/healthz`以外を認証必須にする。許可principalは本人OIDと専用ingest service principalだけとし、backendでもGET・静的UIは本人OID、PUTはingest OIDへ分ける。Container Appsが渡すprincipal headerは外部requestから設定できないというplatform境界を使う。ingest appには`Status.Ingest` application roleだけを与え、credentialは初回承認後に発行する。
+Container AppsのEasy Authをsingle-tenant Entraへ接続し、`/healthz`以外を認証必須にする。許可principalは本人OIDと専用ingest service principalだけとし、backendでもGET・静的UIは本人OID、PUTはingest OIDへ分ける。Container Appsが渡すprincipal headerは外部requestから設定できないというplatform境界を使う。ingest appには`Status.Ingest` application roleだけを与える。credentialの発行・保管・rotation条件は[Azure管理status 初回公開packet](../runbooks/azure-management-status.md)を正本とする。
 
 local publisherは新しい`local-event-record`だけをPUTする。送信前に観測時刻をattempt済みとしてlocal stateへ保存し、応答が不明なら停止する。同じsnapshotを次tickで再送しない。Azure SDKのBlob clientもwrite retryを0にする。公開先へ送るのはschemaで許可したlabel、role、status、timestamp、Issue / PR URL、source / received metadataだけである。
 
-認証client secretは管理RGのKey Vaultへ置き、Container Appはmanaged identityで参照する。Log Analyticsは30日保持、日次0.023 GB cap。Budgetは月1,000円、50% actual / 80% forecast / 100% actual通知を候補とするが、請求通貨JPYと通知先を確認できるまでapplyしない。Budgetとログcapは費用のhard capではない。
+認証client secretは管理RGのKey Vaultへ置き、Container Appはmanaged identityで参照する。公開順、費用・請求通貨、Budget、Log Analyticsの運用条件は[Azure管理status 初回公開packet](../runbooks/azure-management-status.md)と[Azure cost・構成ドリフト](../runbooks/azure-cost-drift.md)を正本とする。
 
 ```mermaid
 flowchart LR

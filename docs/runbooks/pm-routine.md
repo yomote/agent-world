@@ -1,6 +1,6 @@
 # 日次PM棚卸し
 
-`\Codex\AgentWorldPmRoutine` は毎日09:00 JST、ログオン中だけ、最大10分で動く読取り専用Taskである。重複起動は `IgnoreNew`。公開GitHub RESTをtokenなしで最大8回読むため、秘密やCodex loginは使わない。
+`\Codex\AgentWorldPmRoutine` は毎日09:00 JST、ログオン中だけ、最大10分で動く読取り専用Taskである。重複起動は `IgnoreNew`。公開GitHub RESTをtokenなしで、全Issue一覧、全PR一覧、重点6 Issueを含む最大8回・各15秒timeoutで読む。最初のread失敗後は追加readしないため、秘密やCodex loginは使わない。
 
 登録と最初の確認は次で行う。
 

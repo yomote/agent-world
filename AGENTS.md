@@ -14,7 +14,7 @@
 ## 開発ループ
 
 1. 課題ごとの着工packet、状態、独立レビュー、current headへの証跡、短い振返りは[単一課題の完遂ループ](docs/runbooks/single-task-loop.md)に従う。正本は目的・状態がIssue、差分・証跡がPRであり、DraftのCI skipやdirty stateの結果をPASSとしない。
-2. 変更対象の仕様と影響範囲を確認する。設計判断は `docs/adr/` に理由とトレードオフを記録する。
+2. 変更対象の仕様と影響範囲を確認する。設計判断は `docs/adr/` に理由とトレードオフを記録する。運用手順、trigger、承認、merge条件、予算、ownerは原則 `docs/runbooks/` を正本とする。Terraformの導入・照合のように担当領域のREADMEを正本としている手順は、そのREADMEへ集約する。ADRには構造・責務・信頼境界・代案・トレードオフだけを記録する。
 3. 必要最小限の変更を行い、静かに壊れる性質をテストする。各テストには防ぐ回帰をコメントで説明する。
 4. `npm run check` でlint・format・unit・buildを実行する。単体だけで画面の動作確認済みとしない。
 5. API変更時は `npm run api:generate`。`docs/api/openapi.json` と `apps/web/src/api/schema.d.ts` は生成物で手編集しない。

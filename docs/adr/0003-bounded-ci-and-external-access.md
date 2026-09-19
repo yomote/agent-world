@@ -13,17 +13,15 @@
 
 - GitHub Actionsの標準 `concurrency` で、同じworkflowのPR番号またはブランチをグループにし、古い実行を取り消す。別PRのチェックを相互に取り消さない。
 - Draftではjobをskipし、`ready_for_review` で検証する。`converted_to_draft` も受け付け、古い実行をキャンセル対象にする。
-- PR更新とmain / masterの検証、1job・10分のtimeout・read-only権限・依存キャッシュを維持する。定期起動、コメント駆動、自動再実行、CIから別のCIを起動する連鎖は追加しない。
-- 開発エージェントはpushをまとめる。状態照会は対象を絞り、60秒以上の間隔・runあたり最大10回、ログ取得は失敗箇所だけにする。制限応答の待機指示を守り、読み取りの再試行は最大2回で止める。詳細は [CI運用](../runbooks/ci.md) と [AGENTS.md](../../AGENTS.md) に置く。
+- PR更新とmain / masterの検証は、read-only権限のworkflowで扱う。定期起動、コメント駆動、自動再実行、CIから別のCIを起動する連鎖は追加しない。実行予算、照会、制限応答の扱いは[CIと外部アクセスの運用](../runbooks/ci.md)と[AGENTS.md](../../AGENTS.md)を正本とする。
 
 ## トレードオフ
 
-- `concurrency` は古い実行を取り消すが、workflowの作成数や異なるPR間の同時実行数は制限しない。pushをまとめる運用が必要。
+- `concurrency` は古い実行を取り消すが、workflowの作成数や異なるPR間の同時実行数は制限しない。
 - Draftでもworkflowの記録は残るが、jobを省くので依存の取得と検証にrunnerを使わない。Ready for reviewまではリモート検証が遅れるため、ローカルの `npm run check` を使う。
 - main / masterの検証はPRと近い内容を再検証する場合があるが、統合後の状態を確認するため残す。
 - 文書のみの変更も整形確認が必要なのでpath filterは使わない。必須チェックをworkflowごとskipしてPendingにする問題も避ける。
-- API照会の予算はAgent規約であり、プログラムによる強制ではない。現時点で外部APIクライアントがないため、共通レート制御や監視基盤を先に実装する複雑さを避ける。
-- GitHubの制限には非公開・変動する条件があり、一定の回数ならボット判定されないという保証はできない。実行頻度を抑え、拒否時に停止する方針とする。
+- 外部APIの予算を共通レート制御や監視基盤として先に実装せず、GitHubの非公開・変動する制限を回避できる保証はしない。
 
 ## 参照
 
