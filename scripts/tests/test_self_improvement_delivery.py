@@ -808,6 +808,84 @@ def test_unknown_review_post_has_explicit_read_only_reconcile_path(task, monkeyp
     assert task.data()["review_reconciled_operation_id"] == identifier
 
 
+def test_visibility_postcondition_resumes_only_declared_pending_stage(task, monkeypatch):
+    """初回visible receipt後のR6だけを同headの最終reviewへ進める回帰を防ぐ。"""
+    review_input = json.loads(json.dumps(REVIEW_INPUT))
+    review_input["live_postconditions"] = [
+        {"acceptance_id": "AC-TEST", "kind": "github_review_visibility"}
+    ]
+    head = "d" * 40
+    url = "https://github.com/yomote/agent-world/pull/91#pullrequestreview-1"
+    prior = {
+        "head": head,
+        "url": url,
+        "review_id": 1,
+        "key": "prior-key",
+        "actor": "yomote",
+        "state": "COMMENTED",
+    }
+    review = {
+        "head": head,
+        "reviewer": delivery.REVIEWER,
+        "verdict": "pass",
+        "findings": [],
+        "verified": ["independent review"],
+        **review_input,
+    }
+    data = task.data()
+    data.update(
+        state="stopped",
+        reason="review_postcondition_pending",
+        token=None,
+        lease_until=None,
+        head=head,
+        pr=91,
+        review=review,
+        review_input=review_input,
+        review_delivery=prior,
+        review_summary_body="fixed summary",
+    )
+    task.save_event(data, "test_postcondition_pending")
+    updated = json.loads(json.dumps(review_input))
+    updated["acceptance_map"][0].update(status="achieved", evidence=f"visible: {url}")
+    packet = {
+        "head": head,
+        "pr_number": 91,
+        "receipt_url": url,
+        "ui_evidence": {
+            "review_url": url,
+            "head": head,
+            "pr_number": 91,
+            "actor": "yomote",
+            "state": "COMMENTED",
+            "surfaces": ["conversation", "files_changed"],
+        },
+        "review_input": updated,
+    }
+    source = task.root / "postcondition.json"
+    source.write_text(json.dumps(packet), encoding="utf-8")
+    calls = []
+
+    def publish(operation, arguments, **kwargs):
+        calls.append(operation)
+        assert operation == "publish_pr_review"
+        return {
+            "head": head,
+            "url": "https://github.com/yomote/agent-world/pull/91#pullrequestreview-2",
+            "review_id": 2,
+            "key": delivery.review_key(arguments["review"], head),
+            "actor": "yomote",
+            "state": "COMMENTED",
+        }
+
+    monkeypatch.setattr(task.transport, "call", publish)
+    monkeypatch.setattr(task, "after_review_visible", lambda *args: "continued")
+    assert task.confirm_review_postcondition("postcondition.json") == "continued"
+    assert calls == ["publish_pr_review"]
+    assert task.data()["review_delivery_history"] == [prior]
+    assert task.data()["review_input"]["acceptance_map"][0]["status"] == "achieved"
+
+
 def test_helper_review_recovery_uses_bound_checkout_and_is_atomic(task, monkeypatch):
     """helperをrootで検証する誤りと、取消しだけcommitされる中断回帰を防ぐ。"""
     helper = delivery.Campaign(task, "billing-helper")

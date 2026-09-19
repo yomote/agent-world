@@ -11,7 +11,13 @@ from uuid import uuid4
 
 from .evidence import thread_id
 from .jobs import run_job
-from .review_delivery import acceptance_gate, render_review_input, review_key, validate_review_input
+from .review_delivery import (
+    acceptance_gate,
+    apply_visibility_postcondition,
+    render_review_input,
+    review_key,
+    validate_review_input,
+)
 from .runner import ROOT, Runner, digest, dispatcher, read_input, safe_path
 from .transport import Stop, Transport, atomic_json
 
@@ -677,9 +683,19 @@ class Campaign:
         data["acceptance_gate"] = gate
         self.save_event(data, "required_acceptance_checked")
         if not gate["ready"]:
-            self.finish_step("stopped", "required_acceptance_unmet")
+            declared = {
+                item["acceptance_id"]
+                for item in self.data()["review_input"].get("live_postconditions", [])
+            }
+            pending = {item["acceptance_id"] for item in gate["unmet"]}
+            reason = (
+                "review_postcondition_pending"
+                if pending and pending == declared
+                else "required_acceptance_unmet"
+            )
+            self.finish_step("stopped", reason)
             self.token = None
-            raise Stop("stopped", "required_acceptance_unmet")
+            raise Stop("stopped", reason)
         self.transport.call(
             "post_review_evidence",
             {
@@ -703,6 +719,84 @@ class Campaign:
         self.save_event(data, "ready_pr")
         self.wait_ci(head, number)
         self.normal_merge(head, number)
+
+    def confirm_review_postcondition(self, source):
+        """PMが確認した同headのlive review可視性だけを二段目reviewへ反映する。"""
+        data = self.data()
+        if (
+            data["state"] != "stopped"
+            or data["reason"] != "review_postcondition_pending"
+            or data.get("token")
+            or time.time() >= data["deadline"]
+        ):
+            raise Stop("stopped", "review_postcondition_state_invalid")
+        try:
+            packet = json.loads(read_input(self.root, source).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            raise Stop("stopped", "review_postcondition_input_invalid") from None
+        if set(packet) != {"head", "pr_number", "receipt_url", "ui_evidence", "review_input"}:
+            raise Stop("stopped", "review_postcondition_input_invalid")
+        prior_receipt = data.get("review_delivery", {})
+        if (
+            packet["head"] != data.get("head")
+            or packet["pr_number"] != data.get("pr")
+            or packet["receipt_url"] != prior_receipt.get("url")
+        ):
+            raise Stop("stopped", "review_postcondition_target_mismatch")
+        updated = apply_visibility_postcondition(
+            data["review_input"],
+            packet["review_input"],
+            head=data["head"],
+            pr_number=data["pr"],
+            receipt=prior_receipt,
+            ui_evidence=packet["ui_evidence"],
+        )
+        self.token = str(uuid4())
+        self.monotonic_deadline = time.monotonic() + max(0, data["deadline"] - time.time())
+        data.update(token=self.token, lease_until=time.time() + 30, review_input=updated)
+        data["review_input_sha256"] = digest(
+            json.dumps(updated, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        )
+        self.save_event(data, "review_postcondition_confirmed_by_trusted_local_operator")
+        review = dict(data["review"])
+        review["acceptance_map"] = updated["acceptance_map"]
+        review["author_review_plan"] = updated["author_review_plan"]
+        final_review = dict(review)
+        final_review["scope"] = ", ".join(SCOPES[self.name])
+        final_review["checks"] = [
+            *(review.get("verified") or []),
+            "trusted local operator observed the prior COMMENT review in PR UI; not an auth role",
+        ]
+        data = self.data()
+        data["review"] = review
+        data["review_delivery_expected"] = {
+            "head": data["head"],
+            "pr": data["pr"],
+            "key": review_key(final_review, data["head"]),
+        }
+        self.save_event(data, "review_postcondition_delivery_reserved")
+        receipt = self.transport.call(
+            "publish_pr_review",
+            {
+                "repo_full_name": REPOSITORY,
+                "pr_number": data["pr"],
+                "head": data["head"],
+                "review": final_review,
+            },
+            write=True,
+        )
+        if (
+            receipt.get("head") != data["head"]
+            or receipt.get("key") != data["review_delivery_expected"]["key"]
+        ):
+            raise Stop("unknown", "review_postcondition_receipt_invalid")
+        data = self.data()
+        data["review_delivery"] = receipt
+        data.setdefault("review_delivery_history", []).append(prior_receipt)
+        self.save_event(data, "review_postcondition_visible")
+        return self.after_review_visible(
+            data["head"], data["pr"], review, receipt, data["review_summary_body"]
+        )
 
     def reconcile_review_delivery(self):
         """unknown POSTを再送せず、remoteのexact receiptだけで後続へ戻る。"""
@@ -1101,6 +1195,8 @@ def main():
     review_input = sub.add_parser("review-input")
     review_input.add_argument("--source", required=True)
     sub.add_parser("reconcile-review-delivery")
+    postcondition = sub.add_parser("review-postcondition")
+    postcondition.add_argument("--source", required=True)
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
     revise = sub.add_parser("revise")
@@ -1176,6 +1272,8 @@ def main():
                     task.set_review_input(args.source)
                 elif args.command == "reconcile-review-delivery":
                     task.reconcile_review_delivery()
+                elif args.command == "review-postcondition":
+                    task.confirm_review_postcondition(args.source)
                 elif args.command == "reconcile-push":
                     task.reconcile_push()
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)

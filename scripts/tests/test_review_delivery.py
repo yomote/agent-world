@@ -1,5 +1,6 @@
 """通常PR review配送の型・位置・冪等境界をネットワークなしで検証する。"""
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from scripts.automation.github_adapter import GitHub  # noqa: E402
 from scripts.automation.review_delivery import (  # noqa: E402
     acceptance_gate,
+    apply_visibility_postcondition,
     find_receipt,
     issue_close_gate,
     prepare,
@@ -245,6 +247,48 @@ def test_issue_close_is_bound_to_scope_and_parent_residuals():
     }
 
 
+def test_only_declared_visibility_postcondition_can_advance_unknown_acceptance():
+    """live receiptを一般business unknownの成功化入口にする回帰を防ぐ。"""
+    original = review(findings=[], verdict="pass")
+    original["live_postconditions"] = [
+        {"acceptance_id": "ACC-2", "kind": "github_review_visibility"}
+    ]
+    original["acceptance_map"][0]["status"] = "unknown"
+    updated = json.loads(json.dumps(original))
+    url = "https://github.com/yomote/agent-world/pull/93#pullrequestreview-81"
+    updated["acceptance_map"][0].update(status="achieved", evidence=f"visible: {url}")
+    receipt = {"url": url, "head": HEAD, "actor": "yomote", "state": "COMMENTED"}
+    ui = {
+        "review_url": url,
+        "head": HEAD,
+        "pr_number": 93,
+        "actor": "yomote",
+        "state": "COMMENTED",
+        "surfaces": ["conversation", "files_changed"],
+    }
+    assert (
+        apply_visibility_postcondition(
+            original, updated, head=HEAD, pr_number=93, receipt=receipt, ui_evidence=ui
+        )
+        is updated
+    )
+    bad = json.loads(json.dumps(updated))
+    bad["scope_definition"] = "作者が縮小したscope"
+    with pytest.raises(Stop, match="contract_changed"):
+        apply_visibility_postcondition(
+            original, bad, head=HEAD, pr_number=93, receipt=receipt, ui_evidence=ui
+        )
+    with pytest.raises(Stop, match="evidence_invalid"):
+        apply_visibility_postcondition(
+            original,
+            updated,
+            head=HEAD,
+            pr_number=94,
+            receipt=receipt,
+            ui_evidence=ui,
+        )
+
+
 def test_resolution_is_one_graphql_write_for_exact_original_threads():
     """複数threadの部分成功を個別retryし、別lineへ付替える回帰を防ぐ。"""
     payload = resolution_mutation(["THREAD-1", "THREAD-2"])
@@ -266,9 +310,32 @@ def github_with_request(send):
         CREATE TABLE delivery_review_receipts(
             campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
             PRIMARY KEY(campaign,pr,head));
+        CREATE TABLE delivery_review_receipts_v2(
+            campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
+            PRIMARY KEY(campaign,pr,head,delivery_key));
     """)
     github.request = send
     return github
+
+
+def test_receipt_schema_migrates_old_history_without_discarding_it(tmp_path):
+    """再起動時のschema更新で既存review receiptを失う回帰を防ぐ。"""
+    task = Task()
+    task.root = tmp_path
+    task.db.executescript("""
+        CREATE TABLE delivery_review_receipts(
+            campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
+            PRIMARY KEY(campaign,pr,head));
+        INSERT INTO delivery_review_receipts VALUES(
+            'test-campaign',9,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','old-key',
+            'https://github.com/yomote/agent-world/pull/9#pullrequestreview-1',1);
+    """)
+    GitHub(task)
+    assert task.db.execute(
+        "SELECT delivery_key,url FROM delivery_review_receipts_v2"
+    ).fetchall() == [
+        ("old-key", "https://github.com/yomote/agent-world/pull/9#pullrequestreview-1")
+    ]
 
 
 def test_adapter_deduplicates_exact_review_and_keeps_visible_receipt():
@@ -304,6 +371,16 @@ def test_adapter_deduplicates_exact_review_and_keeps_visible_receipt():
     assert first == second
     assert first["head"] == HEAD and first["inline_count"] == 1
     assert len(posted) == 1 and posted[0]["event"] == "COMMENT"
+
+    final_review = review()
+    final_review["scope_definition"] = "同headのpostcondition確認済み契約"
+    final = github.review_delivery(9, {"head": HEAD, "review": final_review}, publish=True)
+    assert final["key"] != first["key"]
+    assert len(posted) == 2
+    rows = github.task.db.execute(
+        "SELECT delivery_key FROM delivery_review_receipts_v2 ORDER BY rowid"
+    ).fetchall()
+    assert rows == [(first["key"],), (final["key"],)]
 
 
 def test_adapter_rechecks_head_before_and_after_review_post():

@@ -95,7 +95,16 @@ class GitHub:
             CREATE TABLE IF NOT EXISTS delivery_review_receipts(
                 campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
                 PRIMARY KEY(campaign,pr,head));
+            CREATE TABLE IF NOT EXISTS delivery_review_receipts_v2(
+                campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
+                PRIMARY KEY(campaign,pr,head,delivery_key));
         """)
+        with task.db:
+            task.db.execute(
+                "INSERT OR IGNORE INTO delivery_review_receipts_v2 "
+                "SELECT campaign,pr,head,delivery_key,url,review_id "
+                "FROM delivery_review_receipts"
+            )
 
     def git_transfer(self, workspace, operation, *, head=None, branch=None):
         """Git object輸送もdeliveryだけが実行する。REST/GraphQLとは別のGit protocol。"""
@@ -461,15 +470,15 @@ class GitHub:
             raise Stop("unknown", "review_delivery_receipt_invalid")
         with self.task.db:
             prior = self.task.db.execute(
-                "SELECT delivery_key,url,review_id FROM delivery_review_receipts "
-                "WHERE campaign=? AND pr=? AND head=?",
-                (self.task.name, number, head),
+                "SELECT delivery_key,url,review_id FROM delivery_review_receipts_v2 "
+                "WHERE campaign=? AND pr=? AND head=? AND delivery_key=?",
+                (self.task.name, number, head, prepared["key"]),
             ).fetchone()
             values = (prepared["key"], receipt["url"], receipt["review_id"])
             if prior is not None and prior != values:
                 raise Stop("unknown", "review_delivery_local_conflict")
             self.task.db.execute(
-                "INSERT OR IGNORE INTO delivery_review_receipts VALUES (?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO delivery_review_receipts_v2 VALUES (?,?,?,?,?,?)",
                 (self.task.name, number, head, *values),
             )
         return {

@@ -26,6 +26,8 @@ automation campaignでは、checkout内のJSONを`python -m scripts.automation.d
 4. visible review URLとheadを保存してから`reviewed`またはreview passへ進む。従来のindependent-review markerはmerge gate用の索引であり、通常reviewの代替にしない。
 5. 修正でheadが変われば同じreviewerが新headを再reviewする。元threadを新lineへ付け替えない。対応確認済みfinding IDと元review IDを照合し、元threadを一括resolveする。old reviewをnew headの証拠に流用しない。
 
+GitHub reviewの可視性そのものがACの場合は、最初のCOMMENT reviewではそのACを`unknown`のまま公開し、Readyへ進めず`review_postcondition_pending`で停止する。PMが事前に`live_postconditions`へ宣言した`github_review_visibility`だけを、同じhead・PR・scope・source・criteria・required IDsを維持したまま、前段receiptとConversation / Files changedの観測を結ぶ`review-postcondition`で`achieved`へ進められる。これはtrusted local operatorによる観測記録であり、認証roleの保証ではない。一般の業務AC、`unmet`、別head/PR、契約変更、証拠不足には使用できない。最終COMMENTは別delivery keyの履歴として保存し、前段receiptを破棄しない。
+
 GitHub RESTのreview作成は`commit_id`、`path`、`line`、`side`、rangeを受け取る。GraphQLの`resolveReviewThread`はthread IDを解決する。実行identityがPR authorと同じ場合、`APPROVE`や`REQUEST_CHANGES`を独立reviewerの判断として偽装せず、常に`COMMENT`とprovenanceを使う。現在の既存認証は`yomote`で、同じ`yomote`作成PRへの実配送を想定するため、この制約が適用される。
 
 公式仕様:

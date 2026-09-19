@@ -133,6 +133,22 @@ def validate_review_input(value):
     allowed_issues = {scope_issue, *(item["issue"] for item in residuals)}
     if any(item["issue"] not in allowed_issues for item in acceptance_map):
         raise Stop("stopped", "review_acceptance_issue_unbound")
+    live_postconditions = value.get("live_postconditions", [])
+    if not isinstance(live_postconditions, list):
+        raise Stop("stopped", "review_live_postconditions_invalid")
+    postcondition_ids = []
+    for item in live_postconditions:
+        if (
+            not isinstance(item, dict)
+            or item.get("kind") != "github_review_visibility"
+            or set(item) != {"acceptance_id", "kind"}
+        ):
+            raise Stop("stopped", "review_live_postconditions_invalid")
+        postcondition_ids.append(_text(item.get("acceptance_id"), "postcondition_acceptance_id"))
+    if len(set(postcondition_ids)) != len(postcondition_ids) or not set(postcondition_ids).issubset(
+        set(required)
+    ):
+        raise Stop("stopped", "review_live_postconditions_invalid")
     return acceptance_map, author_plan, acceptance_pairs, required, scope_id, scope_issue
 
 
@@ -172,6 +188,57 @@ def issue_close_gate(value, issue_number):
     }
 
 
+def apply_visibility_postcondition(original, update, *, head, pr_number, receipt, ui_evidence):
+    """事前宣言したGitHub review可視性だけをunknownからachievedへ進める。"""
+    validate_review_input(original)
+    validate_review_input(update)
+    immutable = set(original) - {"acceptance_map"}
+    if immutable != set(update) - {"acceptance_map"} or any(
+        original[name] != update[name] for name in immutable
+    ):
+        raise Stop("stopped", "review_postcondition_contract_changed")
+    if (
+        receipt.get("head") != head
+        or receipt.get("url") != ui_evidence.get("review_url")
+        or ui_evidence.get("head") != head
+        or ui_evidence.get("pr_number") != pr_number
+        or ui_evidence.get("actor") != receipt.get("actor")
+        or ui_evidence.get("state") != "COMMENTED"
+        or receipt.get("state") != "COMMENTED"
+        or ui_evidence.get("surfaces") != ["conversation", "files_changed"]
+        or not re.fullmatch(
+            rf"https://github\.com/yomote/agent-world/pull/{pr_number}#pullrequestreview-[1-9][0-9]*",
+            receipt.get("url", ""),
+        )
+    ):
+        raise Stop("stopped", "review_postcondition_evidence_invalid")
+    declared = {item["acceptance_id"] for item in original.get("live_postconditions", [])}
+    old_by_id = {item["acceptance_id"]: item for item in original["acceptance_map"]}
+    new_by_id = {item["acceptance_id"]: item for item in update["acceptance_map"]}
+    if set(old_by_id) != set(new_by_id):
+        raise Stop("stopped", "review_postcondition_contract_changed")
+    changed = []
+    for identifier, old in old_by_id.items():
+        new = new_by_id[identifier]
+        stable = set(old) - {"status", "evidence"}
+        if stable != set(new) - {"status", "evidence"} or any(
+            old[name] != new[name] for name in stable
+        ):
+            raise Stop("stopped", "review_postcondition_contract_changed")
+        if old != new:
+            if (
+                identifier not in declared
+                or old["status"] != "unknown"
+                or new["status"] != "achieved"
+                or receipt["url"] not in new["evidence"]
+            ):
+                raise Stop("stopped", "review_postcondition_transition_invalid")
+            changed.append(identifier)
+    if set(changed) != declared or not acceptance_gate(update)["ready"]:
+        raise Stop("stopped", "review_postcondition_transition_incomplete")
+    return update
+
+
 def render_review_input(value):
     """PR作者が公開するAC対応と変更固有review観点を短いMarkdownへする。"""
     acceptance_map, author_plan, _, _, scope_id, scope_issue = validate_review_input(value)
@@ -199,6 +266,13 @@ def render_review_input(value):
                 f"- `{item['id']}` / `{item['issue']}`: owner `{item['owner']}` / "
                 f"trigger: {item['trigger']}"
             )
+    if value.get("live_postconditions"):
+        lines.extend(["", "## 投稿後に確認するlive postcondition", ""])
+        for item in value["live_postconditions"]:
+            lines.append(
+                f"- `{item['acceptance_id']}`: GitHub COMMENT reviewのvisible receiptとPR UIを"
+                "PM指示のtrusted local operatorが確認する（認証roleの保証ではない）"
+            )
     lines.extend(
         [
             "",
@@ -224,6 +298,7 @@ def review_key(review, head):
         "scope_definition": review.get("scope_definition"),
         "required_acceptance_ids": review.get("required_acceptance_ids"),
         "parent_residuals": review.get("parent_residuals"),
+        "live_postconditions": review.get("live_postconditions", []),
     }
     return hashlib.sha256(
         json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -369,7 +444,14 @@ def find_receipt(reviews, *, key, head, expected_proxy_login, expected_body, pr_
         url,
     ):
         raise Stop("unknown", "review_delivery_receipt_invalid")
-    return {"url": url, "head": head, "review_id": item.get("id"), "key": key}
+    return {
+        "url": url,
+        "head": head,
+        "review_id": item.get("id"),
+        "key": key,
+        "actor": expected_proxy_login,
+        "state": "COMMENTED",
+    }
 
 
 def resolution_query(number):

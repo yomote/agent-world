@@ -15,6 +15,8 @@ Issue責任者 / PMがACのID、定義、source version、状態を管理し、P
 
 投稿前にhead、path、line/range、sideをGitHubのcurrent diffで検査する。content keyで既存reviewをread-only照合し、結果不明を自動再送しない。修正後はnew headに対する同じreviewerの確認と元finding IDを条件に、元thread IDを解決する。outdated findingを新しいlineへ付け替えない。
 
+review可視性をAC自身が要求する場合は二段階にする。最初のCOMMENTでは当該ACを`unknown`として停止し、同headのvisible receiptとPR UI観測をPM指示のpostconditionへ結んだ後だけ、別keyの最終COMMENTへ進む。receipt履歴はdelivery key単位で保持し、旧schemaの履歴も移行する。
+
 ## トレードオフ
 
 通常reviewによりGitHub UIで指摘、修正、解決を追える。一方、投稿者は独立reviewer本人ではないためGitHubのAPPROVED状態を作らず、branch protectionのapproval要件を満たす証拠にはならない。API request数とsecondary rate limitの影響も増えるため、findingsを1 reviewへ束ね、paginationや結果不明では停止する。
