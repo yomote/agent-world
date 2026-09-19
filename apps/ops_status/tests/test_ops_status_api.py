@@ -115,6 +115,202 @@ def request_record(request_id: str, at: datetime, *, lifecycle: str = "running")
     }
 
 
+def pm_task_projection(at: datetime) -> dict:
+    return {
+        "source_kind": "pm-observation",
+        "source_version": "issue-45-pm-packet-v1",
+        "source_refs": ["https://github.com/yomote/agent-world/issues/45"],
+        "observed_at": at.isoformat(),
+        "tasks": [
+            {
+                "task_id": "pr-92-continuity",
+                "title": "closure guard",
+                "purpose": "未解決taskをownerと次手へ接続する",
+                "acceptance_summary": "current mainで再検証する",
+                "owner": "governance-continuity",
+                "state": "blocked",
+                "current_step": "旧base headの受入済み",
+                "next_action": "PR 93後にcurrent mainへ統合する",
+                "resume_trigger": "PR 93のprotected merge完了",
+                "blocker": "merge順待ち",
+                "waiting_on": "external",
+                "waiting_detail": "PR 93 protected merge",
+                "issue_url": "https://github.com/yomote/agent-world/issues/45",
+                "pr_url": "https://github.com/yomote/agent-world/pull/92",
+                "source_version": "pm-packet-2026-09-19T06:30:00Z",
+                "observed_at": at.isoformat(),
+                "po_status": "pending",
+                "evidence": [],
+            }
+        ],
+    }
+
+
+def test_pm_task_projection_is_read_only_and_does_not_create_a_front_desk_claim():
+    """PM観測cacheをcontrol registryやroot claimへ暗黙昇格しない。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["pm_task_projection"] = pm_task_projection(now)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    client = TestClient(create_app(store))
+
+    response = client.get("/api/status")
+    assert response.status_code == 200
+    assert response.json()["pm_task_projection"]["source_kind"] == "pm-observation"
+    assert response.json().get("request_registry") is None
+    assert response.json()["active_runtime_bound"] is False
+
+    update = {
+        "source": "manual-public-registry",
+        "action": "update",
+        "expected_generation": 1,
+        "actor_front_desk": "invented-front-desk",
+        "observed_at": now.isoformat(),
+        "requests": [request_record("request-45", now)],
+    }
+    rejected = client.put("/api/status/requests/upsert", json=update)
+    assert rejected.status_code == 409
+
+    later = now + timedelta(seconds=1)
+    item = snapshot(later)["items"][0]
+    preserved = client.put(
+        "/api/status/upsert", json={"source": "local-event-record", "items": [item]}
+    )
+    assert preserved.status_code == 200
+    assert store.value.pm_task_projection is not None
+    assert store.value.pm_task_projection.source_version == "issue-45-pm-packet-v1"
+
+
+def test_pm_task_projection_rejects_older_or_ambiguous_full_replacement():
+    """古いPM観測や同一clockの差替えでtaskをfresh化しない。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["pm_task_projection"] = pm_task_projection(now)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    changed = snapshot(now + timedelta(seconds=1))
+    changed["source"] = "local-event-record"
+    changed["pm_task_projection"] = pm_task_projection(now)
+    changed["pm_task_projection"]["tasks"][0]["owner"] = "another-owner"
+
+    response = TestClient(create_app(store)).put("/api/status", json=changed)
+
+    assert response.status_code == 409
+    assert "PM task cannot change at the same observation" in response.json()["detail"]
+
+    older_row = snapshot(now + timedelta(seconds=2))
+    older_row["source"] = "local-event-record"
+    older_row["pm_task_projection"] = pm_task_projection(now + timedelta(seconds=2))
+    older_row["pm_task_projection"]["tasks"][0]["observed_at"] = (
+        now - timedelta(seconds=1)
+    ).isoformat()
+    older = TestClient(create_app(store)).put("/api/status", json=older_row)
+    assert older.status_code == 409
+    assert "PM task observation cannot move backwards" in older.json()["detail"]
+
+
+def test_pm_task_projection_rejects_content_digest_from_other_rows():
+    """編集可能なsource URLだけで別内容を同じ版として受理しない。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["pm_task_projection"] = pm_task_projection(now)
+    data["pm_task_projection"]["content_digest"] = "sha256:" + "0" * 64
+
+    with pytest.raises(ValueError, match="content digest does not match"):
+        StatusSnapshot.model_validate(data)
+
+
+def test_pm_confirmed_upsert_seeds_projection_and_preserves_runtime_state():
+    """PM観測の初回保存がruntime行やcontrol registryを置換する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    original = StatusSnapshot.model_validate(data)
+    store = MemoryStore(original)
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "pm-confirmed", "pm_task_projection": pm_task_projection(now)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["changed"] is True
+    assert response.json()["items"] == []
+    assert response.json()["pm_task_projection"]["source_kind"] == "pm-observation"
+    assert store.value.items == original.items
+    assert store.value.request_registry == original.request_registry
+    assert store.value.runtime_binding == original.runtime_binding
+
+
+def test_pm_confirmed_upsert_enforces_task_clock_and_digest_transition():
+    """projection全体の新clockだけで古いtaskや同clock差替えをfresh化する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["pm_task_projection"] = pm_task_projection(now)
+    store = MemoryStore(StatusSnapshot.model_validate(data))
+    changed = pm_task_projection(now + timedelta(seconds=1))
+    changed["tasks"][0]["observed_at"] = now.isoformat()
+    changed["tasks"][0]["owner"] = "replacement-owner"
+
+    ambiguous = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "pm-confirmed", "pm_task_projection": changed},
+    )
+
+    assert ambiguous.status_code == 409
+    assert "same observation" in ambiguous.json()["detail"]
+    assert store.write_count == 0
+
+    older = pm_task_projection(now + timedelta(seconds=2))
+    older["tasks"][0]["observed_at"] = (now - timedelta(seconds=1)).isoformat()
+    rejected = TestClient(create_app(store)).put(
+        "/api/status/upsert",
+        json={"source": "pm-confirmed", "pm_task_projection": older},
+    )
+    assert rejected.status_code == 409
+    assert "move backwards" in rejected.json()["detail"]
+
+    globally_newer = snapshot(now + timedelta(seconds=10))
+    globally_newer["pm_task_projection"] = pm_task_projection(now + timedelta(seconds=10))
+    globally_newer["pm_task_projection"]["tasks"][0]["observed_at"] = now.isoformat()
+    global_store = MemoryStore(StatusSnapshot.model_validate(globally_newer))
+    older_projection = pm_task_projection(now + timedelta(seconds=5))
+    older_projection["tasks"][0]["observed_at"] = now.isoformat()
+    global_rejected = TestClient(create_app(global_store)).put(
+        "/api/status/upsert",
+        json={"source": "pm-confirmed", "pm_task_projection": older_projection},
+    )
+    assert global_rejected.status_code == 409
+    assert "older PM task projection" in global_rejected.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "null", "item", "binding", "registry", "runtime-source"]
+)
+def test_pm_projection_upsert_rejects_missing_or_mixed_write_targets(mutation):
+    """PM観測routeからruntime/control更新し、またはruntime routeから投影を変更する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    payload = {"source": "pm-confirmed", "pm_task_projection": pm_task_projection(now)}
+    if mutation == "missing":
+        payload.pop("pm_task_projection")
+    elif mutation == "null":
+        payload["pm_task_projection"] = None
+    elif mutation == "item":
+        payload["items"] = snapshot(now)["items"]
+    elif mutation == "binding":
+        payload["runtime_binding"] = {
+            "registry_generation": 1,
+            "front_desk_alias": "front",
+            "runtime_session_digest": "sha256:" + "a" * 64,
+        }
+    elif mutation == "registry":
+        payload["request_registry"] = {}
+    else:
+        payload["source"] = "local-event-record"
+    response = TestClient(
+        create_app(MemoryStore(StatusSnapshot.model_validate(snapshot(now))))
+    ).put("/api/status/upsert", json=payload)
+    assert response.status_code == 422
+
+
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):
     """更新が止まったsnapshotを現在稼働中に見せ続ける回帰を防ぐ。"""
     old = datetime.now(UTC) - timedelta(minutes=3)
@@ -660,6 +856,26 @@ def test_azure_auth_separates_operator_reads_from_ingest_writes(monkeypatch, exp
             json={"source": "local-event-record", "items": data["items"]},
         ).status_code
         == 403
+    )
+    projection_update = {
+        "source": "pm-confirmed",
+        "pm_task_projection": pm_task_projection(current),
+    }
+    assert (
+        client.put(
+            "/api/status/upsert",
+            headers={"x-ms-client-principal-id": actual_operator},
+            json=projection_update,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.put(
+            "/api/status/upsert",
+            headers={"x-ms-client-principal-id": actual_ingest},
+            json=projection_update,
+        ).status_code
+        == 200
     )
     registry_update = {
         "source": "manual-public-registry",

@@ -11,8 +11,11 @@ import {
   elapsed,
   parentDescription,
   parentSourceDescription,
+  orderedRequestsForBoard,
   relationshipEdges,
+  pmTaskBoardStatus,
   requestConnectionDescription,
+  requestBoardStatus,
   requestFocusDescription,
   requestHasCurrentConnection,
   requestLifecycleDescription,
@@ -269,12 +272,12 @@ test("旧refresh・stale・focus・時計・linkとkeyboard操作を実装に保
   }
 });
 
-test("asset queryはJS/CSSを同じv7へ更新し図だけpan可能にする", async () => {
+test("asset queryはJS/CSSを同じv9へ更新し図だけpan可能にする", async () => {
   // 旧cacheの片方だけが残ることと390px page overflowの再発を防ぐ。
   const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../../docs/status/status.css", import.meta.url), "utf8");
-  assert.match(html, /status\.css\?v=7/);
-  assert.match(html, /status\.js\?v=7/);
+  assert.match(html, /status\.css\?v=9/);
+  assert.match(html, /status\.js\?v=9/);
   assert.match(css, /\.tree-scroll\s*{[^}]*overflow:\s*auto/s);
   assert.match(css, /width:\s*calc\(100vw - 24px\)/);
 });
@@ -423,6 +426,21 @@ test("default requestは未完の最新報告、全完了なら先頭、選択�
   );
 });
 
+test("PM boardは選択中・未完・新しい報告の順で現在taskを先に見せる", () => {
+  // 完了済みの長いcardが現在taskを画面外へ押し出す回帰を防ぐ。
+  const older = {
+    ...request64,
+    request_id: "request-older",
+    report_updated_at: "2026-09-13T03:00:00Z",
+  };
+  assert.deepEqual(
+    orderedRequestsForBoard([request59, older, request64], "request-64").map(
+      (request) => request.request_id,
+    ),
+    ["request-64", "request-older", "request-59"],
+  );
+});
+
 test("connected requestだけmember aliasのcurrentと重複しない履歴へscopeする", () => {
   // 別request行を混ぜたり、同aliasのcurrentとhistoryを二重表示する回帰を防ぐ。
   const snapshot = {
@@ -531,6 +549,93 @@ test("handover待ちとreconnectableを稼働扱いせず明示dispatch必要と
   // 再開可能な登録状態をworker自動再開やrunningへ格上げする回帰を防ぐ。
   assert.match(requestLifecycleDescription("handover-waiting"), /引継待ち.*明示dispatch必要/);
   assert.match(requestLifecycleDescription("reconnectable"), /再接続可能.*明示dispatch必要/);
+});
+
+test("PM task状態はruntime idleと分離しfreshness・不足・PO待ちを正直に示す", () => {
+  // agent turn終了をtask完了へ昇格し、古い・不完全なPM recordを隠す回帰を防ぐ。
+  assert.equal(statusDescription("idle"), "turn終了");
+  assert.equal(requestLifecycleDescription("running"), "進行中");
+  assert.notEqual(requestLifecycleDescription("running"), requestLifecycleDescription("completed"));
+  const now = Date.parse("2026-09-19T05:02:01Z");
+  const board = requestBoardStatus(
+    {
+      lifecycle: "blocked",
+      owner_agent: null,
+      next_action: null,
+      waiting_on: "external",
+      waiting_detail: "正規merge gate decision",
+      resume_trigger: null,
+      report_updated_at: "2026-09-19T05:00:00Z",
+      po_review_required: true,
+      po_acceptance_receipt: null,
+      closure_audit: { overall: "unknown" },
+    },
+    now,
+  );
+  assert.equal(board.freshness, "stale");
+  assert.deepEqual(board.missing, ["owner", "next action", "resume trigger"]);
+  assert.match(board.waiting, /外部条件待ち.*正規merge gate/);
+  assert.equal(board.poState, "PO確認待ち");
+  assert.match(board.poDelivery, /未接続.*通知済みとは判定しません/);
+  assert.equal(board.closure, "unknown");
+});
+
+test("request freshnessは境界内だけfreshで不正clockをunknownにする", () => {
+  // future clockやparse不能値で古いrecordをfreshへ見せる回帰を防ぐ。
+  const now = Date.parse("2026-09-19T05:02:00Z");
+  const base = { lifecycle: "completed", po_review_required: false };
+  assert.equal(
+    requestBoardStatus({ ...base, report_updated_at: "2026-09-19T05:00:00Z" }, now).freshness,
+    "fresh",
+  );
+  assert.equal(
+    requestBoardStatus({ ...base, report_updated_at: "2026-09-19T04:59:59Z" }, now).freshness,
+    "stale",
+  );
+  assert.equal(
+    requestBoardStatus({ ...base, report_updated_at: "invalid" }, now).freshness,
+    "unknown",
+  );
+  assert.equal(
+    requestBoardStatus({ ...base, report_updated_at: "2026-09-19T05:02:01Z" }, now).freshness,
+    "unknown",
+  );
+});
+
+test("旧request schemaの欠落PO状態を対象外へ推測しない", async () => {
+  // PR92未導入のfield欠落をPO確認不要と誤表示する回帰を防ぐ。
+  const board = requestBoardStatus({ lifecycle: "running", report_updated_at: null });
+  assert.equal(board.poState, "未確認");
+  const source = await readFile(new URL("../../docs/status/status.js", import.meta.url), "utf8");
+  const registryRenderer = source.slice(
+    source.indexOf("function renderRequestRegistry"),
+    source.indexOf("function renderTree("),
+  );
+  assert.doesNotMatch(registryRenderer, /内部closure|DoD source version|成果head|PO package配送/);
+});
+
+test("PM観測projectionはcontrol registryと分離して不足とPO待ちを表示する", async () => {
+  // claimのないread-only観測を架空Front Desk registryへ昇格する回帰を防ぐ。
+  const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
+  const board = pmTaskBoardStatus(
+    {
+      state: "blocked",
+      owner: null,
+      next_action: null,
+      resume_trigger: null,
+      waiting_on: "external",
+      waiting_detail: "protected merge gate",
+      observed_at: "2026-09-19T05:00:00Z",
+      po_status: "pending",
+    },
+    Date.parse("2026-09-19T05:03:00Z"),
+  );
+  assert.equal(board.freshness, "stale");
+  assert.deepEqual(board.missing, ["owner", "next action", "resume trigger"]);
+  assert.equal(board.state, "阻害あり");
+  assert.match(board.poDelivery, /配送証跡なし.*通知済みとは判定しません/);
+  assert.match(html, /id="pm-task-projection"/);
+  assert.match(html, /id="control-registry-view"/);
 });
 
 test("registry nullは従来snapshotをそのままtreeへ渡す", () => {

@@ -26,6 +26,7 @@ from .models import (
     StatusUpsertReceipt,
     StatusUpsertRequest,
     WorkItem,
+    validate_pm_task_projection_transition,
 )
 from .store import (
     SnapshotConflictError,
@@ -179,12 +180,18 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
     for field, clock, label in (
         ("session_tree", "observed_at", "session tree"),
         ("known_history", "recorded_at", "known history"),
+        ("pm_task_projection", "observed_at", "PM task projection"),
     ):
         previous = getattr(current, field)
         replacement = getattr(incoming, field)
         if previous is not None:
             if replacement is None:
                 raise HTTPException(status_code=409, detail=f"full snapshot cannot clear {label}")
+            if field == "pm_task_projection":
+                try:
+                    validate_pm_task_projection_transition(previous, replacement)
+                except ValueError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
             reject_clocked_snapshot(previous, replacement, clock=clock, label=label)
     if (
         current.request_registry is not None
@@ -495,6 +502,13 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 current_revision = current_version.revision
             if current is not None:
                 require_active_runtime_binding(current.request_registry, snapshot.runtime_binding)
+            if snapshot.pm_task_projection is not None and (
+                current is None or current.pm_task_projection is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="full snapshot cannot initialize PM task projection",
+                )
             if snapshot.request_registry is not None and (
                 current is None or current.request_registry is None
             ):
@@ -509,6 +523,11 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 if same_content:
                     return Response(status_code=status.HTTP_204_NO_CONTENT)
                 reject_stale_full_snapshot(current, snapshot)
+                if snapshot.pm_task_projection != current.pm_task_projection:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="runtime ingest cannot replace PM task projection",
+                    )
                 if (
                     snapshot.observed_at == current.observed_at
                     and snapshot.received_at <= current.received_at
@@ -545,9 +564,11 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 raise HTTPException(status_code=503, detail="status snapshot is invalid") from error
 
             current = current_version.snapshot
-            require_active_runtime_binding(current.request_registry, update.runtime_binding)
+            if update.source == "local-event-record":
+                require_active_runtime_binding(current.request_registry, update.runtime_binding)
             binding_activates_current = bool(
-                update.runtime_binding is not None
+                update.source == "local-event-record"
+                and update.runtime_binding is not None
                 and current.runtime_binding is None
                 and current.request_registry is not None
                 and current.request_registry.active_front_desk.runtime_session_id is not None
@@ -603,6 +624,24 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     clock="recorded_at",
                     label="known history",
                 )
+            projection_supplied = "pm_task_projection" in update.model_fields_set
+            if (
+                projection_supplied
+                and update.pm_task_projection is not None
+                and current.pm_task_projection is not None
+            ):
+                try:
+                    validate_pm_task_projection_transition(
+                        current.pm_task_projection, update.pm_task_projection
+                    )
+                except ValueError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                reject_clocked_snapshot(
+                    current.pm_task_projection,
+                    update.pm_task_projection,
+                    clock="observed_at",
+                    label="PM task projection",
+                )
 
             replacements = {item.agent: item for item in update.items}
             merged_items = [replacements.pop(item.agent, item) for item in current_items]
@@ -623,6 +662,9 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 else (None if binding_activates_current else current.session_tree)
             )
             merged_history = update.known_history if history_supplied else current.known_history
+            merged_projection = (
+                update.pm_task_projection if projection_supplied else current.pm_task_projection
+            )
             merged_binding = update.runtime_binding or current.runtime_binding
             observation_times = [current.observed_at, *(item.observed_at for item in update.items)]
             if capacity_supplied and update.runtime_capacity is not None:
@@ -633,6 +675,8 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 observation_times.append(update.session_tree.observed_at)
             if history_supplied and update.known_history is not None:
                 observation_times.append(update.known_history.recorded_at)
+            if projection_supplied and update.pm_task_projection is not None:
+                observation_times.append(update.pm_task_projection.observed_at)
             now = datetime.now(UTC)
             try:
                 merged = StatusSnapshot(
@@ -646,6 +690,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     session_tree=merged_tree,
                     known_history=merged_history,
                     request_registry=current.request_registry,
+                    pm_task_projection=merged_projection,
                     runtime_binding=merged_binding,
                 )
             except ValidationError as error:
@@ -679,6 +724,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
             focus_summary=stored.focus_summary if focus_supplied else None,
             session_tree=stored.session_tree if tree_supplied else None,
             known_history=stored.known_history if history_supplied else None,
+            pm_task_projection=stored.pm_task_projection if projection_supplied else None,
             runtime_binding=stored.runtime_binding if update.runtime_binding is not None else None,
         )
 

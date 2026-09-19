@@ -1,3 +1,5 @@
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -412,6 +414,87 @@ class RequestRegistryReceipt(BaseModel):
     handover: RegistryHandover | None = None
 
 
+class PmTaskObservation(BaseModel):
+    """Issue/PRとPM decisionを正本にする、claimを持たないread-only task観測。"""
+
+    model_config = ConfigDict(extra="forbid")
+    task_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    title: str = Field(min_length=1, max_length=240)
+    purpose: str = Field(min_length=1, max_length=500)
+    acceptance_summary: str = Field(min_length=1, max_length=500)
+    owner: str | None = Field(default=None, min_length=1, max_length=80)
+    state: Literal[
+        "not-started", "running", "review-wait", "blocked", "stopped", "completed", "unknown"
+    ]
+    current_step: str | None = Field(default=None, max_length=500)
+    next_action: str | None = Field(default=None, max_length=500)
+    resume_trigger: str | None = Field(default=None, max_length=500)
+    blocker: str | None = Field(default=None, max_length=500)
+    waiting_on: Literal["worker", "pm", "po", "external", "none"] | None = None
+    waiting_detail: str | None = Field(default=None, min_length=1, max_length=240)
+    issue_url: HttpUrl
+    pr_url: HttpUrl | None = None
+    source_version: str = Field(min_length=1, max_length=200)
+    observed_at: AwareDatetime
+    po_status: Literal["not-required", "pending", "accepted", "unknown"] = "unknown"
+    evidence: list[RequestEvidence] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def check_waiting_owner(self) -> "PmTaskObservation":
+        if self.waiting_on in {None, "none"} and self.waiting_detail is not None:
+            raise ValueError("waiting detail needs a concrete waiting owner")
+        if self.waiting_on not in {None, "none"} and self.waiting_detail is None:
+            raise ValueError("concrete waiting owner needs a public detail")
+        return self
+
+
+class PmTaskProjection(BaseModel):
+    """PMが確認したtask状態の再生成可能cache。control registryではない。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source_kind: Literal["pm-observation"]
+    source_version: str = Field(min_length=1, max_length=200)
+    source_refs: list[HttpUrl] = Field(default_factory=list, max_length=16)
+    content_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    observed_at: AwareDatetime
+    tasks: list[PmTaskObservation] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def check_tasks(self) -> "PmTaskProjection":
+        task_ids = [task.task_id for task in self.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("PM task identifiers must be unique")
+        if any(task.observed_at > self.observed_at for task in self.tasks):
+            raise ValueError("PM task observation cannot be newer than its projection")
+        canonical = json.dumps(
+            [task.model_dump(mode="json") for task in self.tasks],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        expected = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+        if self.content_digest is not None and self.content_digest != expected:
+            raise ValueError("PM task projection content digest does not match its tasks")
+        self.content_digest = expected
+        return self
+
+
+def validate_pm_task_projection_transition(
+    previous: PmTaskProjection, incoming: PmTaskProjection
+) -> None:
+    """projection全体の時計でtask rowの退行・同clock差替えを隠さない。"""
+
+    incoming_by_id = {task.task_id: task for task in incoming.tasks}
+    for old_task in previous.tasks:
+        new_task = incoming_by_id.get(old_task.task_id)
+        if new_task is None:
+            raise ValueError("PM task projection cannot silently remove a task")
+        if new_task.observed_at < old_task.observed_at:
+            raise ValueError("PM task observation cannot move backwards")
+        if new_task.observed_at == old_task.observed_at and new_task != old_task:
+            raise ValueError("PM task cannot change at the same observation")
+
+
 class StatusSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -425,6 +508,7 @@ class StatusSnapshot(BaseModel):
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
     request_registry: RequestRegistrySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")
@@ -457,20 +541,40 @@ class StatusResponse(StatusSnapshot):
 
 
 class StatusUpsertRequest(BaseModel):
-    """ingestが明示した行とcapacityだけを既存snapshotへ反映する。"""
+    """ingestが明示したruntime行またはPM観測だけを既存snapshotへ反映する。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["local-event-record"]
+    source: Literal["local-event-record", "pm-confirmed"]
     items: list[WorkItem] = Field(default_factory=list, max_length=32)
     runtime_capacity: RuntimeCapacitySnapshot | None = None
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")
     def check_targets(self) -> "StatusUpsertRequest":
+        projection_supplied = "pm_task_projection" in self.model_fields_set
+        if projection_supplied and self.pm_task_projection is None:
+            raise ValueError("pm_task_projection cannot be null when supplied")
+        runtime_fields = {
+            "runtime_capacity",
+            "focus_summary",
+            "session_tree",
+            "known_history",
+            "runtime_binding",
+        }
+        supplied_runtime_fields = runtime_fields.intersection(self.model_fields_set)
+        if self.source == "pm-confirmed":
+            if not projection_supplied:
+                raise ValueError("pm-confirmed upsert needs a PM task projection")
+            if self.items or supplied_runtime_fields:
+                raise ValueError("pm-confirmed upsert cannot mutate runtime or control fields")
+            return self
+        if projection_supplied:
+            raise ValueError("local-event-record cannot mutate PM task projection")
         agents = [item.agent for item in self.items]
         if len(agents) != len(set(agents)):
             raise ValueError("upsert items must have unique agent identifiers")
@@ -524,4 +628,5 @@ class StatusUpsertReceipt(BaseModel):
     focus_summary: FocusSummary | None = None
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None
