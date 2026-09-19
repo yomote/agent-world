@@ -331,6 +331,35 @@ def validate_ruleset(rulesets: list[dict[str, Any]]) -> None:
     )
 
 
+def redacted_ruleset_diagnostic(rulesets: list[dict[str, Any]], status: int | None) -> str:
+    """ruleset本文の値やactorを出さず、可視性に必要な形だけを記録する。"""
+
+    details = []
+    for index, ruleset in enumerate(rulesets):
+        if not isinstance(ruleset, dict):
+            details.append(f"{index}:body=non-object")
+            continue
+        keys = ",".join(sorted(key for key in ruleset if isinstance(key, str)))
+        if "bypass_actors" not in ruleset:
+            bypass = "missing"
+        elif isinstance(ruleset["bypass_actors"], list):
+            bypass = f"array:{len(ruleset['bypass_actors'])}"
+        else:
+            bypass = "non-array"
+        details.append(f"{index}:keys=[{keys}] bypass_actors={bypass}")
+    rendered_status = "unknown" if status is None else str(status)
+    return f"ruleset diagnostic status={rendered_status}; {'; '.join(details)}"
+
+
+def validate_rulesets_with_diagnostic(client: GitHubClient, rulesets: list[dict[str, Any]]) -> None:
+    try:
+        validate_ruleset(rulesets)
+    except GateError as error:
+        raise GateError(
+            f"{error}; {redacted_ruleset_diagnostic(rulesets, client.last_http_status)}"
+        ) from error
+
+
 def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
     matching = [
         run
@@ -426,7 +455,8 @@ def evaluate(client: GitHubClient, target: GateTarget, *, require_ci: bool = Tru
     reviewer = validate_review(comments, target.expected_head)
     if unresolved_threads(client, target.number):
         raise GateError("unresolved review threads remain")
-    validate_ruleset(fetch_rulesets(client))
+    rulesets = fetch_rulesets(client)
+    validate_rulesets_with_diagnostic(client, rulesets)
     if require_ci and not validate_ci(fetch_runs(client, target), target):
         raise GateError("current-head CI is still running")
     return reviewer

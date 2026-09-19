@@ -16,6 +16,10 @@ on:
         required: true
         default: false
         type: boolean
+      diagnostic_source:
+        description: 診断を許可したレビュー済みsourceの40桁SHA（診断時に必須）
+        required: false
+        type: string
 
 concurrency:
   group: merge-gate-main
@@ -45,3 +49,34 @@ jobs:
         run: >-
           python scripts/merge_gate.py "$PR_NUMBER" "$EXPECTED_HEAD"
           --execute --dispatch-after-merge
+
+  diagnose:
+    name: ruleset visibility diagnostic
+    if: inputs.execute_merge == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: 固定sourceでruleset可視性を診断
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          DIAGNOSTIC_SOURCE: ${{ inputs.diagnostic_source }}
+        run: |
+          if [[ ! "$DIAGNOSTIC_SOURCE" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "diagnostic_source must be a 40-character lowercase SHA" >&2
+            exit 2
+          fi
+          if [[ "$GITHUB_SHA" != "$DIAGNOSTIC_SOURCE" ]]; then
+            echo "workflow source does not match diagnostic_source" >&2
+            exit 2
+          fi
+          python scripts/merge_gate.py "$PR_NUMBER" "$EXPECTED_HEAD"
