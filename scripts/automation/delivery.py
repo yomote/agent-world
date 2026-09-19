@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .evidence import thread_id
 from .jobs import run_job
+from .review_delivery import render_review_input, validate_review_input
 from .runner import ROOT, Runner, digest, dispatcher, read_input, safe_path
 from .transport import Stop, Transport, atomic_json
 
@@ -437,6 +438,25 @@ class Campaign:
             data, "interrupted_review_saved_new_request_required", cancelled_review=request_id
         )
 
+    def set_review_input(self, source):
+        """Issue責任者のAC mapと作者観点をreview前の一意入力として保存する。"""
+        self.enter()
+        data = self.data()
+        if data["state"] != "job_verified" or data.get("review_input") is not None:
+            raise Stop("stopped", "review_input_state_invalid")
+        try:
+            value = json.loads(read_input(self.root, source).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            raise Stop("stopped", "review_input_invalid") from None
+        validate_review_input(value)
+        data["review_input"] = value
+        data["review_input_sha256"] = digest(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        )
+        data.update(token=None, lease_until=None)
+        self.save_event(data, "review_input_fixed")
+        self.token = None
+
     def smoke(self):
         self.enter()
         result = run_job(
@@ -507,26 +527,8 @@ class Campaign:
         data["head"] = head
         self.save_event(data, "head_fixed")
         self.check_scope(workspace, head)
-        review = self.transport.call(
-            "independent_review",
-            {
-                "head": head,
-                "base": data["integration_base"],
-                "workspace": str(workspace),
-                "reviewer": REVIEWER,
-                "scope": SCOPES[self.name],
-            },
-            seconds=1200,
-        )
-        if (
-            review.get("head") != head
-            or review.get("reviewer") != REVIEWER
-            or review.get("verdict") != "pass"
-        ):
-            raise Stop("failed", "independent_review_not_pass")
-        data = self.data()
-        data["review"] = review
-        self.save_event(data, "independent_review_pass")
+        review_input = self.data().get("review_input")
+        validate_review_input(review_input)
         check = self.transport.call(
             "current_check", {"head": head, "workspace": str(workspace)}, seconds=900
         )
@@ -555,8 +557,8 @@ class Campaign:
             else "明示起動するbounded改善の実装と証跡。"
         )
         body = (
-            summary + "\n\n"
-            f"対象head: {head}\n独立review: {REVIEWER} / pass\n"
+            summary + "\n\n" + render_review_input(review_input) + "\n\n"
+            f"対象head: {head}\n独立review: {REVIEWER} / pending\n"
             "検証: npm run check / clean current head pass\n"
             "承認待ち・結果不明で停止。Azure操作・credential・保護変更なし。\n"
         )
@@ -585,6 +587,79 @@ class Campaign:
         data = self.data()
         data["pr"] = number
         self.save_event(data, "draft_pr_created")
+        review = self.transport.call(
+            "independent_review",
+            {
+                "head": head,
+                "base": data["integration_base"],
+                "workspace": str(workspace),
+                "reviewer": REVIEWER,
+                "scope": SCOPES[self.name],
+                "acceptance_map": review_input["acceptance_map"],
+                "author_review_plan": review_input["author_review_plan"],
+            },
+            seconds=1200,
+        )
+        if (
+            review.get("head") != head
+            or review.get("reviewer") != REVIEWER
+            or review.get("verdict") not in {"pass", "fail"}
+            or review.get("acceptance_map") != review_input["acceptance_map"]
+            or review.get("author_review_plan") != review_input["author_review_plan"]
+        ):
+            raise Stop("failed", "independent_review_invalid")
+        data = self.data()
+        data["review"] = review
+        self.save_event(data, "independent_review_received")
+        review_for_delivery = dict(review)
+        review_for_delivery["scope"] = ", ".join(SCOPES[self.name])
+        review_for_delivery["checks"] = review.get("verified") or [
+            "fixed-head independent semantic review returned no findings"
+        ]
+        receipt = self.transport.call(
+            "publish_pr_review",
+            {
+                "repo_full_name": REPOSITORY,
+                "pr_number": number,
+                "head": head,
+                "review": review_for_delivery,
+            },
+            write=True,
+        )
+        if receipt.get("head") != head or not receipt.get("url", "").startswith(
+            "https://github.com/"
+        ):
+            raise Stop("unknown", "review_delivery_receipt_invalid")
+        data = self.data()
+        data["review_delivery"] = receipt
+        self.save_event(data, "independent_review_visible")
+        if review.get("verdict") != "pass" or review.get("findings") != []:
+            data = self.data()
+            data.setdefault("review_history", []).append(receipt)
+            self.save_event(data, "independent_review_findings_visible")
+            self.finish_step("failed", "independent_review_not_pass")
+            self.token = None
+            raise Stop("failed", "independent_review_not_pass")
+        history_data = self.data()
+        for prior in history_data.get("review_history", []):
+            if prior.get("resolved") or not prior.get("finding_ids"):
+                continue
+            resolution = self.transport.call(
+                "resolve_pr_review_threads",
+                {
+                    "repo_full_name": REPOSITORY,
+                    "pr_number": number,
+                    "head": head,
+                    "review_id": prior["review_id"],
+                    "finding_ids": prior["finding_ids"],
+                    "recheck": review,
+                },
+                write=True,
+            )
+            if resolution.get("head") != head:
+                raise Stop("unknown", "review_resolution_receipt_invalid")
+            prior.update(resolved=True, resolution=resolution)
+            self.save_event(history_data, "review_threads_resolved")
         self.transport.call(
             "post_review_evidence",
             {
@@ -592,11 +667,13 @@ class Campaign:
                 "pr_number": number,
                 "comment": (
                     f"<!-- agent-world-independent-review -->\nhead: {head}\n"
-                    f"verdict: pass\nreviewer: {REVIEWER}\n\n{body}"
+                    f"verdict: pass\nreviewer: {REVIEWER}\n\n"
+                    f"通常PR review receipt: {receipt['url']}\n\n{body}"
                 ),
             },
             write=True,
         )
+        self.save_event(self.data(), "independent_review_pass")
         if not self.data().get("pr_ready"):
             self.transport.call(
                 "ready_pr", {"repository_full_name": REPOSITORY, "pr_number": number}, write=True
@@ -867,10 +944,11 @@ class Campaign:
         base = git(workspace, "merge-base", "origin/main", head)
         self.check_scope(workspace, head, base=base)
         data.update(state="job_verified", reason="revised_head", head=head, integration_base=base)
+        data.pop("review", None)
+        data.pop("current_check", None)
+        data.pop("review_delivery", None)
         if data.get("confirmed_prior_push"):
             data["prior_push_revision_head"] = head
-            data.pop("review", None)
-            data.pop("current_check", None)
         self.save_event(data, "revised_head_same_budget")
 
     def handoff(self, reviewed_head):
@@ -944,6 +1022,8 @@ def main():
     handoff.add_argument("--reviewed-head", required=True)
     resume_review = sub.add_parser("resume-review")
     resume_review.add_argument("--request-id", required=True)
+    review_input = sub.add_parser("review-input")
+    review_input.add_argument("--source", required=True)
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
     revise = sub.add_parser("revise")
@@ -1015,6 +1095,8 @@ def main():
                     task.handoff(args.reviewed_head)
                 elif args.command == "resume-review":
                     task.resume_review(args.request_id)
+                elif args.command == "review-input":
+                    task.set_review_input(args.source)
                 elif args.command == "reconcile-push":
                     task.reconcile_push()
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)

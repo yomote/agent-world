@@ -10,6 +10,13 @@ assignees: ""
 
 <!-- 利用者にとって完了といえる結果を短く書く。 -->
 
+### Acceptance Criteria
+
+- Issue責任者 / PM:
+- `<requirement ID> / <acceptance ID>`: `<条件>` / source: `<URL>` / version: `<Issue editまたはcomment ID>`
+
+<!-- ACの作成と変更はIssue責任者 / PMが行う。変更時は理由、履歴、既存実装・評価への影響を残し、PR作者が都合で条件を下げない。 -->
+
 ## 着工packet
 
 - owner:

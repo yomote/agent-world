@@ -1,0 +1,301 @@
+"""独立reviewerの結果を通常のGitHub PR reviewへ安全に写像する。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+
+from .transport import Stop
+
+SHA = re.compile(r"[0-9a-f]{40}\Z")
+PATH = re.compile(r"(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\\\x00]+\Z")
+FINDING_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z")
+SEVERITIES = {"P0", "P1", "P2"}
+CATEGORIES = {"generic_risk", "business_invariant"}
+SUPPRESSION_REASONS = {"duplicate", "stale", "preference", "out_of_scope", "backlog"}
+MARKER = "agent-world-review-delivery"
+
+
+def _text(value, name, *, limit=4000):
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise Stop("stopped", f"review_{name}_invalid")
+    if len(value) > limit:
+        raise Stop("stopped", f"review_{name}_invalid")
+    return value
+
+
+def changed_lines(patch):
+    """GitHubのunified diffからLEFT/RIGHTそれぞれにcomment可能な行を得る。"""
+    if not isinstance(patch, str):
+        return {"LEFT": set(), "RIGHT": set()}
+    result = {"LEFT": set(), "RIGHT": set()}
+    old = new = None
+    for raw in patch.splitlines():
+        match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+        if match:
+            old, new = map(int, match.groups())
+            continue
+        if old is None or not raw or raw.startswith("\\"):
+            continue
+        if raw.startswith("+"):
+            result["RIGHT"].add(new)
+            new += 1
+        elif raw.startswith("-"):
+            result["LEFT"].add(old)
+            old += 1
+        else:
+            result["LEFT"].add(old)
+            result["RIGHT"].add(new)
+            old += 1
+            new += 1
+    return result
+
+
+def _finding_body(finding):
+    return (
+        f"<!-- {MARKER}-finding:{finding['id']} -->\n"
+        f"**{finding['severity']} / {finding['category']}** · "
+        f"requirement `{finding['requirement_id']}` · acceptance `{finding['acceptance_id']}`\n\n"
+        f"**問題**: {finding['problem']}\n\n"
+        f"**失敗シナリオ**: {finding['failure_scenario']}\n\n"
+        f"**影響**: {finding['impact']}\n\n"
+        f"**根拠**: {finding['evidence']}\n\n"
+        f"**要求する対応**: {finding['request']}\n\n"
+        f"**blocking根拠**: {finding['blocking_rationale']}"
+    )
+
+
+def validate_review_input(value):
+    """Issue責任者のAC mapと作者のreview観点を、review前に固定する。"""
+    if not isinstance(value, dict):
+        raise Stop("stopped", "review_input_missing")
+    acceptance_map = value.get("acceptance_map")
+    if not isinstance(acceptance_map, list) or not acceptance_map:
+        raise Stop("stopped", "review_acceptance_map_missing")
+    acceptance_pairs = set()
+    for item in acceptance_map:
+        if not isinstance(item, dict) or item.get("status") not in {
+            "achieved",
+            "unmet",
+            "unknown",
+        }:
+            raise Stop("stopped", "review_acceptance_map_invalid")
+        requirement = _text(item.get("requirement_id"), "requirement_id", limit=200)
+        acceptance = _text(item.get("acceptance_id"), "acceptance_id", limit=200)
+        _text(item.get("issue"), "acceptance_issue", limit=200)
+        _text(item.get("pm_owner"), "acceptance_pm_owner", limit=200)
+        _text(item.get("source"), "acceptance_source", limit=500)
+        _text(item.get("source_version"), "acceptance_source_version", limit=200)
+        _text(item.get("definition"), "acceptance_definition")
+        _text(item.get("evidence"), "acceptance_evidence")
+        acceptance_pairs.add((requirement, acceptance))
+    author_plan = value.get("author_review_plan")
+    if not isinstance(author_plan, list) or not author_plan:
+        raise Stop("stopped", "review_author_plan_missing")
+    for item in author_plan:
+        if not isinstance(item, dict) or item.get("category") not in CATEGORIES:
+            raise Stop("stopped", "review_author_plan_invalid")
+        for name in ("id", "focus", "evidence", "known_unmet"):
+            _text(item.get(name), "author_plan_" + name)
+    return acceptance_map, author_plan, acceptance_pairs
+
+
+def render_review_input(value):
+    """PR作者が公開するAC対応と変更固有review観点を短いMarkdownへする。"""
+    acceptance_map, author_plan, _ = validate_review_input(value)
+    lines = ["## AC対応（Issue責任者 / PM管理）", ""]
+    for item in acceptance_map:
+        lines.append(
+            f"- `{item['requirement_id']} / {item['acceptance_id']}` "
+            f"[{item['status']}] {item['definition']} — evidence: {item['evidence']} "
+            f"([source]({item['source']}), version `{item['source_version']}`, "
+            f"PM `{item['pm_owner']}`)"
+        )
+    lines.extend(["", "## PR作者の変更固有review観点", ""])
+    for item in author_plan:
+        lines.append(
+            f"- `{item['id']}` / {item['category']}: {item['focus']} — "
+            f"evidence: {item['evidence']} / known unmet: {item['known_unmet']}"
+        )
+    lines.extend(
+        [
+            "",
+            "この対応表は独立reviewerの確認範囲を制限せず、作者の自己申告だけでAC達成にしません。",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def prepare(review, *, head, files, proxy_login, pr_author):
+    """reviewer結果を検証し、GitHub COMMENT review payloadとreceipt keyを作る。"""
+    if not SHA.fullmatch(head or "") or review.get("head") != head:
+        raise Stop("stopped", "review_head_mismatch")
+    if review.get("event", "COMMENT") != "COMMENT":
+        raise Stop("stopped", "review_event_must_be_comment")
+    reviewer = _text(review.get("reviewer"), "reviewer", limit=200)
+    scope = _text(review.get("scope"), "scope")
+    checks = review.get("checks")
+    if (
+        not isinstance(checks, list)
+        or not checks
+        or any(not isinstance(item, str) or not item.strip() for item in checks)
+    ):
+        raise Stop("stopped", "review_checks_invalid")
+    if review.get("verdict") not in {"pass", "fail"}:
+        raise Stop("stopped", "review_verdict_invalid")
+    _text(proxy_login, "proxy_login", limit=100)
+    _text(pr_author, "pr_author", limit=100)
+    acceptance_map, author_plan, acceptance_pairs = validate_review_input(review)
+
+    file_lines = {}
+    for item in files:
+        path = item.get("filename") if isinstance(item, dict) else None
+        if isinstance(path, str):
+            file_lines[path] = changed_lines(item.get("patch"))
+
+    comments, ids = [], set()
+    findings = review.get("findings")
+    if not isinstance(findings, list):
+        raise Stop("stopped", "review_findings_invalid")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise Stop("stopped", "review_finding_invalid")
+        identifier = finding.get("id")
+        if not FINDING_ID.fullmatch(identifier or "") or identifier in ids:
+            raise Stop("stopped", "review_finding_id_invalid")
+        ids.add(identifier)
+        path, side, line = finding.get("path"), finding.get("side"), finding.get("line")
+        start = finding.get("start_line", line)
+        start_side = finding.get("start_side", side)
+        if (
+            not PATH.fullmatch(path or "")
+            or side not in {"LEFT", "RIGHT"}
+            or start_side != side
+            or type(line) is not int
+            or type(start) is not int
+            or start > line
+            or line < 1
+            or path not in file_lines
+            or any(number not in file_lines[path][side] for number in range(start, line + 1))
+        ):
+            raise Stop("stopped", "review_finding_location_invalid")
+        if finding.get("severity") not in SEVERITIES:
+            raise Stop("stopped", "review_finding_severity_invalid")
+        if finding.get("category") not in CATEGORIES:
+            raise Stop("stopped", "review_finding_category_invalid")
+        for name in (
+            "requirement_id",
+            "acceptance_id",
+            "problem",
+            "failure_scenario",
+            "impact",
+            "evidence",
+            "request",
+            "blocking_rationale",
+        ):
+            _text(finding.get(name), "finding_" + name)
+        if (finding["requirement_id"], finding["acceptance_id"]) not in acceptance_pairs:
+            raise Stop("stopped", "review_finding_acceptance_unmapped")
+        comment = {"path": path, "line": line, "side": side, "body": _finding_body(finding)}
+        if start != line:
+            comment.update(start_line=start, start_side=side)
+        comments.append(comment)
+
+    suppressed = review.get("suppressed", [])
+    if not isinstance(suppressed, list):
+        raise Stop("stopped", "review_suppressed_invalid")
+    suppression_lines = []
+    for item in suppressed:
+        if (
+            not isinstance(item, dict)
+            or not FINDING_ID.fullmatch(item.get("id", ""))
+            or item.get("reason") not in SUPPRESSION_REASONS
+        ):
+            raise Stop("stopped", "review_suppressed_invalid")
+        explanation = _text(item.get("explanation"), "suppressed_explanation")
+        suppression_lines.append(f"- `{item['id']}`: {item['reason']} — {explanation}")
+
+    if (review["verdict"] == "pass") != (len(findings) == 0):
+        raise Stop("stopped", "review_verdict_findings_mismatch")
+    canonical = {
+        "head": head,
+        "reviewer": reviewer,
+        "scope": scope,
+        "checks": checks,
+        "verdict": review["verdict"],
+        "findings": findings,
+        "suppressed": suppressed,
+        "acceptance_map": acceptance_map,
+        "author_review_plan": author_plan,
+    }
+    key = hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    body = (
+        f"<!-- {MARKER}:{key} -->\n"
+        "## 独立レビュー配送\n\n"
+        f"- 対象head: `{head}`\n"
+        f"- 独立reviewer: `{reviewer}`\n"
+        f"- scope: {scope}\n"
+        f"- checks: {'; '.join(checks)}\n"
+        f"- findings: {len(findings)}\n"
+        f"- verdict: {review['verdict']}\n\n"
+        f"- AC map: {len(acceptance_map)}件（Issue責任者/PMの原ACと状態を参照）\n"
+        f"- 作者review観点: {len(author_plan)}件（独立reviewerを拘束しない）\n\n"
+        f"このreviewは `{proxy_login}` の既存GitHub認証が独立reviewerの結果を代行記録した"
+        f"COMMENTです（PR author: `{pr_author}`）。GitHub上のAPPROVE/CHANGES_REQUESTEDや"
+        "reviewer本人の認証を表しません。CI成功だけを目的達成の根拠にしていません。"
+    )
+    if suppression_lines:
+        body += "\n\n### inlineにしなかった項目\n\n" + "\n".join(suppression_lines)
+    return {
+        "key": key,
+        "payload": {"commit_id": head, "body": body, "event": "COMMENT", "comments": comments},
+        "finding_ids": sorted(ids),
+    }
+
+
+def find_receipt(reviews, *, key, head):
+    marker = f"<!-- {MARKER}:{key} -->"
+    matches = [item for item in reviews if marker in (item.get("body") or "")]
+    if len(matches) > 1:
+        raise Stop("unknown", "review_delivery_duplicate_receipts")
+    if not matches:
+        return None
+    item = matches[0]
+    if item.get("commit_id") != head:
+        raise Stop("stopped", "review_delivery_stale_receipt")
+    url = item.get("html_url")
+    if not isinstance(url, str) or not url.startswith("https://github.com/"):
+        raise Stop("unknown", "review_delivery_receipt_invalid")
+    return {"url": url, "head": head, "review_id": item.get("id"), "key": key}
+
+
+def resolution_query(number):
+    return {
+        "query": """query($n:Int!){repository(owner:\"yomote\",name:\"agent-world\"){
+        pullRequest(number:$n){headRefOid reviewThreads(first:100){nodes{id isResolved isOutdated
+        comments(first:20){nodes{body pullRequestReview{databaseId}} pageInfo{hasNextPage}}}
+        pageInfo{hasNextPage}}}}}""",
+        "variables": {"n": number},
+    }
+
+
+def resolution_mutation(thread_ids):
+    if not thread_ids:
+        raise Stop("stopped", "review_resolution_empty")
+    variables, declarations, fields = {}, [], []
+    for index, thread_id in enumerate(thread_ids):
+        if not isinstance(thread_id, str) or not thread_id:
+            raise Stop("stopped", "review_thread_id_invalid")
+        name = f"t{index}"
+        variables[name] = thread_id
+        declarations.append(f"${name}:ID!")
+        fields.append(
+            f"r{index}:resolveReviewThread(input:{{threadId:${name}}}){{thread{{id isResolved}}}}"
+        )
+    return {
+        "query": "mutation(" + ",".join(declarations) + "){" + " ".join(fields) + "}",
+        "variables": variables,
+    }

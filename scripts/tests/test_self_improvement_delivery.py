@@ -17,6 +17,30 @@ from scripts.automation.runner import Runner, dispatcher  # noqa: E402
 
 OWNER = "01a07c68-367d-75e3-b267-3ae46db963ac"
 HEAD = "a" * 40
+REVIEW_INPUT = {
+    "acceptance_map": [
+        {
+            "requirement_id": "REQ-TEST",
+            "acceptance_id": "AC-TEST",
+            "issue": "#test",
+            "pm_owner": "/root/pm-controller",
+            "source": "https://github.com/yomote/agent-world/issues/1",
+            "source_version": "test-v1",
+            "definition": "delivery境界を維持する",
+            "status": "unknown",
+            "evidence": "このtestが検証する",
+        }
+    ],
+    "author_review_plan": [
+        {
+            "id": "PLAN-TEST",
+            "category": "generic_risk",
+            "focus": "再送防止",
+            "evidence": "専用回帰test",
+            "known_unmet": "実GitHub配送は行わない",
+        }
+    ],
+}
 
 
 def test_live_relay_fail_closed_contract():
@@ -306,9 +330,17 @@ def test_helper_delivery_stops_before_fourth_attempt_and_rejects_old_packet(task
     def checkout_git(path, *args):
         if args[0] == "remote":
             return "https://github.com/yomote/agent-world.git"
+        if args[0] == "branch":
+            return "codex/test-helper"
+        if args[0] == "status":
+            return ""
         return current[0] if args[0] == "rev-parse" else helper.data()["head"]
 
     def failed_review(operation, *args, **kwargs):
+        if operation == "current_check":
+            return {"head": current[0], "end_head": current[0], "clean": True, "exit_code": 0}
+        if operation == "create_draft_pr":
+            return {"number": 91}
         assert operation == "independent_review"
         calls.append(operation)
         raise transport.Stop("failed", "independent_review_not_pass")
@@ -316,8 +348,9 @@ def test_helper_delivery_stops_before_fourth_attempt_and_rejects_old_packet(task
     monkeypatch.setattr(delivery, "git", checkout_git)
     monkeypatch.setattr(helper, "check_scope", lambda *args, **kwargs: None)
     monkeypatch.setattr(helper.transport, "call", failed_review)
+    monkeypatch.setattr(helper.transport.github, "git_transfer", lambda *args, **kwargs: None)
     data = helper.data()
-    data.update(state="job_verified", head=current[0])
+    data.update(state="job_verified", head=current[0], review_input=REVIEW_INPUT)
     helper.save_event(data, "test_job_verified")
     for attempt in range(1, 4):
         with pytest.raises(transport.Stop, match="independent_review_not_pass") as caught:
@@ -610,6 +643,7 @@ def test_reconciled_delivery_cannot_replay_old_head_or_change_ref(prior_push, mo
         reason="revised_head",
         head=revised,
         prior_push_revision_head=revised,
+        review_input=REVIEW_INPUT,
     )
     task.save_event(data, "test_revised")
     current = [evidence["reserved_head"] if change == "old_head" else revised]
@@ -633,7 +667,13 @@ def test_reconciled_delivery_cannot_replay_old_head_or_change_ref(prior_push, mo
     def review_check(operation, *args, **kwargs):
         operations.append(operation)
         if operation == "independent_review":
-            return {"head": revised, "reviewer": delivery.REVIEWER, "verdict": "pass"}
+            return {
+                "head": revised,
+                "reviewer": delivery.REVIEWER,
+                "verdict": "pass",
+                "findings": [],
+                **REVIEW_INPUT,
+            }
         assert operation == "current_check"
         if change == "late_branch":
             branch[0] = "codex/other"
@@ -649,7 +689,7 @@ def test_reconciled_delivery_cannot_replay_old_head_or_change_ref(prior_push, mo
     reason = "head_dirty_or_moved" if change == "late_head" else "confirmed_push_revision_moved"
     with pytest.raises(transport.Stop, match=reason):
         task.deliver(task.root)
-    assert len(operations) == (2 if change.startswith("late_") else 0)
+    assert len(operations) == (1 if change.startswith("late_") else 0)
     assert task.data()["head"] == revised
 
 
