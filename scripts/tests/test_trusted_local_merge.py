@@ -240,9 +240,9 @@ jobs:
         if args == (
             "gh",
             "api",
-            "repos/yomote/agent-world/environments/azure-production/protection-rules",
+            "repos/yomote/agent-world/environments/azure-production",
         ):
-            return json.dumps({"total_count": 0})
+            return json.dumps({"protection_rules": []})
         if args == ("gh", "api", "repos/yomote/agent-world/actions/variables?per_page=100"):
             return json.dumps({"total_count": 0, "variables": []})
         return responses[args]
@@ -253,6 +253,73 @@ jobs:
     assert observed.candidate_has_known_deploy_guard is True
     assert observed.deploy_enabled is False
     assert observed.candidate_workflow_tree_matches_trusted is True
+
+
+@pytest.mark.parametrize("environment", [{}, {"protection_rules": {}}, []])
+def test_system_adapter_rejects_unknown_environment_protection_shape(monkeypatch, environment):
+    """環境GETのroot/field/型が不明でも保護なしと誤認してmergeする回帰を防ぐ。"""
+    adapter = local.SystemAdapter()
+    workflow = b"""\
+if: github.ref == 'refs/heads/main'
+DEPLOY_ENABLED: ${{ vars.AZURE_DEPLOY_ENABLED }}
+test "${DEPLOY_ENABLED}" = "true"
+- name: Sign in to Azure with OIDC
+"""
+
+    def fake_run(*args):
+        responses = {
+            ("git", "ls-remote", "origin", "refs/heads/main"): f"{SHA}\trefs/heads/main",
+            ("git", "show", f"{SHA}:.github/workflows/deploy-azure.yml"): workflow.decode(),
+            (
+                "git",
+                "ls-tree",
+                "-r",
+                SHA,
+                "--",
+                ".github/workflows",
+            ): f"100644 blob {local.AUDITED_DEPLOY_BLOB}\t.github/workflows/deploy-azure.yml",
+            ("git", "rev-parse", "HEAD"): SHA,
+            ("git", "rev-parse", "HEAD^{tree}"): SHA,
+            ("git", "branch", "--show-current"): "",
+            ("git", "status", "--porcelain"): "",
+            ("gh", "api", "user", "--jq", ".login"): "owner",
+        }
+        if args == (
+            "gh",
+            "api",
+            f"repos/yomote/agent-world/contents/.github/workflows/deploy-azure.yml?ref={HEAD}",
+        ):
+            return json.dumps(
+                {
+                    "encoding": "base64",
+                    "content": base64.b64encode(workflow).decode(),
+                    "sha": local.AUDITED_DEPLOY_BLOB,
+                }
+            )
+        if args == ("gh", "api", f"repos/yomote/agent-world/git/trees/{HEAD}?recursive=1"):
+            return json.dumps(
+                {
+                    "truncated": False,
+                    "tree": [
+                        {
+                            "path": ".github/workflows/deploy-azure.yml",
+                            "type": "blob",
+                            "sha": local.AUDITED_DEPLOY_BLOB,
+                        }
+                    ],
+                }
+            )
+        if args == ("gh", "api", "repos/yomote/agent-world/environments/azure-production"):
+            return json.dumps(environment)
+        if args == ("gh", "api", "repos/yomote/agent-world/actions/variables?per_page=100"):
+            return json.dumps({"total_count": 0, "variables": []})
+        return responses[args]
+
+    monkeypatch.setattr(adapter, "_run", fake_run)
+    observed = adapter.inspect(local.load_approval(packet()))
+    assert observed.environment_approval_required is None
+    with pytest.raises(local.Stop, match="environment protection"):
+        local.validate_runtime(local.load_approval(packet()), observed)
 
 
 def test_system_adapter_binds_review_ci_and_authority_to_packet(monkeypatch):

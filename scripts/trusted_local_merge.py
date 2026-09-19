@@ -302,8 +302,10 @@ class SystemAdapter:
         candidate_tree = self._workflow_tree(
             self._api_json(f"repos/{REPOSITORY}/git/trees/{approval.expected_head}?recursive=1")
         )
-        rules = self._api_json(f"repos/{REPOSITORY}/environments/azure-production/protection-rules")
-        total = rules.get("total_count") if isinstance(rules, dict) else None
+        environment = self._api_json(f"repos/{REPOSITORY}/environments/azure-production")
+        protection_rules = (
+            environment.get("protection_rules") if isinstance(environment, dict) else None
+        )
         deploy_enabled = self._deployment_enabled()
         return Runtime(
             repository=REPOSITORY,
@@ -328,7 +330,9 @@ class SystemAdapter:
             candidate_deploy_matches_trusted=candidate_workflow == trusted_workflow,
             candidate_has_known_deploy_guard=self._has_known_deploy_guard(candidate_workflow),
             deploy_enabled=deploy_enabled,
-            environment_approval_required=None if total is None else total > 0,
+            environment_approval_required=(
+                len(protection_rules) > 0 if isinstance(protection_rules, list) else None
+            ),
         )
 
     def verify_evidence(self, approval: Approval) -> None:
