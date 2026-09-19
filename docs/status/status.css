@@ -188,6 +188,12 @@ summary:focus-visible {
   border-radius: 12px;
   background: #0e141e;
 }
+.request-card[data-freshness="stale"] {
+  border-color: var(--warning);
+}
+.request-card[data-freshness="unknown"] {
+  border-color: var(--danger);
+}
 .request-selector {
   width: 100%;
   min-height: 0;

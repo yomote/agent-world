@@ -43,11 +43,33 @@ const REQUEST_LIFECYCLE_LABELS = {
   registered: "登録済み",
   delegated: "委任済み",
   running: "進行中",
+  "review-wait": "PM受入待ち",
   blocked: "阻害あり",
   "handover-waiting": "引継待ち（明示dispatch必要）",
   reconnectable: "再接続可能（明示dispatch必要）",
+  stopped: "中止（目的達成ではありません）",
   completed: "完了",
 };
+
+const WAITING_ON_LABELS = {
+  worker: "worker待ち",
+  pm: "PM待ち",
+  po: "PO本人待ち",
+  external: "外部条件待ち",
+  none: "待ちなし",
+};
+
+const PM_TASK_STATE_LABELS = {
+  "not-started": "未着手",
+  running: "進行中",
+  "review-wait": "PM受入待ち",
+  blocked: "阻害あり",
+  stopped: "中止（目的達成ではありません）",
+  completed: "完了",
+  unknown: "状態不明",
+};
+
+const REQUEST_FRESH_SECONDS = 120;
 
 const ISSUE_STATE_LABELS = {
   open: "Issue open",
@@ -404,6 +426,93 @@ export function requestLifecycleDescription(lifecycle) {
   return REQUEST_LIFECYCLE_LABELS[lifecycle] || lifecycle || "登録状態未取得";
 }
 
+export function requestBoardStatus(request, now = Date.now()) {
+  const reportClock = Date.parse(request.report_updated_at);
+  const ageSeconds =
+    Number.isFinite(reportClock) && reportClock <= now
+      ? Math.floor((now - reportClock) / 1000)
+      : null;
+  const freshness =
+    ageSeconds === null ? "unknown" : ageSeconds > REQUEST_FRESH_SECONDS ? "stale" : "fresh";
+  const missing = [];
+  if (request.lifecycle !== "completed") {
+    if (!request.owner_agent) missing.push("owner");
+    if (!request.next_action) missing.push("next action");
+  }
+  if (["blocked", "review-wait"].includes(request.lifecycle)) {
+    if (!request.waiting_on || request.waiting_on === "none") missing.push("waiting on");
+  }
+  if (request.lifecycle === "stopped" && !request.waiting_on) {
+    missing.push("waiting on");
+  }
+  if (["blocked", "review-wait", "stopped"].includes(request.lifecycle)) {
+    if (!request.resume_trigger) missing.push("resume trigger");
+  }
+  const poState = !request.po_review_required
+    ? "対象外"
+    : request.po_acceptance_receipt?.decision === "accepted"
+      ? "PO本人が確認済み"
+      : "PO確認待ち";
+  return {
+    freshness,
+    ageSeconds,
+    missing,
+    waiting:
+      request.waiting_on && WAITING_ON_LABELS[request.waiting_on]
+        ? `${WAITING_ON_LABELS[request.waiting_on]}${request.waiting_detail ? `: ${request.waiting_detail}` : ""}`
+        : "未報告",
+    closure: request.closure_audit?.overall || "未検証",
+    poState,
+    poDelivery:
+      request.po_review_required && request.po_acceptance_receipt?.decision !== "accepted"
+        ? "outbox配送状態はこのsourceへ未接続（通知済みとは判定しません）"
+        : "—",
+  };
+}
+
+export function orderedRequestsForBoard(requests, selectedId) {
+  return [...requests].sort((left, right) => {
+    if (left.request_id === selectedId) return -1;
+    if (right.request_id === selectedId) return 1;
+    const leftDone = left.lifecycle === "completed";
+    const rightDone = right.lifecycle === "completed";
+    if (leftDone !== rightDone) return leftDone ? 1 : -1;
+    return Date.parse(right.report_updated_at) - Date.parse(left.report_updated_at);
+  });
+}
+
+export function pmTaskBoardStatus(task, now = Date.now()) {
+  const shared = requestBoardStatus(
+    {
+      lifecycle: task.state,
+      owner_agent: task.owner,
+      next_action: task.next_action,
+      waiting_on: task.waiting_on,
+      waiting_detail: task.waiting_detail,
+      resume_trigger: task.resume_trigger,
+      report_updated_at: task.observed_at,
+      po_review_required: task.po_status === "pending",
+      po_acceptance_receipt: task.po_status === "accepted" ? { decision: "accepted" } : null,
+      closure_audit: null,
+    },
+    now,
+  );
+  return {
+    ...shared,
+    state: PM_TASK_STATE_LABELS[task.state] || task.state,
+    poState:
+      task.po_status === "accepted"
+        ? "PO本人が確認済み"
+        : task.po_status === "pending"
+          ? "PO確認待ち"
+          : task.po_status === "not-required"
+            ? "対象外"
+            : "未確認",
+    poDelivery:
+      task.po_status === "pending" ? "projectionに配送証跡なし（通知済みとは判定しません）" : "—",
+  };
+}
+
 export function requestFocusDescription(request) {
   return {
     purpose: request.public_purpose,
@@ -550,20 +659,94 @@ function renderDetail(node, allItems) {
 let selectedRequestId = null;
 let latestSnapshot = null;
 
+function renderPmTaskProjection(projection) {
+  const section = document.querySelector("#pm-task-projection");
+  const list = document.querySelector("#pm-task-list");
+  list.replaceChildren();
+  if (!projection) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  document.querySelector("#pm-task-projection-source").textContent =
+    `source: ${projection.source_kind} / version: ${projection.source_version} / ` +
+    `${dated(projection.observed_at)}。PM snapshot受領時の観測であり、GitHub live同期ではありません。`;
+  const tasks = [...projection.tasks].sort((left, right) => {
+    const leftDone = left.state === "completed";
+    const rightDone = right.state === "completed";
+    if (leftDone !== rightDone) return leftDone ? 1 : -1;
+    return Date.parse(right.observed_at) - Date.parse(left.observed_at);
+  });
+  for (const task of tasks) {
+    const board = pmTaskBoardStatus(task);
+    const card = document.createElement("article");
+    card.className = "request-card";
+    card.dataset.freshness = board.freshness;
+    card.setAttribute("role", "listitem");
+    card.append(
+      text("p", task.task_id, "request-selector-id"),
+      text("p", board.state, "request-selector-state"),
+      text("h4", task.title, "request-selector-title"),
+      text("p", task.purpose, "request-selector-purpose"),
+    );
+    const dl = document.createElement("dl");
+    dl.className = "request-card-meta";
+    metaRow(dl, "受入条件", task.acceptance_summary);
+    metaRow(dl, "owner", task.owner || "未報告");
+    metaRow(dl, "状態", board.state);
+    metaRow(dl, "現在step", task.current_step || "未報告");
+    metaRow(dl, "次手", task.next_action || "未報告");
+    metaRow(dl, "阻害", task.blocker || "未報告");
+    metaRow(dl, "誰待ち", board.waiting);
+    metaRow(dl, "復帰条件", task.resume_trigger || "未報告");
+    metaRow(dl, "source version", task.source_version);
+    metaRow(dl, "観測時刻", dated(task.observed_at));
+    metaRow(
+      dl,
+      "観測の鮮度",
+      board.freshness === "fresh"
+        ? `${board.ageSeconds}秒前 / fresh`
+        : board.freshness === "stale"
+          ? `${board.ageSeconds}秒前 / stale`
+          : "時計不明",
+    );
+    metaRow(dl, "PO確認", board.poState);
+    metaRow(dl, "PO package配送", board.poDelivery);
+    metaRow(dl, "Issue", optionalLink("Issue正本", task.issue_url));
+    metaRow(dl, "PR", task.pr_url ? optionalLink("PR証跡", task.pr_url) : "未報告");
+    metaRow(dl, "証跡", evidenceLinks(task.evidence));
+    if (board.missing.length) {
+      metaRow(dl, "不足", `unresolved: ${board.missing.join(", ")}`);
+    }
+    card.append(dl);
+    list.append(card);
+  }
+}
+
 function renderRequestRegistry(snapshot) {
   const section = document.querySelector("#request-registry");
   const registry = snapshot.request_registry;
-  if (!registry) {
+  const projection = snapshot.pm_task_projection;
+  if (!registry && !projection) {
     section.hidden = true;
     selectedRequestId = null;
     return null;
   }
   section.hidden = false;
+  renderPmTaskProjection(projection);
+  const controlView = document.querySelector("#control-registry-view");
+  controlView.hidden = !registry;
+  if (!registry) {
+    selectedRequestId = null;
+    document.querySelector("#request-registry-updated").textContent =
+      `PM観測 ${dated(projection.observed_at)}`;
+    return null;
+  }
   const focusedRequestId =
     document.activeElement?.closest?.(".request-selector")?.dataset.requestId || null;
   selectedRequestId = selectedRequestAfterRefresh(registry, selectedRequestId);
   document.querySelector("#request-registry-updated").textContent =
-    `registry更新 ${dated(registry.updated_at)}`;
+    `${projection ? "PM観測＋" : ""}registry更新 ${dated(registry.updated_at)}`;
   const registryMeta = document.querySelector("#request-registry-meta");
   registryMeta.replaceChildren();
   metaRow(registryMeta, "世代", String(registry.generation));
@@ -602,9 +785,11 @@ function renderRequestRegistry(snapshot) {
   const currentAgents = new Set(snapshot.session_tree?.nodes?.map((node) => node.agent) || []);
   const list = document.querySelector("#request-list");
   list.replaceChildren();
-  for (const request of registry.requests) {
+  for (const request of orderedRequestsForBoard(registry.requests, selectedRequestId)) {
+    const board = requestBoardStatus(request);
     const card = document.createElement("article");
     card.className = "request-card";
+    card.dataset.freshness = board.freshness;
     card.setAttribute("role", "listitem");
     const selector = document.createElement("button");
     selector.type = "button";
@@ -635,15 +820,31 @@ function renderRequestRegistry(snapshot) {
     metaRow(dl, "owner alias", request.owner_agent || "未報告");
     metaRow(dl, "member aliases", request.member_agents.join(", ") || "未報告");
     metaRow(dl, "登録状態", requestLifecycleDescription(request.lifecycle));
-    metaRow(dl, "確認済み進捗", request.progress_summary || "未報告");
+    metaRow(dl, "現在step", request.progress_summary || "未報告");
     metaRow(dl, "阻害", request.blocker || "未報告");
+    metaRow(dl, "誰待ち", board.waiting);
+    metaRow(dl, "復帰条件", request.resume_trigger || "未報告");
     metaRow(dl, "最終報告", dated(request.report_updated_at));
+    metaRow(
+      dl,
+      "報告の鮮度",
+      board.freshness === "fresh"
+        ? `${board.ageSeconds}秒前 / fresh`
+        : board.freshness === "stale"
+          ? `${board.ageSeconds}秒前 / stale`
+          : "時計不明",
+    );
     metaRow(
       dl,
       "報告の出所",
       request.report_source === "manual-public-summary" ? "手動公開summary" : "未取得",
     );
     metaRow(dl, "次手", request.next_action || "未報告");
+    metaRow(dl, "DoD source version", request.dod_source_version || "未報告");
+    metaRow(dl, "成果head", request.expected_artifact_head || "未報告");
+    metaRow(dl, "内部closure", board.closure);
+    metaRow(dl, "PO確認", board.poState);
+    metaRow(dl, "PO package配送", board.poDelivery);
     metaRow(
       dl,
       "Issue",
@@ -670,6 +871,9 @@ function renderRequestRegistry(snapshot) {
     );
     metaRow(dl, "runtime観測", dated(request.runtime_observed_at));
     metaRow(dl, "証跡", evidenceLinks(request.evidence));
+    if (board.missing.length) {
+      metaRow(dl, "不足", `unresolved: ${board.missing.join(", ")}`);
+    }
     card.append(selector, dl);
     list.append(card);
   }

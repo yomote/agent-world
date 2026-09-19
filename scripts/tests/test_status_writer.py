@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -54,3 +55,91 @@ def test_manual_writer_rejects_local_event_record_source(tmp_path):
     )
     assert result.returncode != 0
     assert not output.exists()
+
+
+def test_manual_writer_persists_typed_pm_task_projection_without_registry_claim(tmp_path):
+    """PM観測cacheの保存に架空Front Desk claimを要求・生成しない。"""
+    root = Path(__file__).parents[2]
+    output = tmp_path / "snapshot.json"
+    projection = tmp_path / "pm-tasks.json"
+    projection.write_text(
+        json.dumps(
+            {
+                "source_kind": "pm-observation",
+                "source_version": "issue-45-pm-packet-v1",
+                "observed_at": "2026-09-19T06:30:00Z",
+                "tasks": [
+                    {
+                        "task_id": "pr-92-continuity",
+                        "title": "closure guard",
+                        "purpose": "未解決taskを次手へ接続する",
+                        "acceptance_summary": "current mainで再検証する",
+                        "owner": "governance-continuity",
+                        "state": "running",
+                        "current_step": "UI検証",
+                        "next_action": "独立review",
+                        "resume_trigger": None,
+                        "blocker": None,
+                        "waiting_on": "none",
+                        "waiting_detail": None,
+                        "issue_url": "https://github.com/yomote/agent-world/issues/45",
+                        "pr_url": "https://github.com/yomote/agent-world/pull/92",
+                        "source_version": "pm-packet-2026-09-19T06:30:00Z",
+                        "observed_at": "2026-09-19T06:30:00Z",
+                        "po_status": "pending",
+                        "evidence": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "write_status_snapshot.py"),
+            "--source",
+            "pm-confirmed",
+            "--observed-at",
+            "2026-09-19T06:30:00Z",
+            "--pm-task-projection",
+            str(projection),
+            "--output",
+            str(output),
+        ],
+        cwd=root,
+        input="[]",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert result.returncode == 0
+    assert saved["pm_task_projection"]["tasks"][0]["task_id"] == "pr-92-continuity"
+    assert saved.get("request_registry") is None
+
+    changed = json.loads(projection.read_text(encoding="utf-8"))
+    changed["tasks"][0]["owner"] = "another-owner"
+    projection.write_text(json.dumps(changed), encoding="utf-8")
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "write_status_snapshot.py"),
+            "--source",
+            "pm-confirmed",
+            "--observed-at",
+            "2026-09-19T06:30:00Z",
+            "--pm-task-projection",
+            str(projection),
+            "--output",
+            str(output),
+        ],
+        cwd=root,
+        input="[]",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "same observation" in rejected.stderr

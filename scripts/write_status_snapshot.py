@@ -13,13 +13,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", choices=("pm-confirmed", "fixture"), required=True)
     parser.add_argument("--observed-at", required=True)
     parser.add_argument("--input", type=Path)
+    parser.add_argument("--pm-task-projection", type=Path)
     parser.add_argument("--output", type=Path, default=Path("artifacts/status/current.json"))
     return parser.parse_args()
 
 
 def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps"))
-    from ops_status.models import StatusSnapshot
+    from ops_status.models import PmTaskProjection, StatusSnapshot
 
     args = parse_args()
     if args.input:
@@ -27,6 +28,22 @@ def main() -> int:
     else:
         payload = json.load(sys.stdin)
     received_at = datetime.now(UTC)
+    projection = None
+    if args.pm_task_projection:
+        projection = PmTaskProjection.model_validate_json(args.pm_task_projection.read_bytes())
+        if args.output.exists():
+            previous = StatusSnapshot.model_validate_json(args.output.read_bytes())
+            if previous.request_registry is not None:
+                raise ValueError("PM task projection cannot overwrite an active request registry")
+            if previous.pm_task_projection is not None:
+                previous_projection = previous.pm_task_projection
+                if projection.observed_at < previous_projection.observed_at:
+                    raise ValueError("PM task projection observation cannot move backwards")
+                if (
+                    projection.observed_at == previous_projection.observed_at
+                    and projection != previous_projection
+                ):
+                    raise ValueError("PM task projection cannot change at the same observation")
     snapshot = StatusSnapshot.model_validate(
         {
             "schema_version": 1,
@@ -34,6 +51,7 @@ def main() -> int:
             "observed_at": args.observed_at,
             "received_at": received_at,
             "items": payload,
+            "pm_task_projection": projection,
         }
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -9,14 +9,16 @@
     />
     <meta name="color-scheme" content="dark" />
     <title>Agent World — 開発状況</title>
-    <link rel="stylesheet" href="./status.css?v=7" />
+    <link rel="stylesheet" href="./status.css?v=9" />
   </head>
   <body>
     <header class="site-header">
       <div>
         <p class="eyebrow">AGENT WORLD / MANAGEMENT STATUS</p>
-        <h1>エージェント状況</h1>
-        <p class="lede">PMが受信した最新snapshotを表示します。</p>
+        <h1>PMタスク状況</h1>
+        <p class="lede">
+          IssueとPM decisionを参照するrequest registryと、別観測のagent runtimeを表示します。
+        </p>
       </div>
       <button id="refresh" type="button">更新する</button>
     </header>
@@ -46,18 +48,31 @@
         hidden
       >
         <div class="section-heading">
-          <h2 id="request-registry-title">依頼一覧</h2>
-          <p id="request-registry-updated" class="task-total">registry更新 —</p>
+          <h2 id="request-registry-title">PM管理タスク</h2>
+          <p id="request-registry-updated" class="task-total">観測更新 —</p>
         </div>
-        <dl id="request-registry-meta" class="registry-meta" aria-live="polite"></dl>
-        <p id="request-handover" class="handover-note" hidden></p>
-        <div
-          id="request-list"
-          class="request-list"
-          role="list"
-          aria-label="登録済み依頼"
-          aria-live="polite"
-        ></div>
+        <section id="pm-task-projection" aria-labelledby="pm-task-projection-title" hidden>
+          <h3 id="pm-task-projection-title">PM確認済み観測</h3>
+          <p id="pm-task-projection-source" class="summary-note"></p>
+          <div
+            id="pm-task-list"
+            class="request-list"
+            role="list"
+            aria-label="PM確認済みtask観測"
+          ></div>
+        </section>
+        <div id="control-registry-view">
+          <h3>Front Desk依頼registry</h3>
+          <dl id="request-registry-meta" class="registry-meta" aria-live="polite"></dl>
+          <p id="request-handover" class="handover-note" hidden></p>
+          <div
+            id="request-list"
+            class="request-list"
+            role="list"
+            aria-label="登録済み依頼"
+            aria-live="polite"
+          ></div>
+        </div>
       </section>
 
       <p class="scope-note">
@@ -135,6 +150,6 @@
     <footer>
       <p>ブラウザは同一originの管理backendだけを読みます。GitHub APIへ接続しません。</p>
     </footer>
-    <script type="module" src="./status.js?v=7"></script>
+    <script type="module" src="./status.js?v=9"></script>
   </body>
 </html>

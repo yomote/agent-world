@@ -412,6 +412,59 @@ class RequestRegistryReceipt(BaseModel):
     handover: RegistryHandover | None = None
 
 
+class PmTaskObservation(BaseModel):
+    """Issue/PRとPM decisionを正本にする、claimを持たないread-only task観測。"""
+
+    model_config = ConfigDict(extra="forbid")
+    task_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    title: str = Field(min_length=1, max_length=240)
+    purpose: str = Field(min_length=1, max_length=500)
+    acceptance_summary: str = Field(min_length=1, max_length=500)
+    owner: str | None = Field(default=None, min_length=1, max_length=80)
+    state: Literal[
+        "not-started", "running", "review-wait", "blocked", "stopped", "completed", "unknown"
+    ]
+    current_step: str | None = Field(default=None, max_length=500)
+    next_action: str | None = Field(default=None, max_length=500)
+    resume_trigger: str | None = Field(default=None, max_length=500)
+    blocker: str | None = Field(default=None, max_length=500)
+    waiting_on: Literal["worker", "pm", "po", "external", "none"] | None = None
+    waiting_detail: str | None = Field(default=None, min_length=1, max_length=240)
+    issue_url: HttpUrl
+    pr_url: HttpUrl | None = None
+    source_version: str = Field(min_length=1, max_length=200)
+    observed_at: AwareDatetime
+    po_status: Literal["not-required", "pending", "accepted", "unknown"] = "unknown"
+    evidence: list[RequestEvidence] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def check_waiting_owner(self) -> "PmTaskObservation":
+        if self.waiting_on in {None, "none"} and self.waiting_detail is not None:
+            raise ValueError("waiting detail needs a concrete waiting owner")
+        if self.waiting_on not in {None, "none"} and self.waiting_detail is None:
+            raise ValueError("concrete waiting owner needs a public detail")
+        return self
+
+
+class PmTaskProjection(BaseModel):
+    """PMが確認したtask状態の再生成可能cache。control registryではない。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source_kind: Literal["pm-observation"]
+    source_version: str = Field(min_length=1, max_length=200)
+    observed_at: AwareDatetime
+    tasks: list[PmTaskObservation] = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def check_tasks(self) -> "PmTaskProjection":
+        task_ids = [task.task_id for task in self.tasks]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("PM task identifiers must be unique")
+        if any(task.observed_at > self.observed_at for task in self.tasks):
+            raise ValueError("PM task observation cannot be newer than its projection")
+        return self
+
+
 class StatusSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -425,6 +478,7 @@ class StatusSnapshot(BaseModel):
     session_tree: SessionTreeSnapshot | None = None
     known_history: KnownHistorySnapshot | None = None
     request_registry: RequestRegistrySnapshot | None = None
+    pm_task_projection: PmTaskProjection | None = None
     runtime_binding: StatusRuntimeBinding | None = None
 
     @model_validator(mode="after")

@@ -179,6 +179,7 @@ def reject_stale_full_snapshot(current: StatusSnapshot, incoming: StatusSnapshot
     for field, clock, label in (
         ("session_tree", "observed_at", "session tree"),
         ("known_history", "recorded_at", "known history"),
+        ("pm_task_projection", "observed_at", "PM task projection"),
     ):
         previous = getattr(current, field)
         replacement = getattr(incoming, field)
@@ -495,6 +496,13 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 current_revision = current_version.revision
             if current is not None:
                 require_active_runtime_binding(current.request_registry, snapshot.runtime_binding)
+            if snapshot.pm_task_projection is not None and (
+                current is None or current.pm_task_projection is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="full snapshot cannot initialize PM task projection",
+                )
             if snapshot.request_registry is not None and (
                 current is None or current.request_registry is None
             ):
@@ -509,6 +517,11 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                 if same_content:
                     return Response(status_code=status.HTTP_204_NO_CONTENT)
                 reject_stale_full_snapshot(current, snapshot)
+                if snapshot.pm_task_projection != current.pm_task_projection:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="runtime ingest cannot replace PM task projection",
+                    )
                 if (
                     snapshot.observed_at == current.observed_at
                     and snapshot.received_at <= current.received_at
@@ -646,6 +659,7 @@ def create_app(store: SnapshotStore | None = None) -> FastAPI:
                     session_tree=merged_tree,
                     known_history=merged_history,
                     request_registry=current.request_registry,
+                    pm_task_projection=current.pm_task_projection,
                     runtime_binding=merged_binding,
                 )
             except ValidationError as error:
