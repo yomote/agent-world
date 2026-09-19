@@ -28,7 +28,7 @@ PRの検証とmain / masterの検証は、マージ前後の異なる内容を�
 
 ## Merge gateとformal local entryの運用
 
-この節をmerge手順・承認条件・停止条件の正本とする。[ADR 0005](../adr/0005-trusted-merge-gate.md)は、trusted source、current head、確定主体を分離する設計上の理由だけを記録する。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
+この節をmerge手順・承認条件・停止条件の正本とする。trusted source、current head、確定主体を分離する理由と代案は[開発・運用基盤の判断記録](../development-operations.md#0005-trusted-sourceからcurrent-headを統合する)に記録する。アプリ内のローカルWorld観測とは別の規約であり、Worldの1秒pollingやActionの動作は変更しない。
 
 ### main workflowのmerge gate
 
