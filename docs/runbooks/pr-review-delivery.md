@@ -8,7 +8,7 @@ reviewは固定40桁head、reviewer、scope、実施したcheck、verdictとfind
 
 review入力には、Issue責任者 / PMが管理するrequirement/acceptance ID、定義、source、source version、状態、evidenceの対応表と、PR作者が提示する変更固有のreview観点（risk、business invariant、確認点、evidence、known unmet）を含める。どちらかが欠ければreview済みやReadyへ進めない。作者観点は独立reviewerを拘束せず、作者の自己申告でAC達成にしない。ACを変える場合はIssue責任者 / PMが理由、履歴、既存結果への影響をIssueへ残す。PM受入とPO価値評価は別である。
 
-automation campaignでは、checkout内のJSONを`python -m scripts.automation.delivery <campaign> review-input --source <checkout相対path>`で一度固定する。deliveryはこの入力をDraft PR本文へ公開し、同じ値をreviewerへ渡す。既存入力の上書きや、PR作者によるACの条件変更は受け付けない。
+automation campaignでは、checkout内のJSONを`python -m scripts.automation.delivery <campaign> review-input --source <checkout相対path>`で一度固定する。入力はPR用のscope ID/定義、そのscopeで必須のacceptance IDs、親Issueに残るDoDのowner/再開triggerを分ける。deliveryはこの入力をDraft PR本文へ公開し、同じ値をreviewerへ渡す。既存入力の上書きや、PR作者によるACの条件変更は受け付けない。独立reviewを配送しても、PR scopeの必須ACがすべて`achieved`でなければReadyとmergeへ進まない。親Issueに残るDoDはPR scopeを満たした部分変更のmergeを妨げないが、Issue完了にも使わない。
 
 - 一意finding ID、requirement ID、acceptance ID
 - PR diff上のpath、lineまたはrange、`LEFT` / `RIGHT`
@@ -22,7 +22,7 @@ automation campaignでは、checkout内のJSONを`python -m scripts.automation.d
 
 1. current PR headとreview headを一致させ、GitHubが返したchanged filesのpatchでpath、line、range、sideを検証する。
 2. `POST /pulls/{number}/reviews`へ`event=COMMENT`で1 reviewを作り、findingsをinline commentsとして束ねる。指摘0件ならscope、check、head、0件をsummaryに残し、架空inlineは作らない。
-3. review bodyのcontent keyを既存reviewsから検索する。同じkeyとheadのreceiptがあれば再投稿しない。write結果不明では自動再送せず、read-only reconcileでreceiptの有無だけを確認する。
+3. review bodyのcontent keyを既存reviewsから検索する。同じkey、head、代行actor、`COMMENTED` stateのreceiptがあれば再投稿しない。files取得後、POST直前、receipt取得後にもPR headを再確認する。write結果不明では自動再送せず、`reconcile-review-delivery`を明示実行し、保存したoperation ID/key/headとremote receiptの一致だけをread-only確認する。receiptがなければ停止を維持する。
 4. visible review URLとheadを保存してから`reviewed`またはreview passへ進む。従来のindependent-review markerはmerge gate用の索引であり、通常reviewの代替にしない。
 5. 修正でheadが変われば同じreviewerが新headを再reviewする。元threadを新lineへ付け替えない。対応確認済みfinding IDと元review IDを照合し、元threadを一括resolveする。old reviewをnew headの証拠に流用しない。
 

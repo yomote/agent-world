@@ -11,7 +11,7 @@
 
 独立reviewerは構造化findingを返し、実装ownerの既存GitHub認証が`COMMENT`のPull Request Reviewとして代行配送する。findingはcurrent headのdiff位置とACへ結び、1 reviewのinline commentsへまとめる。指摘0件もscope、check、head、0件を通常reviewへ残す。review本文には独立reviewerと代行actorを分けて記録する。
 
-Issue責任者 / PMがACのID、定義、source version、状態を管理し、PR作者が変更固有のreview観点とknown unmetを提示する。両入力がなければreview済みやReadyへ進めない。独立reviewerは作者観点に拘束されず、欠落を指摘できる。AC変更、PM受入、PO価値判断はreview deliveryと分ける。
+Issue責任者 / PMがACのID、定義、source version、状態を管理し、PR作者が変更固有のreview観点とknown unmetを提示する。PR用の下位scopeと親Issueの残るDoDを分け、下位scopeの必須ACがすべて達成されるまでReadyとmergeへ進めない。両入力がなければreview済みへ進めない。独立reviewerは作者観点に拘束されず、欠落を指摘できる。AC変更、PM受入、PO価値判断はreview deliveryと分ける。
 
 投稿前にhead、path、line/range、sideをGitHubのcurrent diffで検査する。content keyで既存reviewをread-only照合し、結果不明を自動再送しない。修正後はnew headに対する同じreviewerの確認と元finding IDを条件に、元thread IDを解決する。outdated findingを新しいlineへ付け替えない。
 

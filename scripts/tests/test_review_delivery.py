@@ -9,6 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2]))
 from scripts.automation.github_adapter import GitHub  # noqa: E402
 from scripts.automation.review_delivery import (  # noqa: E402
+    acceptance_gate,
     find_receipt,
     prepare,
     render_review_input,
@@ -43,6 +44,12 @@ def review(**updates):
         "blocking_rationale": "業務成果の正しさを失うため",
     }
     value = {
+        "scope_id": "accounting-package-slice-v1",
+        "scope_definition": "read-only review packageの最小縦切り",
+        "required_acceptance_ids": ["ACC-2"],
+        "parent_residuals": [
+            {"id": "ISSUE-89-COMBINED", "owner": "/root/pm", "trigger": "別unitで再開"}
+        ],
         "head": HEAD,
         "reviewer": "/root/reviewer",
         "scope": "会計read-only package",
@@ -123,6 +130,19 @@ def test_zero_findings_has_summary_and_no_inline_comment():
     assert "semantic review" in result["payload"]["body"]
 
 
+def test_required_acceptance_must_be_achieved_before_ready():
+    """親Issue残件とPR必須ACを混同し、unknownの作者申告だけでReadyにする回帰を防ぐ。"""
+    assert acceptance_gate(review())["ready"] is False
+    achieved = review()
+    achieved["acceptance_map"][0]["status"] = "achieved"
+    assert acceptance_gate(achieved) == {
+        "scope_id": "accounting-package-slice-v1",
+        "required": ["ACC-2"],
+        "unmet": [],
+        "ready": True,
+    }
+
+
 def test_exact_remote_receipt_is_reused_but_stale_or_duplicate_stops():
     """結果不明後に同じreviewを再投稿したり古いreceiptを付替える回帰を防ぐ。"""
     prepared = prepare(review(), head=HEAD, files=FILES, proxy_login="owner", pr_author="owner")
@@ -131,12 +151,31 @@ def test_exact_remote_receipt_is_reused_but_stale_or_duplicate_stops():
         "commit_id": HEAD,
         "html_url": "https://github.com/yomote/agent-world/pull/1#pullrequestreview-7",
         "body": prepared["payload"]["body"],
+        "state": "COMMENTED",
+        "user": {"login": "owner"},
     }
-    assert find_receipt([item], key=prepared["key"], head=HEAD)["review_id"] == 7
+    assert (
+        find_receipt([item], key=prepared["key"], head=HEAD, expected_proxy_login="owner")[
+            "review_id"
+        ]
+        == 7
+    )
     with pytest.raises(Stop, match="stale"):
-        find_receipt([{**item, "commit_id": "b" * 40}], key=prepared["key"], head=HEAD)
+        find_receipt(
+            [{**item, "commit_id": "b" * 40}],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="owner",
+        )
     with pytest.raises(Stop, match="duplicate"):
-        find_receipt([item, {**item, "id": 8}], key=prepared["key"], head=HEAD)
+        find_receipt(
+            [item, {**item, "id": 8}],
+            key=prepared["key"],
+            head=HEAD,
+            expected_proxy_login="owner",
+        )
+    with pytest.raises(Stop, match="provenance"):
+        find_receipt([item], key=prepared["key"], head=HEAD, expected_proxy_login="other")
 
 
 def test_resolution_is_one_graphql_write_for_exact_original_threads():
@@ -185,6 +224,8 @@ def test_adapter_deduplicates_exact_review_and_keeps_visible_receipt():
             "commit_id": HEAD,
             "html_url": "https://github.com/yomote/agent-world/pull/9#pullrequestreview-81",
             "body": payload["body"],
+            "state": "COMMENTED",
+            "user": {"login": "yomote"},
         }
         remote.append(result)
         return result
@@ -196,6 +237,29 @@ def test_adapter_deduplicates_exact_review_and_keeps_visible_receipt():
     assert first == second
     assert first["head"] == HEAD and first["inline_count"] == 1
     assert len(posted) == 1 and posted[0]["event"] == "COMMENT"
+
+
+def test_adapter_rechecks_head_before_and_after_review_post():
+    """files取得後やPOST応答後のhead変更をcurrent receiptとして保存する回帰を防ぐ。"""
+    reads = []
+
+    def send(operation, method, path, payload=None):
+        if operation == "review_pr":
+            reads.append(1)
+            current = HEAD if len(reads) < 3 else "b" * 40
+            return {"head": {"sha": current}, "user": {"login": "owner"}}
+        if operation == "review_files":
+            return FILES
+        if operation == "review_actor":
+            return {"login": "owner"}
+        if operation == "review_list":
+            return []
+        pytest.fail("POST reached after stale head")
+
+    github = github_with_request(send)
+    with pytest.raises(Stop, match="head_mismatch"):
+        github.review_delivery(9, {"head": HEAD, "review": review()}, publish=True)
+    assert len(reads) == 3
 
 
 def test_adapter_never_retries_unknown_review_write():

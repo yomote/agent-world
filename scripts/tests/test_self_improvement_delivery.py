@@ -18,6 +18,12 @@ from scripts.automation.runner import Runner, dispatcher  # noqa: E402
 OWNER = "01a07c68-367d-75e3-b267-3ae46db963ac"
 HEAD = "a" * 40
 REVIEW_INPUT = {
+    "scope_id": "delivery-test-slice-v1",
+    "scope_definition": "delivery回帰testの下位workunit",
+    "required_acceptance_ids": ["AC-TEST"],
+    "parent_residuals": [
+        {"id": "PARENT-REMAINING", "owner": "/root/pm", "trigger": "別testで確認"}
+    ],
     "acceptance_map": [
         {
             "requirement_id": "REQ-TEST",
@@ -724,6 +730,76 @@ def test_only_interrupted_read_only_review_can_resume(task, monkeypatch):
     with pytest.raises(transport.Stop, match="safe_review_resume_not_confirmed"):
         task.resume_review(identifier)
     assert task.data()["debrief"]["outcome"] == "unknown"
+
+
+def test_unknown_review_post_has_explicit_read_only_reconcile_path(task, monkeypatch):
+    """unknownなreview POSTを再送するか、receiptを確認できず永久停止する回帰を防ぐ。"""
+    head = "d" * 40
+    review = {
+        "head": head,
+        "reviewer": delivery.REVIEWER,
+        "verdict": "pass",
+        "findings": [],
+        "scope": "test scope",
+        "checks": ["test check"],
+        **REVIEW_INPUT,
+    }
+    arguments = {
+        "repo_full_name": delivery.REPOSITORY,
+        "pr_number": 91,
+        "head": head,
+        "review": review,
+    }
+    key = delivery.review_key(review, head)
+    data = task.data()
+    data.update(
+        state="unknown",
+        reason="github_transport_no_retry",
+        token=None,
+        lease_until=None,
+        head=head,
+        pr=91,
+        review=review,
+        review_input=REVIEW_INPUT,
+        review_summary_body="fixed summary",
+        review_delivery_expected={"head": head, "pr": 91, "key": key},
+    )
+    task.save_event(data, "test_unknown_review")
+    identifier = "11111111-1111-4111-8111-111111111111"
+    with task.db:
+        task.db.execute(
+            "INSERT INTO delivery_operations VALUES (?,?,?,'unknown',?,NULL)",
+            (
+                identifier,
+                task.name,
+                "publish_pr_review",
+                json.dumps(
+                    {
+                        "id": identifier,
+                        "operation": "publish_pr_review",
+                        "arguments": arguments,
+                    }
+                ),
+            ),
+        )
+    calls = []
+
+    def reconcile(operation, received, **kwargs):
+        calls.append(operation)
+        assert received == arguments
+        return {
+            "head": head,
+            "key": key,
+            "url": "https://github.com/yomote/agent-world/pull/91#pullrequestreview-1",
+            "review_id": 1,
+            "finding_ids": [],
+        }
+
+    monkeypatch.setattr(task.transport, "call", reconcile)
+    monkeypatch.setattr(task, "after_review_visible", lambda *args: "continued")
+    assert task.reconcile_review_delivery() == "continued"
+    assert calls == ["reconcile_pr_review"]
+    assert task.data()["review_reconciled_operation_id"] == identifier
 
 
 def test_helper_review_recovery_uses_bound_checkout_and_is_atomic(task, monkeypatch):

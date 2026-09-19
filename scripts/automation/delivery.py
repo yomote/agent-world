@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .evidence import thread_id
 from .jobs import run_job
-from .review_delivery import render_review_input, validate_review_input
+from .review_delivery import acceptance_gate, render_review_input, review_key, validate_review_input
 from .runner import ROOT, Runner, digest, dispatcher, read_input, safe_path
 from .transport import Stop, Transport, atomic_json
 
@@ -614,8 +614,16 @@ class Campaign:
         review_for_delivery = dict(review)
         review_for_delivery["scope"] = ", ".join(SCOPES[self.name])
         review_for_delivery["checks"] = review.get("verified") or [
-            "fixed-head independent semantic review returned no findings"
+            "independent semantic review result received; detailed check list not supplied"
         ]
+        data = self.data()
+        data["review_summary_body"] = body
+        data["review_delivery_expected"] = {
+            "head": head,
+            "pr": number,
+            "key": review_key(review_for_delivery, head),
+        }
+        self.save_event(data, "review_delivery_reserved")
         receipt = self.transport.call(
             "publish_pr_review",
             {
@@ -633,6 +641,10 @@ class Campaign:
         data = self.data()
         data["review_delivery"] = receipt
         self.save_event(data, "independent_review_visible")
+        return self.after_review_visible(head, number, review, receipt, body)
+
+    def after_review_visible(self, head, number, review, receipt, body):
+        """visible receipt後だけfinding停止・thread解決・Ready以降へ進める。"""
         if review.get("verdict") != "pass" or review.get("findings") != []:
             data = self.data()
             data.setdefault("review_history", []).append(receipt)
@@ -660,6 +672,14 @@ class Campaign:
                 raise Stop("unknown", "review_resolution_receipt_invalid")
             prior.update(resolved=True, resolution=resolution)
             self.save_event(history_data, "review_threads_resolved")
+        gate = acceptance_gate(self.data()["review_input"])
+        data = self.data()
+        data["acceptance_gate"] = gate
+        self.save_event(data, "required_acceptance_checked")
+        if not gate["ready"]:
+            self.finish_step("stopped", "required_acceptance_unmet")
+            self.token = None
+            raise Stop("stopped", "required_acceptance_unmet")
         self.transport.call(
             "post_review_evidence",
             {
@@ -683,6 +703,54 @@ class Campaign:
         self.save_event(data, "ready_pr")
         self.wait_ci(head, number)
         self.normal_merge(head, number)
+
+    def reconcile_review_delivery(self):
+        """unknown POSTを再送せず、remoteのexact receiptだけで後続へ戻る。"""
+        data = self.data()
+        if (
+            data["state"] != "unknown"
+            or data.get("token")
+            or time.time() >= data["deadline"]
+            or not data.get("review_delivery_expected")
+        ):
+            raise Stop("stopped", "review_reconcile_state_invalid")
+        row = self.db.execute(
+            "SELECT id,state,request FROM delivery_operations WHERE campaign=? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (self.name,),
+        ).fetchone()
+        if not row or row[1] != "unknown":
+            raise Stop("stopped", "review_reconcile_operation_missing")
+        request = json.loads(row[2])
+        arguments = request.get("arguments", {})
+        expected = data["review_delivery_expected"]
+        if (
+            request.get("operation") != "publish_pr_review"
+            or arguments.get("head") != expected["head"]
+            or arguments.get("pr_number") != expected["pr"]
+            or review_key(arguments.get("review", {}), expected["head"]) != expected["key"]
+            or data.get("head") != expected["head"]
+            or data.get("pr") != expected["pr"]
+        ):
+            raise Stop("stopped", "review_reconcile_operation_mismatch")
+        self.token = str(uuid4())
+        self.monotonic_deadline = time.monotonic() + max(0, data["deadline"] - time.time())
+        data.update(token=self.token, lease_until=time.time() + 30)
+        self.save_event(data, "review_reconcile_acquired")
+        receipt = self.transport.call("reconcile_pr_review", arguments)
+        if receipt.get("head") != expected["head"] or receipt.get("key") != expected["key"]:
+            raise Stop("unknown", "review_reconcile_receipt_invalid")
+        data = self.data()
+        data["review_delivery"] = receipt
+        data["review_reconciled_operation_id"] = row[0]
+        self.save_event(data, "independent_review_visible_after_reconcile")
+        return self.after_review_visible(
+            expected["head"],
+            expected["pr"],
+            data["review"],
+            receipt,
+            data["review_summary_body"],
+        )
 
     def wait_ci(self, head, number):
         from scripts.merge_gate import GateError, GateTarget, validate_ci
@@ -1024,6 +1092,7 @@ def main():
     resume_review.add_argument("--request-id", required=True)
     review_input = sub.add_parser("review-input")
     review_input.add_argument("--source", required=True)
+    sub.add_parser("reconcile-review-delivery")
     helper = sub.add_parser("helper")
     helper.add_argument("--source", type=Path, required=True)
     revise = sub.add_parser("revise")
@@ -1097,6 +1166,8 @@ def main():
                     task.resume_review(args.request_id)
                 elif args.command == "review-input":
                     task.set_review_input(args.source)
+                elif args.command == "reconcile-review-delivery":
+                    task.reconcile_review_delivery()
                 elif args.command == "reconcile-push":
                     task.reconcile_push()
                 print(json.dumps(task.data(), ensure_ascii=True, indent=2), flush=True)

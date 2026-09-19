@@ -70,6 +70,8 @@ def validate_review_input(value):
     """Issue責任者のAC mapと作者のreview観点を、review前に固定する。"""
     if not isinstance(value, dict):
         raise Stop("stopped", "review_input_missing")
+    scope_id = _text(value.get("scope_id"), "scope_id", limit=200)
+    _text(value.get("scope_definition"), "scope_definition")
     acceptance_map = value.get("acceptance_map")
     if not isinstance(acceptance_map, list) or not acceptance_map:
         raise Stop("stopped", "review_acceptance_map_missing")
@@ -98,13 +100,46 @@ def validate_review_input(value):
             raise Stop("stopped", "review_author_plan_invalid")
         for name in ("id", "focus", "evidence", "known_unmet"):
             _text(item.get(name), "author_plan_" + name)
-    return acceptance_map, author_plan, acceptance_pairs
+    required = value.get("required_acceptance_ids")
+    if (
+        not isinstance(required, list)
+        or not required
+        or len(set(required)) != len(required)
+        or any(not isinstance(identifier, str) or not identifier for identifier in required)
+        or not set(required).issubset({item["acceptance_id"] for item in acceptance_map})
+    ):
+        raise Stop("stopped", "review_required_acceptance_invalid")
+    residuals = value.get("parent_residuals")
+    if not isinstance(residuals, list):
+        raise Stop("stopped", "review_parent_residuals_invalid")
+    for item in residuals:
+        if not isinstance(item, dict):
+            raise Stop("stopped", "review_parent_residuals_invalid")
+        for name in ("id", "owner", "trigger"):
+            _text(item.get(name), "parent_residual_" + name)
+    return acceptance_map, author_plan, acceptance_pairs, required, scope_id
+
+
+def acceptance_gate(value):
+    acceptance_map, _, _, required, scope_id = validate_review_input(value)
+    by_id = {item["acceptance_id"]: item for item in acceptance_map}
+    unmet = [
+        {
+            "acceptance_id": identifier,
+            "status": by_id[identifier]["status"],
+            "pm_owner": by_id[identifier]["pm_owner"],
+            "next_evidence": by_id[identifier]["evidence"],
+        }
+        for identifier in required
+        if by_id[identifier]["status"] != "achieved"
+    ]
+    return {"scope_id": scope_id, "required": required, "unmet": unmet, "ready": not unmet}
 
 
 def render_review_input(value):
     """PR作者が公開するAC対応と変更固有review観点を短いMarkdownへする。"""
-    acceptance_map, author_plan, _ = validate_review_input(value)
-    lines = ["## AC対応（Issue責任者 / PM管理）", ""]
+    acceptance_map, author_plan, _, _, scope_id = validate_review_input(value)
+    lines = [f"## PR scope `{scope_id}` のAC対応（Issue責任者 / PM管理）", ""]
     for item in acceptance_map:
         lines.append(
             f"- `{item['requirement_id']} / {item['acceptance_id']}` "
@@ -118,6 +153,10 @@ def render_review_input(value):
             f"- `{item['id']}` / {item['category']}: {item['focus']} — "
             f"evidence: {item['evidence']} / known unmet: {item['known_unmet']}"
         )
+    if value["parent_residuals"]:
+        lines.extend(["", "## 親Issueに残るDoD", ""])
+        for item in value["parent_residuals"]:
+            lines.append(f"- `{item['id']}`: owner `{item['owner']}` / trigger: {item['trigger']}")
     lines.extend(
         [
             "",
@@ -125,6 +164,23 @@ def render_review_input(value):
         ]
     )
     return "\n".join(lines)
+
+
+def review_key(review, head):
+    canonical = {
+        "head": head,
+        "reviewer": review.get("reviewer"),
+        "scope": review.get("scope"),
+        "checks": review.get("checks"),
+        "verdict": review.get("verdict"),
+        "findings": review.get("findings"),
+        "suppressed": review.get("suppressed", []),
+        "acceptance_map": review.get("acceptance_map"),
+        "author_review_plan": review.get("author_review_plan"),
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def prepare(review, *, head, files, proxy_login, pr_author):
@@ -146,7 +202,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
         raise Stop("stopped", "review_verdict_invalid")
     _text(proxy_login, "proxy_login", limit=100)
     _text(pr_author, "pr_author", limit=100)
-    acceptance_map, author_plan, acceptance_pairs = validate_review_input(review)
+    acceptance_map, author_plan, acceptance_pairs, _, _ = validate_review_input(review)
 
     file_lines = {}
     for item in files:
@@ -218,20 +274,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
 
     if (review["verdict"] == "pass") != (len(findings) == 0):
         raise Stop("stopped", "review_verdict_findings_mismatch")
-    canonical = {
-        "head": head,
-        "reviewer": reviewer,
-        "scope": scope,
-        "checks": checks,
-        "verdict": review["verdict"],
-        "findings": findings,
-        "suppressed": suppressed,
-        "acceptance_map": acceptance_map,
-        "author_review_plan": author_plan,
-    }
-    key = hashlib.sha256(
-        json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    key = review_key(review, head)
     body = (
         f"<!-- {MARKER}:{key} -->\n"
         "## 独立レビュー配送\n\n"
@@ -256,7 +299,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
     }
 
 
-def find_receipt(reviews, *, key, head):
+def find_receipt(reviews, *, key, head, expected_proxy_login):
     marker = f"<!-- {MARKER}:{key} -->"
     matches = [item for item in reviews if marker in (item.get("body") or "")]
     if len(matches) > 1:
@@ -266,6 +309,11 @@ def find_receipt(reviews, *, key, head):
     item = matches[0]
     if item.get("commit_id") != head:
         raise Stop("stopped", "review_delivery_stale_receipt")
+    if (
+        item.get("state") != "COMMENTED"
+        or item.get("user", {}).get("login") != expected_proxy_login
+    ):
+        raise Stop("stopped", "review_delivery_provenance_mismatch")
     url = item.get("html_url")
     if not isinstance(url, str) or not url.startswith("https://github.com/"):
         raise Stop("unknown", "review_delivery_receipt_invalid")

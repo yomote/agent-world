@@ -404,7 +404,14 @@ class GitHub:
         from .review_delivery import find_receipt, prepare
 
         head = args.get("head")
-        pr = self.request("review_pr", "GET", f"{PREFIX}/pulls/{number}")
+        path = f"{PREFIX}/pulls/{number}"
+        pr = self.request("review_pr", "GET", path)
+
+        def assert_current_head():
+            current = self.request("review_pr", "GET", path)
+            if current.get("head", {}).get("sha") != head:
+                raise Stop("stopped", "review_delivery_head_mismatch")
+
         if pr.get("head", {}).get("sha") != head:
             raise Stop("stopped", "review_delivery_head_mismatch")
         files = self.request("review_files", "GET", f"{PREFIX}/pulls/{number}/files?per_page=100")
@@ -419,20 +426,25 @@ class GitHub:
             proxy_login=actor,
             pr_author=author,
         )
+        assert_current_head()
         reviews = self.request(
             "review_list", "GET", f"{PREFIX}/pulls/{number}/reviews?per_page=100"
         )
-        receipt = find_receipt(reviews, key=prepared["key"], head=head)
+        receipt = find_receipt(reviews, key=prepared["key"], head=head, expected_proxy_login=actor)
         if receipt is None and not publish:
             raise Stop("stopped", "review_delivery_receipt_not_found")
         if receipt is None:
+            assert_current_head()
             result = self.request(
                 "publish_pr_review",
                 "POST",
                 f"{PREFIX}/pulls/{number}/reviews",
                 prepared["payload"],
             )
-            receipt = find_receipt([result], key=prepared["key"], head=head)
+            receipt = find_receipt(
+                [result], key=prepared["key"], head=head, expected_proxy_login=actor
+            )
+        assert_current_head()
         if not isinstance(receipt.get("review_id"), int):
             raise Stop("unknown", "review_delivery_receipt_invalid")
         with self.task.db:
