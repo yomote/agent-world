@@ -9,147 +9,171 @@
     />
     <meta name="color-scheme" content="dark" />
     <title>Agent World — 開発状況</title>
-    <link rel="stylesheet" href="./status.css?v=9" />
+    <link rel="stylesheet" href="./status.css?v=10" />
   </head>
   <body>
     <header class="site-header">
       <div>
-        <p class="eyebrow">AGENT WORLD / MANAGEMENT STATUS</p>
-        <h1>PMタスク状況</h1>
-        <p class="lede">
-          IssueとPM decisionを参照するrequest registryと、別観測のagent runtimeを表示します。
-        </p>
+        <p class="eyebrow">AGENT WORLD</p>
+        <h1>開発の状況</h1>
+        <p class="lede">いま何を進め、何を待っているかを短くまとめています。</p>
       </div>
       <button id="refresh" type="button">更新する</button>
     </header>
 
     <main>
-      <section class="notice" aria-labelledby="health-title">
+      <section class="notice compact-notice" aria-labelledby="health-title">
         <div>
-          <h2 id="health-title">取得状態</h2>
+          <h2 id="health-title">更新状態</h2>
           <p id="health" aria-live="polite">管理backendから読み込み中…</p>
         </div>
-        <dl class="timestamps">
-          <div>
-            <dt>最終受信</dt>
-            <dd id="fetched-at">—</dd>
-          </div>
-          <div>
-            <dt>元の観測</dt>
-            <dd id="next-refresh">—</dd>
-          </div>
-        </dl>
+        <p id="summary-updated" class="summary-updated">更新 —</p>
       </section>
 
-      <section
-        id="request-registry"
-        class="request-registry"
-        aria-labelledby="request-registry-title"
-        hidden
-      >
-        <div class="section-heading">
-          <h2 id="request-registry-title">PM管理タスク</h2>
-          <p id="request-registry-updated" class="task-total">観測更新 —</p>
-        </div>
-        <section id="pm-task-projection" aria-labelledby="pm-task-projection-title" hidden>
-          <h3 id="pm-task-projection-title">PM確認済み観測</h3>
-          <p id="pm-task-projection-source" class="summary-note"></p>
-          <div
-            id="pm-task-list"
-            class="request-list"
-            role="list"
-            aria-label="PM確認済みtask観測"
-          ></div>
-        </section>
-        <div id="control-registry-view">
-          <h3>Front Desk依頼registry</h3>
-          <dl id="request-registry-meta" class="registry-meta" aria-live="polite"></dl>
-          <p id="request-handover" class="handover-note" hidden></p>
-          <div
-            id="request-list"
-            class="request-list"
-            role="list"
-            aria-label="登録済み依頼"
-            aria-live="polite"
-          ></div>
-        </div>
+      <section id="briefing" class="briefing" aria-label="開発状況の要約">
+        <article class="briefing-group" data-kind="active">
+          <h2>いま進めていること</h2>
+          <ul id="briefing-active" class="briefing-list"></ul>
+        </article>
+        <article class="briefing-group" data-kind="blocked">
+          <h2>止まっていること</h2>
+          <ul id="briefing-blocked" class="briefing-list"></ul>
+        </article>
+        <article class="briefing-group" data-kind="po">
+          <h2>あなたの確認が必要</h2>
+          <ul id="briefing-po" class="briefing-list"></ul>
+        </article>
+        <article class="briefing-group" data-kind="done">
+          <h2>最近できたこと</h2>
+          <ul id="briefing-done" class="briefing-list"></ul>
+        </article>
       </section>
 
-      <p class="scope-note">
-        <strong id="source-kind">入力種別を確認中</strong><br />
-        <span id="source-note">snapshotの出所を確認しています。</span>
-      </p>
+      <details id="management-details" class="management-details">
+        <summary>詳しい管理情報を見る</summary>
+        <div class="management-details-body">
+          <dl class="timestamps visually-detailed">
+            <div>
+              <dt>最終受信</dt>
+              <dd id="fetched-at">—</dd>
+            </div>
+            <div>
+              <dt>元の観測</dt>
+              <dd id="next-refresh">—</dd>
+            </div>
+          </dl>
 
-      <section class="focus-summary" aria-labelledby="focus-title">
-        <div class="section-heading">
-          <h2 id="focus-title">今見る要約</h2>
-          <p id="focus-updated" class="task-total">報告時刻 —</p>
-        </div>
-        <dl id="focus-meta" class="focus-meta" aria-live="polite"></dl>
-        <p id="focus-source" class="summary-note">明示された公開要約を読み込み中です。</p>
-      </section>
-
-      <section class="capacity capacity-top" aria-labelledby="capacity-title">
-        <div class="section-heading">
-          <h2 id="capacity-title">観測中root session全体</h2>
-          <p id="capacity-observed" class="task-total">容量観測 —</p>
-        </div>
-        <div id="capacity-metrics" class="capacity-metrics" aria-live="polite"></div>
-        <p id="capacity-note" class="summary-note"></p>
-        <dl id="capacity-meta" class="capacity-meta" aria-live="polite"></dl>
-      </section>
-
-      <section class="tree-section" aria-labelledby="work-title">
-        <div class="section-heading">
-          <h2 id="work-title">依頼と担当のツリー</h2>
-          <p id="tree-coverage" class="task-total">current coverage —</p>
-        </div>
-        <p id="tree-note" class="summary-note">
-          current
-          sessionの全nodeです。履歴は破線で接続し、現在の人数には数えません。図だけ横へ動かせます。
-        </p>
-        <div class="task-summary" aria-live="polite">
-          <p id="task-total" class="task-total">公開タスク行 —件</p>
-          <ul
-            id="status-counts"
-            class="status-counts"
-            aria-label="公開タスク行の進捗状態別件数"
-          ></ul>
-        </div>
-        <dl id="tree-meta" class="tree-meta" aria-live="polite"></dl>
-        <div class="tree-pan-controls" aria-label="ツリー図の横移動">
-          <button
-            id="tree-pan-left"
-            class="tree-pan-button"
-            type="button"
-            aria-label="ツリー図を左へ移動"
+          <section
+            id="request-registry"
+            class="request-registry"
+            aria-labelledby="request-registry-title"
+            hidden
           >
-            ← 図を左へ
-          </button>
-          <button
-            id="tree-pan-right"
-            class="tree-pan-button"
-            type="button"
-            aria-label="ツリー図を右へ移動"
-          >
-            図を右へ →
-          </button>
+            <div class="section-heading">
+              <h2 id="request-registry-title">PM管理タスク</h2>
+              <p id="request-registry-updated" class="task-total">観測更新 —</p>
+            </div>
+            <section id="pm-task-projection" aria-labelledby="pm-task-projection-title" hidden>
+              <h3 id="pm-task-projection-title">PM確認済み観測</h3>
+              <p id="pm-task-projection-source" class="summary-note"></p>
+              <div
+                id="pm-task-list"
+                class="request-list"
+                role="list"
+                aria-label="PM確認済みtask観測"
+              ></div>
+            </section>
+            <div id="control-registry-view">
+              <h3>Front Desk依頼registry</h3>
+              <dl id="request-registry-meta" class="registry-meta" aria-live="polite"></dl>
+              <p id="request-handover" class="handover-note" hidden></p>
+              <div
+                id="request-list"
+                class="request-list"
+                role="list"
+                aria-label="登録済み依頼"
+                aria-live="polite"
+              ></div>
+            </div>
+          </section>
+
+          <p class="scope-note">
+            <strong id="source-kind">入力種別を確認中</strong><br />
+            <span id="source-note">snapshotの出所を確認しています。</span>
+          </p>
+
+          <section class="focus-summary" aria-labelledby="focus-title">
+            <div class="section-heading">
+              <h2 id="focus-title">今見る要約</h2>
+              <p id="focus-updated" class="task-total">報告時刻 —</p>
+            </div>
+            <dl id="focus-meta" class="focus-meta" aria-live="polite"></dl>
+            <p id="focus-source" class="summary-note">明示された公開要約を読み込み中です。</p>
+          </section>
+
+          <section class="capacity capacity-top" aria-labelledby="capacity-title">
+            <div class="section-heading">
+              <h2 id="capacity-title">観測中root session全体</h2>
+              <p id="capacity-observed" class="task-total">容量観測 —</p>
+            </div>
+            <div id="capacity-metrics" class="capacity-metrics" aria-live="polite"></div>
+            <p id="capacity-note" class="summary-note"></p>
+            <dl id="capacity-meta" class="capacity-meta" aria-live="polite"></dl>
+          </section>
+
+          <section class="tree-section" aria-labelledby="work-title">
+            <div class="section-heading">
+              <h2 id="work-title">依頼と担当のツリー</h2>
+              <p id="tree-coverage" class="task-total">current coverage —</p>
+            </div>
+            <p id="tree-note" class="summary-note">
+              current
+              sessionの全nodeです。履歴は破線で接続し、現在の人数には数えません。図だけ横へ動かせます。
+            </p>
+            <div class="task-summary" aria-live="polite">
+              <p id="task-total" class="task-total">公開タスク行 —件</p>
+              <ul
+                id="status-counts"
+                class="status-counts"
+                aria-label="公開タスク行の進捗状態別件数"
+              ></ul>
+            </div>
+            <dl id="tree-meta" class="tree-meta" aria-live="polite"></dl>
+            <div class="tree-pan-controls" aria-label="ツリー図の横移動">
+              <button
+                id="tree-pan-left"
+                class="tree-pan-button"
+                type="button"
+                aria-label="ツリー図を左へ移動"
+              >
+                ← 図を左へ
+              </button>
+              <button
+                id="tree-pan-right"
+                class="tree-pan-button"
+                type="button"
+                aria-label="ツリー図を右へ移動"
+              >
+                図を右へ →
+              </button>
+            </div>
+            <div id="tree-scroll" class="tree-scroll" tabindex="0" aria-label="依頼と担当のツリー">
+              <svg
+                id="session-tree"
+                class="session-tree"
+                role="group"
+                aria-label="依頼と担当のツリー"
+              ></svg>
+            </div>
+            <aside id="node-detail" class="node-detail" aria-live="polite"></aside>
+          </section>
         </div>
-        <div id="tree-scroll" class="tree-scroll" tabindex="0" aria-label="依頼と担当のツリー">
-          <svg
-            id="session-tree"
-            class="session-tree"
-            role="group"
-            aria-label="依頼と担当のツリー"
-          ></svg>
-        </div>
-        <aside id="node-detail" class="node-detail" aria-live="polite"></aside>
-      </section>
+      </details>
     </main>
 
     <footer>
       <p>ブラウザは同一originの管理backendだけを読みます。GitHub APIへ接続しません。</p>
     </footer>
-    <script type="module" src="./status.js?v=9"></script>
+    <script type="module" src="./status.js?v=10"></script>
   </body>
 </html>

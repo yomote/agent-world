@@ -14,6 +14,7 @@ import {
   orderedRequestsForBoard,
   relationshipEdges,
   pmTaskBoardStatus,
+  pmBriefing,
   requestConnectionDescription,
   requestBoardStatus,
   requestFocusDescription,
@@ -272,12 +273,12 @@ test("旧refresh・stale・focus・時計・linkとkeyboard操作を実装に保
   }
 });
 
-test("asset queryはJS/CSSを同じv9へ更新し図だけpan可能にする", async () => {
+test("asset queryはJS/CSSを同じv10へ更新し図だけpan可能にする", async () => {
   // 旧cacheの片方だけが残ることと390px page overflowの再発を防ぐ。
   const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
   const css = await readFile(new URL("../../docs/status/status.css", import.meta.url), "utf8");
-  assert.match(html, /status\.css\?v=9/);
-  assert.match(html, /status\.js\?v=9/);
+  assert.match(html, /status\.css\?v=10/);
+  assert.match(html, /status\.js\?v=10/);
   assert.match(css, /\.tree-scroll\s*{[^}]*overflow:\s*auto/s);
   assert.match(css, /width:\s*calc\(100vw - 24px\)/);
 });
@@ -636,6 +637,113 @@ test("PM観測projectionはcontrol registryと分離して不足とPO待ちを�
   assert.match(board.poDelivery, /配送証跡なし.*通知済みとは判定しません/);
   assert.match(html, /id="pm-task-projection"/);
   assert.match(html, /id="control-registry-view"/);
+});
+
+test("初期要約は状態を混同せず各区分を最大3件に絞る", () => {
+  // 詳細taskを初期画面へ全展開したり、PO待ちを進行中・完了へ混ぜる回帰を防ぐ。
+  const tasks = [
+    {
+      task_id: "working",
+      title: "画面を簡潔にする",
+      state: "running",
+      current_step: "短い要約を実装中",
+      observed_at: "2026-09-19T10:00:00Z",
+      waiting_on: "worker",
+    },
+    {
+      task_id: "po",
+      title: "PO確認",
+      state: "review-wait",
+      next_action: "成果を開いて確認する",
+      observed_at: "2026-09-19T10:01:00Z",
+      waiting_on: "po",
+      pr_url: "https://example.test/result",
+    },
+    {
+      task_id: "paused",
+      title: "統合作業",
+      state: "blocked",
+      blocker: "予算保留",
+      next_action: "PMの再開packetを待つ",
+      observed_at: "2026-09-19T09:59:00Z",
+      waiting_on: "pm",
+    },
+    {
+      task_id: "done",
+      title: "Azure公開",
+      state: "completed",
+      current_step: "head abcdef1234567 / receipt=merged / digest sha256:0123456789abcdef",
+      observed_at: "2026-09-19T09:58:00Z",
+      waiting_on: "none",
+    },
+    {
+      task_id: "done-po",
+      title: "公開後のPO確認",
+      state: "completed",
+      current_step: "技術作業は完了",
+      next_action: "成果を開いて確認する",
+      observed_at: "2026-09-19T10:02:00Z",
+      waiting_on: "po",
+      pr_url: "https://example.test/po-result",
+    },
+  ];
+  const briefing = pmBriefing({ tasks, source_refs: ["https://example.test/queue"] });
+  assert.deepEqual(
+    briefing.active.map((row) => row.title),
+    ["画面を簡潔にする"],
+  );
+  assert.deepEqual(
+    briefing.po.map((row) => row.title),
+    ["公開後のPO確認", "PO確認"],
+  );
+  assert.deepEqual(
+    briefing.blocked.map((row) => row.title),
+    ["統合作業"],
+  );
+  assert.match(briefing.blocked[0].detail, /予算保留.*次:/);
+  assert.deepEqual(
+    briefing.done.map((row) => row.title),
+    ["Azure公開"],
+  );
+  assert.equal(briefing.done[0].detail, "この作業は完了しました");
+  assert.doesNotMatch(briefing.done[0].detail, /head|receipt|digest|[0-9a-f]{7}/i);
+  assert.ok(Object.values(briefing).every((rows) => rows.length <= 3));
+});
+
+test("3件を超える保留は正本への1リンクにまとめて存在を消さない", () => {
+  // 初期表示の件数制限で4件目以降の未完taskへ到達できなくなる回帰を防ぐ。
+  const tasks = Array.from({ length: 5 }, (_, index) => ({
+    task_id: `paused-${index}`,
+    title: `保留 ${index}`,
+    state: "blocked",
+    blocker: "予算保留",
+    next_action: "PMの再開を待つ",
+    observed_at: `2026-09-19T10:0${index}:00Z`,
+    waiting_on: "pm",
+  }));
+  const blocked = pmBriefing({
+    tasks,
+    source_refs: ["https://example.test/queue"],
+  }).blocked;
+  assert.equal(blocked.length, 3);
+  assert.equal(blocked[2].title, "ほか3件の保留を見る");
+  assert.equal(blocked[2].url, "https://example.test/queue");
+});
+
+test("初期画面は4区分だけを先に示し管理情報は1段の詳細へ置く", async () => {
+  // worker名・digest・runtime graphを初期表示へ戻す回帰を防ぐ。
+  const html = await readFile(new URL("../../docs/status/index.html", import.meta.url), "utf8");
+  for (const heading of [
+    "いま進めていること",
+    "止まっていること",
+    "あなたの確認が必要",
+    "最近できたこと",
+  ]) {
+    assert.match(html, new RegExp(heading));
+  }
+  assert.ok(html.indexOf('id="briefing"') < html.indexOf('id="management-details"'));
+  assert.match(html, /<details id="management-details"/);
+  assert.match(html, /<summary>詳しい管理情報を見る<\/summary>/);
 });
 
 test("registry nullは従来snapshotをそのままtreeへ渡す", () => {
