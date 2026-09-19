@@ -247,6 +247,137 @@ class RequestEvidence(BaseModel):
     observed_at: AwareDatetime
 
 
+class ClosureGate(BaseModel):
+    """独立checkerが確認した受入gate。業務目的を他gateから推測しない。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["achieved", "unmet", "unknown"]
+    evidence_refs: list[HttpUrl] = Field(default_factory=list, max_length=16)
+    reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def check_evidence(self) -> "ClosureGate":
+        if self.state == "achieved" and not self.evidence_refs:
+            raise ValueError("achieved closure gate needs evidence")
+        if self.state != "achieved" and self.reason is None:
+            raise ValueError("unresolved closure gate needs a reason")
+        return self
+
+
+class ClosureStopDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    made: bool
+    reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def check_reason(self) -> "ClosureStopDecision":
+        if self.made != (self.reason is not None):
+            raise ValueError("stop decision needs a reason only when made")
+        return self
+
+
+class ClosureRequirement(BaseModel):
+    """Issue DoDを検証方法とexact-head evidenceへ結ぶtraceability行。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    category: Literal["generic-quality", "domain", "value"]
+    source_version: str = Field(min_length=1, max_length=200)
+    verification_method: str = Field(min_length=1, max_length=500)
+    evidence_refs: list[HttpUrl] = Field(default_factory=list, max_length=16)
+    evidence_head: str = Field(pattern=r"^[0-9a-f]{40}$")
+    checker_agent: str = Field(min_length=1, max_length=80)
+    result: Literal["satisfied", "unmet", "unverified", "not_applicable"]
+    reason: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def check_result(self) -> "ClosureRequirement":
+        if self.result == "satisfied" and not self.evidence_refs:
+            raise ValueError("satisfied requirement needs evidence")
+        if self.result != "satisfied" and self.reason is None:
+            raise ValueError("non-satisfied requirement needs a reason")
+        return self
+
+
+class ClosureAudit(BaseModel):
+    """独立checkerの判定を保存する署名なしの受入closure証跡。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    request_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    objective_ref: HttpUrl
+    dod_source_version: str = Field(min_length=1, max_length=200)
+    requirements_contract_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    evidence_head: str = Field(pattern=r"^[0-9a-f]{40}$")
+    checker_agent: str = Field(min_length=1, max_length=80)
+    checked_at: AwareDatetime
+    code_done: ClosureGate
+    verified: ClosureGate
+    reviewed: ClosureGate
+    merged: ClosureGate
+    delivered: ClosureGate
+    purpose: ClosureGate
+    requirements: list[ClosureRequirement] = Field(min_length=1, max_length=64)
+    overall: Literal["accept", "reject", "unknown"]
+    owner: str | None = Field(default=None, min_length=1, max_length=80)
+    next_action: str | None = Field(default=None, min_length=1, max_length=500)
+    resume_trigger: str | None = Field(default=None, min_length=1, max_length=500)
+    stop_decision: ClosureStopDecision
+
+    @model_validator(mode="after")
+    def check_overall_and_continuity(self) -> "ClosureAudit":
+        states = [
+            self.code_done.state,
+            self.verified.state,
+            self.reviewed.state,
+            self.merged.state,
+            self.delivered.state,
+            self.purpose.state,
+        ]
+        requirement_ids = [item.requirement_id for item in self.requirements]
+        if len(requirement_ids) != len(set(requirement_ids)):
+            raise ValueError("closure requirement identifiers must be unique")
+        if any(item.evidence_head != self.evidence_head for item in self.requirements):
+            raise ValueError("closure requirement evidence must use the audited head")
+        requirement_results = [item.result for item in self.requirements]
+        derived = (
+            "reject"
+            if "unmet" in states or "unmet" in requirement_results
+            else "unknown"
+            if "unknown" in states or "unverified" in requirement_results
+            else "accept"
+        )
+        if self.overall != derived:
+            raise ValueError("closure overall must match the gates and requirements map")
+        continuation = (self.owner, self.next_action, self.resume_trigger)
+        if self.overall == "accept" and any(value is not None for value in continuation):
+            raise ValueError("accepted closure cannot retain continuation fields")
+        if self.overall != "accept" and any(value is None for value in continuation):
+            raise ValueError("unaccepted closure needs owner, next action, and resume trigger")
+        return self
+
+
+class PoAcceptanceReceipt(BaseModel):
+    """同threadでPO本人が明示したacceptance。通知receiptや内部受入とは分ける。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1]
+    dedup_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    request_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    evidence_head: str = Field(pattern=r"^[0-9a-f]{40}$")
+    dod_source_version: str = Field(min_length=1, max_length=200)
+    requirements_contract_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    decision: Literal["accepted"]
+    acknowledged_at: AwareDatetime
+    channel: Literal["front-desk-same-thread"]
+    message_ref: str = Field(min_length=1, max_length=500)
+
+
 class RequestRecord(BaseModel):
     """Issue/PRを正本として参照する、公開可能な依頼運用索引。"""
 
@@ -276,6 +407,11 @@ class RequestRecord(BaseModel):
     progress_summary: str | None = Field(default=None, max_length=500)
     blocker: str | None = Field(default=None, max_length=500)
     next_action: str | None = Field(default=None, max_length=500)
+    resume_trigger: str | None = Field(default=None, max_length=500)
+    dod_source_version: str | None = Field(default=None, min_length=1, max_length=200)
+    closure_audit: ClosureAudit | None = None
+    po_review_required: bool = False
+    po_acceptance_receipt: PoAcceptanceReceipt | None = None
     report_updated_at: AwareDatetime
     report_source: Literal["manual-public-summary"]
     runtime_connection: Literal["connected", "record-only", "unknown"]
@@ -400,6 +536,37 @@ class RequestRegistryUpdate(BaseModel):
             self.actor_runtime_session_id is not None
         ):
             raise ValueError("runtime session identity is not accepted for this action")
+        for request in self.requests:
+            if request.lifecycle == "completed":
+                audit = request.closure_audit
+                if audit is None or audit.overall != "accept":
+                    raise ValueError("completed request needs an accepted closure audit")
+                if request.dod_source_version != audit.dod_source_version:
+                    raise ValueError(
+                        "completed request closure audit must use the latest DoD version"
+                    )
+                if (
+                    request.request_id != audit.request_id
+                    or request.issue_url != audit.objective_ref
+                ):
+                    raise ValueError("completed request closure audit identifies another objective")
+                po_receipt = request.po_acceptance_receipt
+                if request.po_review_required and po_receipt is None:
+                    raise ValueError("PO-reviewed request needs an accepted PO receipt")
+                if po_receipt is not None and (
+                    po_receipt.request_id != request.request_id
+                    or po_receipt.evidence_head != audit.evidence_head
+                    or po_receipt.dod_source_version != audit.dod_source_version
+                    or po_receipt.requirements_contract_digest != audit.requirements_contract_digest
+                ):
+                    raise ValueError("PO acceptance receipt does not match internal closure")
+            elif request.lifecycle in {"blocked", "handover-waiting", "reconnectable"}:
+                if not request.owner_agent or not request.next_action or not request.resume_trigger:
+                    raise ValueError(
+                        "unresolved request needs owner, next action, and resume trigger"
+                    )
+                if request.lifecycle == "blocked" and not request.blocker:
+                    raise ValueError("blocked request needs a concrete blocker")
         return self
 
 

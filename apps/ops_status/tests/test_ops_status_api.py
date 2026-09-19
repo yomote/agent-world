@@ -309,6 +309,106 @@ def test_pm_projection_upsert_rejects_missing_or_mixed_write_targets(mutation):
         create_app(MemoryStore(StatusSnapshot.model_validate(snapshot(now))))
     ).put("/api/status/upsert", json=payload)
     assert response.status_code == 422
+def accepted_closure_audit(request_id: str, at: datetime) -> dict:
+    gate = {
+        "state": "achieved",
+        "evidence_refs": ["https://github.com/yomote/agent-world/pull/91"],
+        "reason": None,
+    }
+    return {
+        "schema_version": 1,
+        "request_id": request_id,
+        "objective_ref": (
+            f"https://github.com/yomote/agent-world/issues/{request_id.removeprefix('request-')}"
+        ),
+        "dod_source_version": "issue-updated:current",
+        "requirements_contract_digest": "sha256:" + "c" * 64,
+        "evidence_head": "a" * 40,
+        "checker_agent": "independent-checker",
+        "checked_at": at.isoformat(),
+        **{
+            name: gate.copy()
+            for name in ("code_done", "verified", "reviewed", "merged", "delivered", "purpose")
+        },
+        "requirements": [
+            {
+                "requirement_id": "domain-use-case",
+                "category": "domain",
+                "source_version": "issue-updated:current",
+                "verification_method": "use-case acceptance",
+                "evidence_refs": ["https://github.com/yomote/agent-world/issues/45"],
+                "evidence_head": "a" * 40,
+                "checker_agent": "independent-checker",
+                "result": "satisfied",
+                "reason": None,
+            }
+        ],
+        "overall": "accept",
+        "owner": None,
+        "next_action": None,
+        "resume_trigger": None,
+        "stop_decision": {"made": False, "reason": None},
+    }
+
+
+def test_request_registry_completed_write_requires_matching_closure_audit():
+    """PMのdone自己申告だけでcompletedを保存する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    record = request_record("request-45", now, lifecycle="completed")
+    payload = {
+        "source": "manual-public-registry",
+        "action": "initialize",
+        "expected_generation": 0,
+        "actor_front_desk": "front-desk-1",
+        "observed_at": now.isoformat(),
+        "requests": [record],
+    }
+
+    rejected = client.put("/api/status/requests/upsert", json=payload)
+
+    assert rejected.status_code == 422
+    assert store.write_count == 0
+
+    record["dod_source_version"] = "issue-updated:current"
+    record["closure_audit"] = accepted_closure_audit("request-45", now)
+    record["po_review_required"] = True
+    pending_po = client.put("/api/status/requests/upsert", json=payload)
+    assert pending_po.status_code == 422
+    record["po_acceptance_receipt"] = {
+        "schema_version": 1,
+        "dedup_key": "sha256:" + "b" * 64,
+        "request_id": "request-45",
+        "evidence_head": "a" * 40,
+        "dod_source_version": "issue-updated:current",
+        "requirements_contract_digest": "sha256:" + "c" * 64,
+        "decision": "accepted",
+        "acknowledged_at": now.isoformat(),
+        "channel": "front-desk-same-thread",
+        "message_ref": "pm-message-1",
+    }
+    accepted = client.put("/api/status/requests/upsert", json=payload)
+
+    assert accepted.status_code == 200
+    assert store.value.request_registry.requests[0].lifecycle == "completed"
+
+
+def test_legacy_completed_snapshot_remains_readable_without_closure_audit():
+    """導入前のcompleted記録を新しい保存guardで読めなくする回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    data = snapshot(now)
+    data["request_registry"] = {
+        "generation": 1,
+        "active_front_desk": {"alias": "front-desk-1", "claimed_at": now.isoformat()},
+        "updated_at": now.isoformat(),
+        "source": "manual-public-registry",
+        "requests": [request_record("request-45", now, lifecycle="completed")],
+    }
+
+    parsed = StatusSnapshot.model_validate(data)
+
+    assert parsed.request_registry.requests[0].closure_audit is None
 
 
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):

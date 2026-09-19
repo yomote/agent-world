@@ -53,6 +53,11 @@ REQUEST_CONTEXT_FIELDS = {
     "progress_summary",
     "blocker",
     "next_action",
+    "resume_trigger",
+    "dod_source_version",
+    "closure_audit",
+    "po_review_required",
+    "po_acceptance_receipt",
     "report_updated_at",
     "report_source",
     "runtime_connection",
@@ -60,6 +65,14 @@ REQUEST_CONTEXT_FIELDS = {
     "evidence",
     "worker_restart_policy",
 }
+LEGACY_REQUEST_CONTEXT_FIELDS = REQUEST_CONTEXT_FIELDS - {
+    "resume_trigger",
+    "dod_source_version",
+    "closure_audit",
+    "po_review_required",
+    "po_acceptance_receipt",
+}
+CLOSURE_GATES = ("code_done", "verified", "reviewed", "merged", "delivered", "purpose")
 
 
 def canonical_bytes(bundle: dict) -> bytes:
@@ -105,7 +118,11 @@ def validate_https(value: object, name: str) -> None:
 
 
 def validate_context_request(item: object) -> dict:
-    if not isinstance(item, dict) or set(item) != REQUEST_CONTEXT_FIELDS:
+    if (
+        not isinstance(item, dict)
+        or not LEGACY_REQUEST_CONTEXT_FIELDS <= set(item)
+        or not set(item) <= REQUEST_CONTEXT_FIELDS
+    ):
         raise ValueError("handoff public context request fields do not match the allowlist")
     validate_alias(item["request_id"])
     validate_alias(item["scope_id"])
@@ -141,6 +158,8 @@ def validate_context_request(item: object) -> dict:
         raise ValueError("invalid public context member agents")
     for name in ("progress_summary", "blocker", "next_action"):
         validate_public_text(item[name], name, nullable=True)
+    if "resume_trigger" in item:
+        validate_public_text(item["resume_trigger"], "resume_trigger", nullable=True)
     validate_timestamp(item["report_updated_at"])
     if item["report_source"] != "manual-public-summary":
         raise ValueError("invalid public context report source")
@@ -168,6 +187,234 @@ def validate_context_request(item: object) -> dict:
     if (item["issue_state"] == "unknown") != (item["issue_observation"] == "unavailable"):
         raise ValueError("unknown public context Issue needs unavailable observation")
     return item
+
+
+def continuity_errors(requests: list[dict]) -> list[str]:
+    """未解決requestが次の責任者・行動・復帰条件を失っていないか調べる。"""
+    errors: list[str] = []
+    for request in requests:
+        if request.get("lifecycle") == "completed":
+            continue
+        request_id = request.get("request_id", "unknown-request")
+        for field in ("owner_agent", "next_action", "resume_trigger"):
+            if not request.get(field):
+                errors.append(f"{request_id}: unresolved request needs {field}")
+        if request.get("lifecycle") == "blocked" and not request.get("blocker"):
+            errors.append(f"{request_id}: blocked request needs blocker")
+    return errors
+
+
+def closure_check(input_path: Path) -> dict:
+    """独立checkerの監査入力と現DoD/headを照合し、closure receiptを発行する。"""
+    payload = json.loads(input_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "request", "audit"}:
+        raise ValueError("closure check input fields do not match schema version 1")
+    if payload["schema_version"] != 1:
+        raise ValueError("unsupported closure check schema")
+    request = payload["request"]
+    audit = payload["audit"]
+    request_fields = {
+        "request_id",
+        "objective_ref",
+        "latest_dod_version",
+        "required_requirement_ids",
+        "requirements_contract_digest",
+        "expected_head",
+        "issue_state",
+        "terminal_intent",
+    }
+    audit_fields = {
+        "schema_version",
+        "request_id",
+        "objective_ref",
+        "dod_source_version",
+        "requirements_contract_digest",
+        "evidence_head",
+        "checker_agent",
+        "checked_at",
+        *CLOSURE_GATES,
+        "overall",
+        "owner",
+        "next_action",
+        "resume_trigger",
+        "stop_decision",
+        "requirements",
+    }
+    if not isinstance(request, dict) or set(request) != request_fields:
+        raise ValueError("closure request fields do not match the allowlist")
+    if not isinstance(audit, dict) or set(audit) != audit_fields or audit["schema_version"] != 1:
+        raise ValueError("closure audit fields do not match schema version 1")
+    validate_alias(request["request_id"])
+    validate_https(request["objective_ref"], "objective_ref")
+    validate_public_text(request["latest_dod_version"], "latest_dod_version", max_length=200)
+    required_ids = request["required_requirement_ids"]
+    if (
+        not isinstance(required_ids, list)
+        or not required_ids
+        or len(required_ids) != len(set(required_ids))
+        or any(not isinstance(item, str) or not ALIAS.fullmatch(item) for item in required_ids)
+    ):
+        raise ValueError("closure request needs unique required requirement IDs")
+    contract_digest = request["requirements_contract_digest"]
+    if not isinstance(contract_digest, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", contract_digest
+    ):
+        raise ValueError("closure request needs a requirements contract digest")
+    if not isinstance(request["expected_head"], str) or not COMMIT.fullmatch(
+        request["expected_head"]
+    ):
+        raise ValueError("closure request expected_head must be a full SHA")
+    if request["issue_state"] not in {"open", "closed", "unknown"}:
+        raise ValueError("invalid closure Issue state")
+    if request["terminal_intent"] not in {"complete", "cancelled", "continue"}:
+        raise ValueError("invalid closure terminal intent")
+
+    reasons: list[str] = []
+    guard_errors: list[str] = []
+    states: dict[str, str] = {}
+    for name in CLOSURE_GATES:
+        gate = audit[name]
+        if not isinstance(gate, dict) or set(gate) != {"state", "evidence_refs", "reason"}:
+            raise ValueError(f"closure {name} gate fields do not match the allowlist")
+        state = gate["state"]
+        if state not in {"achieved", "unmet", "unknown"}:
+            raise ValueError(f"invalid closure {name} state")
+        evidence = gate["evidence_refs"]
+        if (
+            not isinstance(evidence, list)
+            or len(evidence) > 16
+            or any(not isinstance(reference, str) or not reference for reference in evidence)
+        ):
+            raise ValueError(f"invalid closure {name} evidence")
+        for reference in evidence:
+            validate_https(reference, f"closure {name} evidence")
+        if state == "achieved" and not evidence:
+            guard_errors.append(f"{name}: achieved gate has no evidence")
+            state = "unmet"
+        if state != "achieved" and not gate["reason"]:
+            guard_errors.append(f"{name}: unresolved gate has no reason")
+        elif state != "achieved":
+            reasons.append(f"{name}: {gate['reason']}")
+        states[name] = state
+
+    requirements = audit["requirements"]
+    if not isinstance(requirements, list) or not requirements or len(requirements) > 64:
+        raise ValueError("closure audit needs a bounded requirements map")
+    requirement_results: dict[str, str] = {}
+    requirement_fields = {
+        "requirement_id",
+        "category",
+        "source_version",
+        "verification_method",
+        "evidence_refs",
+        "evidence_head",
+        "checker_agent",
+        "result",
+        "reason",
+    }
+    for requirement in requirements:
+        if not isinstance(requirement, dict) or set(requirement) != requirement_fields:
+            raise ValueError("closure requirement fields do not match the allowlist")
+        requirement_id = requirement["requirement_id"]
+        validate_alias(requirement_id)
+        if requirement_id in requirement_results:
+            raise ValueError("closure requirement identifiers must be unique")
+        if requirement["category"] not in {"generic-quality", "domain", "value"}:
+            raise ValueError("invalid closure requirement category")
+        validate_public_text(requirement["source_version"], "source_version", max_length=200)
+        validate_public_text(requirement["verification_method"], "verification_method")
+        validate_public_text(requirement["checker_agent"], "checker_agent", max_length=80)
+        if requirement["evidence_head"] != request["expected_head"]:
+            guard_errors.append(f"{requirement_id}: requirement evidence uses another head")
+        evidence = requirement["evidence_refs"]
+        if not isinstance(evidence, list) or len(evidence) > 16:
+            raise ValueError("invalid closure requirement evidence")
+        for reference in evidence:
+            validate_https(reference, f"{requirement_id} evidence")
+        result = requirement["result"]
+        if result not in {"satisfied", "unmet", "unverified", "not_applicable"}:
+            raise ValueError("invalid closure requirement result")
+        if result == "satisfied" and not evidence:
+            guard_errors.append(f"{requirement_id}: satisfied requirement has no evidence")
+            result = "unmet"
+        if result != "satisfied" and not requirement["reason"]:
+            guard_errors.append(f"{requirement_id}: non-satisfied requirement has no reason")
+        elif result in {"unmet", "unverified"}:
+            reasons.append(f"{requirement_id}: {requirement['reason']}")
+        if (
+            requirement["category"] in {"domain", "value"}
+            and requirement["source_version"] != request["latest_dod_version"]
+        ):
+            guard_errors.append(f"{requirement_id}: requirement uses another DoD version")
+        requirement_results[requirement_id] = result
+    if set(requirement_results) != set(required_ids):
+        guard_errors.append("requirements map does not cover the fixed required IDs")
+    if audit["requirements_contract_digest"] != contract_digest:
+        guard_errors.append(
+            "requirements contract digest does not match the current Issue contract"
+        )
+
+    matches = {
+        "request_id": audit["request_id"] == request["request_id"],
+        "objective_ref": audit["objective_ref"] == request["objective_ref"],
+        "dod_source_version": audit["dod_source_version"] == request["latest_dod_version"],
+        "evidence_head": audit["evidence_head"] == request["expected_head"],
+    }
+    guard_errors.extend(
+        f"{name}: audit does not match current request" for name, ok in matches.items() if not ok
+    )
+    validate_public_text(audit["checker_agent"], "checker_agent", max_length=80)
+    validate_timestamp(audit["checked_at"])
+    stop = audit["stop_decision"]
+    if not isinstance(stop, dict) or set(stop) != {"made", "reason"}:
+        raise ValueError("closure stop decision fields do not match the allowlist")
+    if not isinstance(stop["made"], bool) or stop["made"] != bool(stop["reason"]):
+        raise ValueError("closure stop decision needs a reason only when made")
+
+    if request["terminal_intent"] == "cancelled":
+        guard_errors.append("cancelled work is not successful closure")
+    if request["issue_state"] != "closed":
+        guard_errors.append("successful closure needs a closed Issue observation")
+    if guard_errors or "unmet" in states.values() or "unmet" in requirement_results.values():
+        derived = "reject"
+    elif "unknown" in states.values() or "unverified" in requirement_results.values():
+        derived = "unknown"
+    else:
+        derived = "accept"
+    if audit["overall"] != derived:
+        guard_errors.append("submitted overall does not match the guarded closure result")
+        derived = "reject"
+
+    continuation = {
+        "owner": audit["owner"],
+        "next_action": audit["next_action"],
+        "resume_trigger": audit["resume_trigger"],
+    }
+    if derived == "accept":
+        if any(value is not None for value in continuation.values()):
+            guard_errors.append("accepted closure cannot retain continuation fields")
+            derived = "reject"
+    else:
+        for name, value in continuation.items():
+            if not value:
+                guard_errors.append(f"unaccepted closure needs {name}")
+
+    normalized = {**audit, "overall": derived}
+    return {
+        "request_id": request["request_id"],
+        "closure_status": derived,
+        "code_done": states["code_done"],
+        "verified": states["verified"],
+        "reviewed": states["reviewed"],
+        "merged": states["merged"],
+        "delivered": states["delivered"],
+        "purpose_achieved": states["purpose"],
+        "requirements": requirement_results,
+        "receipt": normalized if derived == "accept" else None,
+        "continuation": None if derived == "accept" else continuation,
+        "reasons": [*reasons, *guard_errors],
+        "receipt_authenticity": "status-ingest-authenticated-but-not-signed",
+    }
 
 
 def prepare_update(bundle: dict, digest: str) -> dict:
@@ -214,7 +461,14 @@ def read_registry(registry_path: Path) -> dict:
                 "issue_url": request["issue_url"],
                 "lifecycle": request["lifecycle"],
                 "runtime_connection": request["runtime_connection"],
+                "owner_agent": request.get("owner_agent"),
+                "blocker": request.get("blocker"),
                 "next_action": request.get("next_action"),
+                "resume_trigger": request.get("resume_trigger"),
+                "dod_source_version": request.get("dod_source_version"),
+                "closure_audit": request.get("closure_audit"),
+                "po_review_required": request.get("po_review_required", False),
+                "po_acceptance_receipt": request.get("po_acceptance_receipt"),
                 "report_updated_at": request["report_updated_at"],
             }
             for request in requests
@@ -354,7 +608,7 @@ def discover(locator_path: Path, project_root: Path) -> dict:
         or context_by_id.keys() != bundle_by_id.keys()
     ):
         raise ValueError("handoff public context request IDs must uniquely match the bundle")
-    bundle_fields = {
+    legacy_bundle_fields = {
         "request_id",
         "scope_id",
         "issue_url",
@@ -362,9 +616,22 @@ def discover(locator_path: Path, project_root: Path) -> dict:
         "next_action",
         "report_updated_at",
     }
+    extended_bundle_fields = legacy_bundle_fields | {
+        "owner_agent",
+        "blocker",
+        "resume_trigger",
+        "dod_source_version",
+        "closure_audit",
+        "po_review_required",
+        "po_acceptance_receipt",
+    }
     if any(
-        {key: context_by_id[request_id][key] for key in bundle_fields}
-        != {key: bundle_by_id[request_id][key] for key in bundle_fields}
+        (
+            set(bundle_by_id[request_id]) != legacy_bundle_fields
+            and set(bundle_by_id[request_id]) != extended_bundle_fields
+        )
+        or {key: context_by_id[request_id][key] for key in set(bundle_by_id[request_id])}
+        != {key: bundle_by_id[request_id][key] for key in set(bundle_by_id[request_id])}
         for request_id in bundle_by_id
     ):
         raise ValueError("handoff public context request values do not match the bundle")
@@ -484,6 +751,9 @@ def prepare(registry_path: Path, successor: str, prepared_at: str) -> dict:
     from_alias = validate_alias(active.get("alias"))
     validate_alias(successor)
     validate_timestamp(prepared_at)
+    gaps = continuity_errors(requests)
+    if gaps:
+        raise ValueError("handoff continuity check failed: " + "; ".join(gaps))
     bundle = {
         "schema_version": 1,
         "expected_generation": generation,
@@ -497,7 +767,14 @@ def prepare(registry_path: Path, successor: str, prepared_at: str) -> dict:
                 "scope_id": item["scope_id"],
                 "issue_url": item["issue_url"],
                 "lifecycle": item["lifecycle"],
+                "owner_agent": item.get("owner_agent"),
+                "blocker": item.get("blocker"),
                 "next_action": item.get("next_action"),
+                "resume_trigger": item.get("resume_trigger"),
+                "dod_source_version": item.get("dod_source_version"),
+                "closure_audit": item.get("closure_audit"),
+                "po_review_required": item.get("po_review_required", False),
+                "po_acceptance_receipt": item.get("po_acceptance_receipt"),
                 "report_updated_at": item["report_updated_at"],
             }
             for item in sorted(requests, key=lambda value: value["request_id"])
@@ -586,6 +863,9 @@ def main() -> None:
     claim_root_parser.add_argument("--observed-at", required=True)
     claim_root_parser.add_argument("--canonical-task-path", required=True)
     claim_root_parser.add_argument("--output", type=Path, required=True)
+    closure_parser = subparsers.add_parser("closure-check")
+    closure_parser.add_argument("--input", type=Path, required=True)
+    closure_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "read":
         result = read_registry(args.registry)
@@ -597,6 +877,8 @@ def main() -> None:
         result = mark_claimed(args.locator, args.claim_payload, args.receipt, args.project_root)
     elif args.command == "prepare":
         result = prepare(args.registry, args.successor, args.observed_at)
+    elif args.command == "closure-check":
+        result = closure_check(args.input)
     else:
         result = claim_root(args.bundle, args.actor, args.observed_at, args.canonical_task_path)
     args.output.write_text(

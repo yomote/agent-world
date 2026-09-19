@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "request": {
+    "request_id": "request-89",
+    "objective_ref": "https://github.com/yomote/agent-world/issues/89",
+    "latest_dod_version": "issue-updated:2026-09-19T03:13:59Z",
+    "required_requirement_ids": [
+      "generic-exact-head",
+      "domain-usable-package",
+      "domain-source-coverage",
+      "domain-unmatched-ledger",
+      "value-agent-baseline"
+    ],
+    "requirements_contract_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "expected_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+    "issue_state": "open",
+    "terminal_intent": "continue"
+  },
+  "audit": {
+    "schema_version": 1,
+    "request_id": "request-89",
+    "objective_ref": "https://github.com/yomote/agent-world/issues/89",
+    "dod_source_version": "issue-updated:2026-09-19T03:13:59Z",
+    "requirements_contract_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+    "checker_agent": "independent-logistics-reviewer",
+    "checked_at": "2026-09-19T03:20:00Z",
+    "code_done": {
+      "state": "achieved",
+      "evidence_refs": ["https://github.com/yomote/agent-world/pull/90"],
+      "reason": null
+    },
+    "verified": {
+      "state": "achieved",
+      "evidence_refs": ["https://github.com/yomote/agent-world/pull/90/checks"],
+      "reason": null
+    },
+    "reviewed": {
+      "state": "achieved",
+      "evidence_refs": ["https://github.com/yomote/agent-world/pull/90#issuecomment-5738984735"],
+      "reason": null
+    },
+    "merged": {
+      "state": "unmet",
+      "evidence_refs": [],
+      "reason": "PR 90 is open and unmerged"
+    },
+    "delivered": {
+      "state": "unmet",
+      "evidence_refs": [],
+      "reason": "The result is not merged or delivered to users"
+    },
+    "purpose": {
+      "state": "unmet",
+      "evidence_refs": ["https://github.com/yomote/agent-world/issues/89"],
+      "reason": "The latest business DoD remains unmet"
+    },
+    "requirements": [
+      {
+        "requirement_id": "generic-exact-head",
+        "category": "generic-quality",
+        "source_version": "quality-contract:v1",
+        "verification_method": "Run the declared checks on the exact PR head",
+        "evidence_refs": ["https://github.com/yomote/agent-world/pull/90/checks"],
+        "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+        "checker_agent": "independent-logistics-reviewer",
+        "result": "satisfied",
+        "reason": null
+      },
+      {
+        "requirement_id": "domain-usable-package",
+        "category": "domain",
+        "source_version": "issue-updated:2026-09-19T03:13:59Z",
+        "verification_method": "Inspect accounting and sales handoff packages for the target use case",
+        "evidence_refs": ["https://github.com/yomote/agent-world/issues/89"],
+        "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+        "checker_agent": "independent-logistics-reviewer",
+        "result": "unmet",
+        "reason": "The package-only accounting and sales handoff is not delivered"
+      },
+      {
+        "requirement_id": "domain-source-coverage",
+        "category": "domain",
+        "source_version": "issue-updated:2026-09-19T03:13:59Z",
+        "verification_method": "Compare candidate coverage and unmatched source rows against the Issue DoD",
+        "evidence_refs": ["https://github.com/yomote/agent-world/issues/89"],
+        "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+        "checker_agent": "independent-logistics-reviewer",
+        "result": "unmet",
+        "reason": "Only the known minimum slice is evidenced and M8 remains waiting for questions"
+      },
+      {
+        "requirement_id": "domain-unmatched-ledger",
+        "category": "domain",
+        "source_version": "issue-updated:2026-09-19T03:13:59Z",
+        "verification_method": "Verify unmatched handling and ledger invariants on complete source coverage",
+        "evidence_refs": [],
+        "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+        "checker_agent": "independent-logistics-reviewer",
+        "result": "unverified",
+        "reason": "Complete source coverage evidence is unavailable"
+      },
+      {
+        "requirement_id": "value-agent-baseline",
+        "category": "value",
+        "source_version": "issue-updated:2026-09-19T03:13:59Z",
+        "verification_method": "Compare the Agent result with the same-LLM fixed baseline",
+        "evidence_refs": ["https://github.com/yomote/agent-world/issues/89"],
+        "evidence_head": "bb1aae69f9f0e89d55f4fc9e26b40f6b83a17e11",
+        "checker_agent": "independent-logistics-reviewer",
+        "result": "unmet",
+        "reason": "The fixed baseline remains favorable and Agent value is unproven"
+      }
+    ],
+    "overall": "reject",
+    "owner": "pm-controller",
+    "next_action": "Keep the residual objective unchanged and triage the next hypothesis",
+    "resume_trigger": "PM adopts a new packet within the already approved scope and budget",
+    "stop_decision": {
+      "made": true,
+      "reason": "The current Agent hypothesis is stopped; this is not purpose success"
+    }
+  }
+}

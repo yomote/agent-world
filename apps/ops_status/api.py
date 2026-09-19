@@ -375,6 +375,11 @@ def apply_registry_update(
                         if request.lifecycle == "completed"
                         else update.observed_at
                     ),
+                    "resume_trigger": (
+                        request.resume_trigger
+                        if request.lifecycle == "completed" or request.resume_trigger is not None
+                        else "成功claim receiptを確認後に明示dispatch"
+                    ),
                 }
             )
             for request_id, request in requests.items()
