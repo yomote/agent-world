@@ -89,7 +89,7 @@ review待ちはPASSや完了ではありません。dirty stateのcheck結果は
 - ブランチは `codex/<issue>-<slug>` を使う。小さな文書などIssueが不要な変更は `codex/<slug>` を使う。
 - Issueには目的、owner、作業状態、次手順とPRへのリンクを記録する。Draft PRには差分と、current head SHAに対応するreview・検証・未検証の証跡を記録する。詳細は[単一課題の完遂ループ](single-task-loop.md)を参照する。
 - DraftでCI jobがskipされたことはPASSではない。Ready for review後の該当runを確認できない場合は、未完了・未検証として扱う。
-- CIは1 job・最大10分の予算を守る。照会は対象runを60秒以上空けて最大10回までとする。独立review証跡とcurrent-head CI、rulesetが揃ったPRは、統合workerが[信頼済みmerge gate](../adr/0005-trusted-merge-gate.md)を起動してsquash mergeまで進める。常駐監視は追加しない。詳細は [CIと外部アクセスの運用](ci.md) を参照する。
+- CIは1 job・最大10分の予算を守る。照会は対象runを60秒以上空けて最大10回までとする。独立review証跡とcurrent-head CI、rulesetが揃ったPRは、統合workerが[merge gateの運用](ci.md#merge-gateとformal-local-entryの運用)に従ってsquash mergeまで進める。常駐監視は追加しない。
 
 GitHub設定のapply、公開範囲の変更、mergeは、具体的な内容について既存の許可を確認する。足りない許可だけをまとめてユーザーへ尋ねる。結果不明の書き込みや拒否された操作を成功扱いせず、自動再送もしない。
 

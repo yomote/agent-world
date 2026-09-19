@@ -14,7 +14,7 @@
 | secret検出     | public repoのsecret scanningとpush protectionを有効化                                                                    |
 | 更新対象と頻度 | [.github/dependabot.yml](../../.github/dependabot.yml)。GitHubが読む設定なのでTerraformに重複転記しない                  |
 
-CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。[merge gate ADR](../../docs/adr/0005-trusted-merge-gate.md)のmarkerは、別会話で実施した独立Sol reviewのcurrent-head受入記録であり、GitHub identityの独立性を証明しない。
+CodeQL default setup、Pages、GitHub App、organization ruleset、クラウド基盤は管理対象外。CodeQLは別API適用と実run確認が必要なため、この初回mergeの必須経路へ混ぜない。既存の別rulesetやclassic branch protectionはこの宣言で消えないため、初回に重複や競合を確認する。単独開発では自分のPRをapproveできないため、承認数0を宣言している。[ADR 0005](../../docs/adr/0005-trusted-merge-gate.md)はmerge主体の信頼境界を説明し、markerとmergeの実行条件は[CI運用](../../docs/runbooks/ci.md#merge-gateとformal-local-entryの運用)を正本とする。
 
 ## ローカル検証
 
@@ -63,7 +63,7 @@ terraform -chdir=infra/github plan -input=false -detailed-exitcode
 
 最後の終了コードは0=差分なし、2=差分あり、1=取得または評価の失敗。適用後のGitHub API再読取を伴う再planで一致を確かめる。変更を戻すときも宣言を修正してplan→applyする。
 
-初回PRのmergeは、ruleset適用と再plan、独立review証跡、current-head CI成功が揃った後、cleanなreview済みheadで`python scripts/merge_gate.py <PR番号> <40桁head> --execute --bootstrap-source`を実行する。`git rev-parse HEAD`の一致と`git status --porcelain`が空であることをスクリプトも確認する。トークンはプロセス環境だけで渡し、ファイルへ保存しない。PR #1がmainへ入った後は[Merge gate workflow](../../.github/workflows/merge-gate.yml)を`ref=main`、同じPR番号とhead、`execute_merge=true`でdispatchする。
+初回PRのmergeと以後のmerge gateは、[CI運用のbootstrap例外とmain workflow手順](../../docs/runbooks/ci.md#merge-gateとformal-local-entryの運用)に従う。このREADMEはTerraform設定の導入・照合だけを扱う。
 
 ## stateと継続運用
 

@@ -11,21 +11,11 @@
 
 Reactのbuild成果をFastAPIが配信する単一imageをAzure Container Apps Consumptionへ置く。0.25 vCPU / 0.5 GiB、worker 1、min replicas 0、max replicas 1、active revision 1とする。再起動やscale-to-zero後はWorldが初期化される。
 
-初回coreはinternal ingressで作り、Entra registration、本人assignment、Easy Auth actualを確認した後だけexternalへ切り替える。external切替直後の未認証拒否smokeまでを初回公開とする。
-
-既存coreへのfull Bicep再適用がprovider既定値、reference式、配列順序を複数の`Modify`として示す場合、初回公開はEntra callbackとContainer App ingressだけをactual比較付きの専用scriptで変更する。公開前後のauth、image digest、UAMI、Key Vault参照とContainer Appの残構成を固定し、結果不明時は再送しない。ingressがterminalかつexternalと確定した場合だけinternalへ戻し、そのactualを確認してからcallbackを復旧する。
-
 Azure Resource Managerの宣言とactualを直接比較でき、共有state backendを増やさないBicepを採用する。coreはResource Group、Container Apps environment/app、Log Analytics、Key Vault、managed identity、Budgetを管理し、`what-if`をdriftの正本にする。Entra app registrationはMicrosoft Graph資源なのでbootstrap scriptで作り、Bicepの`authConfigs`とread-only検査で期待値を固定する。
-
-専用scriptによる公開成功はBicep drift 0を意味しない。公開後も同じ入力のfull what-ifをprivate保存して公開前の差分と照合し、恒常的なprovider差分は未解消として記録する。広いallowlistで差分を隠さず、snapshot、smoke、post-what-ifを既存の構成図生成・照合へ渡す。
 
 GitHub Actionsはenvironment subjectのOIDCで専用Resource GroupだけのContributorを使う。imageは公開GHCRのdigestで参照し、ACRの固定費とregistry credentialを持たない。本人限定時はsingle-tenant Entra registration、enterprise app assignment必須、Easy Authの本人object ID allowlistを重ねる。client secretはKey Vaultだけに保存し、GitHubへ渡さない。
 
-Entra app/SP作成直後のGraph伝播失敗では全体を再送しない。既存app/SPとtenant、callback、credential・assignment・auth不在を照合できる専用resume modeだけを許可し、別対象や途中副作用があれば停止する。
-
-Log Analyticsは30日保持、0.023 GB/日のingestion safeguard、アプリのaccess log無効化を使う。Budgetは50% actual、80% forecast、100% actualで通知する。Budgetもログの日次上限も課金のhard capではなく、日次cost検査を併用する。
-
-請求通貨は初回に対象subscriptionとResource GroupのBudget scopeを対応付けて確認し、方法・対象・通貨・UTC確認時刻をrepository外のprivate JSONへ保存する。coreや認証設定の通常applyはこの記録が対象subscription、Budget scope、JPYと一致することだけをローカル検査し、Cost Management Queryを呼ばない。subscription、Budget scope、請求契約を変更するときは初回確認を更新する。費用実績の取得はdeploy guardから分離して低頻度に行う。
+初回ingress、what-if/apply、Graph伝播の回復、公開後のdrift照合、費用・請求通貨の確認は、[Azure初回bootstrap](../runbooks/azure-bootstrap.md)、[Azure deploy・検証・rollback](../runbooks/azure-deploy.md)、[Azure cost・構成ドリフト](../runbooks/azure-cost-drift.md)を正本とする。
 
 ## トレードオフ
 

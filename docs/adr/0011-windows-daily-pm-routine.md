@@ -5,9 +5,7 @@
 
 ## 決定
 
-公開repository `yomote/agent-world` を匿名GitHub RESTで読むPowerShell collectorを、現在ユーザーの `\Codex\AgentWorldPmRoutine` として毎日09:00 JSTに起動する。TaskはGit common directory下の安定runtime pathを実行し、reportも `codex/pm-routine/reports/latest.md` に残す。
-
-collectorは全Issue一覧、全PR一覧、重点6 Issueを最大8 read、15秒timeoutで取得する。最初のread失敗後は追加readしない。全観測失敗は `failed`、部分観測は `partial`、全観測は `completed` とし、Taskもnonzeroで失敗を示す。
+公開repositoryを読むPM棚卸しcollectorは、worker runtime、Dashboard、CI証跡と分離したread-onlyの観測者として置く。Taskの登録、時刻、読取り予算、reportの状態分類は[日次PM棚卸し](../runbooks/pm-routine.md)を正本とする。
 
 ## 境界
 
