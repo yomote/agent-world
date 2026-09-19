@@ -60,10 +60,10 @@ Issueには状態ごとに、次の担当、具体的な次手順、既実施と
 ## 実装から納品まで
 
 1. 実装workerはpacketの編集境界で変更し、検証結果を `pass`、`fail`、`not_run`、`skipped`、`unknown` の事実として区別する。dirty stateで実行したcheckは、そのdirty stateの結果であり、最新commitのPASSとは記録しない。
-2. 統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAをreviewerへ渡す。Issueには `review_pending` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
+2. Issue責任者 / PMが管理するAC対応表と、PR作者の変更固有review観点（risk、business invariant、確認点、evidence、known unmet）を揃える。統合workerは必要な変更と検証を含む意味のあるcommitを作り、review前の固定対象SHAと両方の入力をreviewerへ渡す。AC変更はIssue責任者 / PMが理由、履歴、影響をIssueへ記録し、PR作者が条件を下げない。Issueには `review_pending` とPRへのリンクだけを記録し、review待ちは完了やPASSではない。
 3. 独立Sol reviewerは実装会話を継承せず、対象SHA、確認したDoD、検証結果と未検証、指摘の有無を返す。SHAが変わったら、その旧reviewは新しい変更の受入証跡にならない。
 4. 指摘があれば担当workerが修正し、影響に応じて再検証する。統合workerは新しいcommitを作り、最新SHAに対する独立reviewを再依頼する。
-5. 指摘がない最新SHAについて、統合workerはPR本文またはPRコメントに、対象SHA、確認範囲、指摘の意味と影響、対応fileまたはcommit、変更後の再確認、未検証を記録する。`PASS`や指摘件数だけではreview証跡にしない。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[merge gateの運用](ci.md#merge-gateとformal-local-entryの運用)の独立review markerも同じコメントの先頭へ記録する。
+5. 独立review結果は[GitHubの通常PR reviewへ配送](pr-review-delivery.md)する。指摘は対象SHAのdiffへinline threadとして束ね、指摘0件はscope、check、head、0件のCOMMENT reviewを残す。visible receipt URLとheadを保存する前にreview済みへ進めない。加えてPR本文またはPRコメントに、対象SHA、確認範囲、指摘の意味と影響、対応fileまたはcommit、変更後の再確認、未検証を記録する。`PASS`や指摘件数だけではreview証跡にしない。このGit外の証跡への追記だけのために新しいcommitや再reviewを連鎖させない。merge対象では[merge gateの運用](ci.md#merge-gateとformal-local-entryの運用)の独立review markerも記録するが、通常reviewの代替にしない。
 6. 統合workerはPRをReadyにしcurrent-head CIを確認する。GitHub設定とrulesetが適用済みなら、[merge gateの運用](ci.md#merge-gateとformal-local-entryの運用)に従って`main`のmerge gateへPR番号、40桁head、merge実行の明示trueを渡す。gateは条件後のsquash mergeまで同じ実行で進める。初回PRだけは同runbookのbootstrap例外を使う。
 7. merge後にIssueを完了し、PMは証跡に基づき成果、検証、未検証をユーザーへ報告する。条件が不足または不明ならmergeせず状態と次手順を記録する。
 

@@ -10,6 +10,13 @@
 
 ## current head の証跡
 
+### AC対応と作者review観点
+
+- Issue責任者 / PMが管理するACへの対応（requirement ID / acceptance ID / source version / status / evidence）:
+- 変更固有のreview観点（risk / business invariant / 確認点 / evidence / known unmet）:
+
+作者の対応表は独立reviewerの確認範囲を制限せず、作者の自己申告だけで完了にしない。AC変更はIssue責任者 / PMが理由、履歴、影響をIssueへ記録する。PM受入とPO価値評価は独立review・CIと別に扱う。
+
 - 対象head: `<40桁SHA>`
 - 独立review: `<reviewer と結果>`
 - 変更後の再確認: `<対象headで行った確認、または not_run>`

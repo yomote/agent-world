@@ -44,8 +44,9 @@ task-primary ownerが実装と検証後にcommitを固定し、最大1名の正�
 - work itemの目的・DoDと対象worktree、baseと固定40桁SHA、担当ファイル、禁止範囲。
 - 実施した検証と結果、未検証事項。作者の結論をreview結果として引き継がせない。
 - read-only、編集・Git書き込み・外部投稿・再委任なし、指摘の重要度・箇所・根拠と対象SHAを返すこと。
+- findingがある場合は[PR review配送契約](pr-review-delivery.md)に従い、requirement/acceptance ID、diff位置、失敗シナリオ、影響、根拠、要求する対応、severityとblocking根拠を構造化して返すこと。scope外案、好み、duplicate、staleはfindingへ混ぜず理由付きで分けること。
 
-ownerは指摘を修正して再検証し、内容が変われば新SHAで同じreviewerへ再reviewを依頼します。新しいreviewerを追加して上限を回避しません。レビュー枠や担当が利用できなければ `review_pending` または阻害要因を報告し、未reviewをPASSにしません。指摘のないcurrent headの最終検証、push、Draft PR証跡はownerが担います。reviewer UUID、対象SHA、指摘の有無と解消先をPRに記録します。
+ownerは指摘を修正して再検証し、内容が変われば新SHAで同じreviewerへ再reviewを依頼します。新しいreviewerを追加して上限を回避しません。レビュー枠や担当が利用できなければ `review_pending` または阻害要因を報告し、未reviewをPASSにしません。ownerはreviewer結果を自身のGitHub identityからCOMMENT reviewとして代行配送し、reviewer本人によるGitHub承認と称しません。visible receipt URLとheadを保存し、修正確認後は元threadを解決します。指摘のないcurrent headの最終検証、push、Draft PR証跡はownerが担います。reviewer UUID、対象SHA、指摘の有無と解消先をPRに記録します。
 
 ## セッション構成の観測と限界
 

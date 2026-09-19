@@ -4,14 +4,15 @@ GitHub、CI、開発automation、Front Deskのregistry、PM棚卸しは製品ア
 
 現在の設定値・実装状態は各対象の仕様文書、実行手順・承認・予算・ownerはrunbookを正本とする。ここに操作手順や承認条件を重ねない。
 
-| 旧ADR | 現行の技術・設定正本                                      | 運用正本                                                                                     |
-| ----- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| 0003  | `.github/workflows/ci.yml`                                | [CIと外部アクセスの運用](runbooks/ci.md)・[外部APIのレート予算](runbooks/api-rate-budget.md) |
-| 0004  | [GitHub設定のIaC](../infra/github/README.md)              | 同READMEの導入・照合節                                                                       |
-| 0005  | `scripts/merge_gate.py`・`scripts/trusted_local_merge.py` | [CIと外部アクセスの運用](runbooks/ci.md)                                                     |
-| 0009  | `scripts/automation/runner.py`                            | [自律改善runner](runbooks/self-improvement.md)                                               |
-| 0010  | `scripts/manage_status_registry.py`・status API schema    | [Front Desk依頼registry運用](runbooks/request-registry.md)                                   |
-| 0011  | `scripts/automation/register_pm_routine.ps1`              | [日次PM棚卸し](runbooks/pm-routine.md)                                                       |
+| 判断          | 現行の技術・設定正本                                                            | 運用正本                                                                                     |
+| ------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 0003          | `.github/workflows/ci.yml`                                                      | [CIと外部アクセスの運用](runbooks/ci.md)・[外部APIのレート予算](runbooks/api-rate-budget.md) |
+| 0004          | [GitHub設定のIaC](../infra/github/README.md)                                    | 同READMEの導入・照合節                                                                       |
+| 0005          | `scripts/merge_gate.py`・`scripts/trusted_local_merge.py`                       | [CIと外部アクセスの運用](runbooks/ci.md)                                                     |
+| 0009          | `scripts/automation/runner.py`                                                  | [自律改善runner](runbooks/self-improvement.md)                                               |
+| 0010          | `scripts/manage_status_registry.py`・status API schema                          | [Front Desk依頼registry運用](runbooks/request-registry.md)                                   |
+| 0011          | `scripts/automation/register_pm_routine.ps1`                                    | [日次PM棚卸し](runbooks/pm-routine.md)                                                       |
+| PR review配送 | `scripts/automation/review_delivery.py`・`scripts/automation/github_adapter.py` | [PR review配送契約](runbooks/pr-review-delivery.md)                                          |
 
 ## 0003: CIの重複実行と開発エージェントの外部照会
 
@@ -52,3 +53,13 @@ alias、thread ID、task pathはsecurity identityではない。既存Status.Ing
 ## 0011: Windowsの日次PM棚卸し
 
 公開repositoryを読むcollectorは、worker runtime、Dashboard、CI証跡と分離したread-only観測者にする。PMはreportをIssue/PR正本と突合して判断し、collectorは投稿、label更新、claim、worker dispatch、token保存、常駐daemon、再試行を行わない。未接続のruntimeや証跡は未観測として扱い、成功に補わない。
+
+## 独立レビューを通常PR reviewへ配送する
+
+独立reviewerの結果がローカルsessionやsummary markerだけに残ると、個々の指摘を対象head、file/line、修正後のthread解決へ結び付けられず、`PASS`という結論から指摘・影響・対応を追えない。一方、GitHub認証identityと独立reviewerのruntime identityは別であり、PR作者と同じtokenによるAPPROVEを独立性の証拠にはできない。
+
+このため、独立reviewerは構造化findingを返し、実装ownerの既存GitHub認証が`COMMENT`のPull Request Reviewとして代理配送する。findingはcurrent headのdiff位置とIssue責任者 / PMが管理するACへ結び、1 reviewのinline commentsへまとめる。指摘0件もscope、check、head、0件を通常reviewへ残す。本文では独立reviewerと代理actorを分け、PR作者の観点に拘束されない指摘と、親Issueに残るDoDを区別する。
+
+投稿前にheadとdiff位置を検査し、content keyで既存reviewをread-only照合する。結果不明は再送せず、修正後はnew headと元finding IDに結び付く確認後だけ元threadを解決する。outdated findingを新しいlineへ付け替えない。review可視性自体がACの場合は、最初のCOMMENTをunknownとして止め、同headのvisible receiptとPR UI観測を確認してから別keyの最終COMMENTへ進む。
+
+通常reviewはGitHub UIで指摘、修正、解決を追えるが、代理投稿はbranch protectionのapproval要件を満たさない。API request数も増えるためfindingsを1 reviewへ束ね、paginationや結果不明では停止する。架空のinlineを実利用証拠にせず、zero-finding COMMENTだけを確認した段階ではline threadの実GitHub E2Eを未検証として残す。Issue commentだけを正本にする案と同一accountのAPPROVEを使う案は、それぞれdiff位置との結合と独立性を失うため採らない。具体的な入力、検査、二段階配送、再開手順は運用正本へ一元化する。

@@ -28,6 +28,9 @@ OPERATIONS = {
     "normal_merge",
     "create_helper_issue",
     "close_issue",
+    "publish_pr_review",
+    "reconcile_pr_review",
+    "resolve_pr_review_threads",
 }
 
 
@@ -89,7 +92,19 @@ class GitHub:
                 path TEXT PRIMARY KEY,etag TEXT,data TEXT);
             CREATE TABLE IF NOT EXISTS delivery_merge_attempts(
                 campaign TEXT,head TEXT,PRIMARY KEY(campaign,head));
+            CREATE TABLE IF NOT EXISTS delivery_review_receipts(
+                campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
+                PRIMARY KEY(campaign,pr,head));
+            CREATE TABLE IF NOT EXISTS delivery_review_receipts_v2(
+                campaign TEXT,pr INTEGER,head TEXT,delivery_key TEXT,url TEXT,review_id INTEGER,
+                PRIMARY KEY(campaign,pr,head,delivery_key));
         """)
+        with task.db:
+            task.db.execute(
+                "INSERT OR IGNORE INTO delivery_review_receipts_v2 "
+                "SELECT campaign,pr,head,delivery_key,url,review_id "
+                "FROM delivery_review_receipts"
+            )
 
     def git_transfer(self, workspace, operation, *, head=None, branch=None):
         """Git object輸送もdeliveryだけが実行する。REST/GraphQLとは別のGit protocol。"""
@@ -137,6 +152,13 @@ class GitHub:
             "normal_merge": ("PUT", prefix + r"/pulls/[1-9][0-9]*/merge"),
             "create_helper_issue": ("POST", prefix + r"/issues"),
             "close_issue": ("PATCH", prefix + r"/issues/[1-9][0-9]*"),
+            "review_pr": ("GET", prefix + r"/pulls/[1-9][0-9]*"),
+            "review_files": ("GET", prefix + r"/pulls/[1-9][0-9]*/files\?per_page=100"),
+            "review_list": ("GET", prefix + r"/pulls/[1-9][0-9]*/reviews\?per_page=100"),
+            "review_actor": ("GET", r"/user"),
+            "publish_pr_review": ("POST", prefix + r"/pulls/[1-9][0-9]*/reviews"),
+            "review_threads": ("POST", r"/graphql"),
+            "resolve_pr_review_threads": ("POST", r"/graphql"),
         }
         route = routes.get(operation)
         if not route or method != route[0] or not re.fullmatch(route[1], path):
@@ -267,6 +289,10 @@ class GitHub:
             data["pr_node_id"] = result["node_id"]
             self.task.save_event(data, "draft_identity_received")
             return result
+        if operation in {"publish_pr_review", "reconcile_pr_review"}:
+            return self.review_delivery(number, args, publish=operation == "publish_pr_review")
+        if operation == "resolve_pr_review_threads":
+            return self.resolve_review_threads(number, args)
         if operation == "post_review_evidence":
             return self.request(
                 operation, "POST", f"{PREFIX}/issues/{number}/comments", {"body": args["comment"]}
@@ -381,6 +407,138 @@ class GitHub:
             f"{PREFIX}/issues/{number}",
             {"state": "closed", "state_reason": "completed"},
         )
+
+    def review_delivery(self, number, args, *, publish):
+        """同一keyを再投稿せず、current headへCOMMENT reviewを1件だけ配送する。"""
+        from .review_delivery import find_receipt, prepare
+
+        head = args.get("head")
+        path = f"{PREFIX}/pulls/{number}"
+        pr = self.request("review_pr", "GET", path)
+
+        def assert_current_head():
+            current = self.request("review_pr", "GET", path)
+            if current.get("head", {}).get("sha") != head:
+                raise Stop("stopped", "review_delivery_head_mismatch")
+
+        if pr.get("head", {}).get("sha") != head:
+            raise Stop("stopped", "review_delivery_head_mismatch")
+        files = self.request("review_files", "GET", f"{PREFIX}/pulls/{number}/files?per_page=100")
+        if not isinstance(files, list):
+            raise Stop("stopped", "review_delivery_files_invalid")
+        actor = self.request("review_actor", "GET", "/user").get("login")
+        author = pr.get("user", {}).get("login")
+        prepared = prepare(
+            args.get("review", {}),
+            head=head,
+            files=files,
+            proxy_login=actor,
+            pr_author=author,
+        )
+        assert_current_head()
+        reviews = self.request(
+            "review_list", "GET", f"{PREFIX}/pulls/{number}/reviews?per_page=100"
+        )
+        receipt = find_receipt(
+            reviews,
+            key=prepared["key"],
+            head=head,
+            expected_proxy_login=actor,
+            expected_body=prepared["payload"]["body"],
+            pr_number=number,
+        )
+        if receipt is None and not publish:
+            raise Stop("stopped", "review_delivery_receipt_not_found")
+        if receipt is None:
+            assert_current_head()
+            result = self.request(
+                "publish_pr_review",
+                "POST",
+                f"{PREFIX}/pulls/{number}/reviews",
+                prepared["payload"],
+            )
+            receipt = find_receipt(
+                [result],
+                key=prepared["key"],
+                head=head,
+                expected_proxy_login=actor,
+                expected_body=prepared["payload"]["body"],
+                pr_number=number,
+            )
+        assert_current_head()
+        if not isinstance(receipt.get("review_id"), int):
+            raise Stop("unknown", "review_delivery_receipt_invalid")
+        with self.task.db:
+            prior = self.task.db.execute(
+                "SELECT delivery_key,url,review_id FROM delivery_review_receipts_v2 "
+                "WHERE campaign=? AND pr=? AND head=? AND delivery_key=?",
+                (self.task.name, number, head, prepared["key"]),
+            ).fetchone()
+            values = (prepared["key"], receipt["url"], receipt["review_id"])
+            if prior is not None and prior != values:
+                raise Stop("unknown", "review_delivery_local_conflict")
+            self.task.db.execute(
+                "INSERT OR IGNORE INTO delivery_review_receipts_v2 VALUES (?,?,?,?,?,?)",
+                (self.task.name, number, head, *values),
+            )
+        return {
+            **receipt,
+            "inline_count": len(prepared["finding_ids"]),
+            "finding_ids": prepared["finding_ids"],
+            "provenance": "independent_reviewer_result_proxied_by_authenticated_owner",
+        }
+
+    def resolve_review_threads(self, number, args):
+        """new headの再reviewで解消確認した、元threadそのものだけを一括resolveする。"""
+        from .review_delivery import MARKER, resolution_mutation, resolution_query
+
+        head = args.get("head")
+        recheck = args.get("recheck", {})
+        if (
+            not SHA.fullmatch(head or "")
+            or recheck.get("head") != head
+            or recheck.get("verdict") != "pass"
+            or recheck.get("findings") != []
+        ):
+            raise Stop("stopped", "review_resolution_recheck_invalid")
+        review_id = args.get("review_id")
+        finding_ids = args.get("finding_ids")
+        if type(review_id) is not int or review_id < 1 or not isinstance(finding_ids, list):
+            raise Stop("stopped", "review_resolution_input_invalid")
+        result = self.request("review_threads", "POST", "/graphql", resolution_query(number))
+        pr = result.get("data", {}).get("repository", {}).get("pullRequest", {})
+        threads = pr.get("reviewThreads", {})
+        if pr.get("headRefOid") != head or threads.get("pageInfo", {}).get("hasNextPage"):
+            raise Stop("stopped", "review_resolution_snapshot_invalid")
+        wanted, matched = set(finding_ids), {}
+        if len(wanted) != len(finding_ids) or not wanted:
+            raise Stop("stopped", "review_resolution_input_invalid")
+        for thread in threads.get("nodes", []):
+            comments = thread.get("comments", {})
+            if comments.get("pageInfo", {}).get("hasNextPage"):
+                raise Stop("stopped", "review_resolution_snapshot_invalid")
+            for comment in comments.get("nodes", []):
+                if comment.get("pullRequestReview", {}).get("databaseId") != review_id:
+                    continue
+                body = comment.get("body") or ""
+                for identifier in wanted:
+                    if f"<!-- {MARKER}-finding:{identifier} -->" in body:
+                        if identifier in matched:
+                            raise Stop("unknown", "review_resolution_duplicate_thread")
+                        matched[identifier] = thread
+        if set(matched) != wanted:
+            raise Stop("stopped", "review_resolution_thread_missing")
+        unresolved = [item["id"] for item in matched.values() if not item.get("isResolved")]
+        if not unresolved:
+            return {"head": head, "resolved": sorted(wanted), "already_resolved": True}
+        mutation = resolution_mutation(unresolved)
+        response = self.request("resolve_pr_review_threads", "POST", "/graphql", mutation)
+        nodes = response.get("data", {})
+        if len(nodes) != len(unresolved) or any(
+            not node.get("thread", {}).get("isResolved") for node in nodes.values()
+        ):
+            raise Stop("unknown", "review_resolution_result_unverified")
+        return {"head": head, "resolved": sorted(wanted), "already_resolved": False}
 
     def snapshot(self, number):
         result = self.request(
