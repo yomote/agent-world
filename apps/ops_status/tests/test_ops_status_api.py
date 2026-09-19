@@ -107,6 +107,10 @@ def request_record(request_id: str, at: datetime, *, lifecycle: str = "running")
         "member_agents": ["status-owner"],
         "progress_summary": "確認済み進捗",
         "next_action": None if lifecycle == "completed" else "次の作業",
+        "dod_source_version": "issue-updated:current",
+        "required_requirement_ids": ["domain-use-case"],
+        "requirements_contract_digest": "sha256:" + "c" * 64,
+        "expected_artifact_head": "a" * 40,
         "report_updated_at": at.isoformat(),
         "report_source": "manual-public-summary",
         "runtime_connection": "record-only",
@@ -356,25 +360,36 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
     now = datetime.now(UTC)
     store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
     client = TestClient(create_app(store))
-    record = request_record("request-45", now, lifecycle="completed")
+    running = request_record("request-45", now, lifecycle="running")
     payload = {
         "source": "manual-public-registry",
         "action": "initialize",
         "expected_generation": 0,
         "actor_front_desk": "front-desk-1",
         "observed_at": now.isoformat(),
+        "requests": [running],
+    }
+    initialized = client.put("/api/status/requests/upsert", json=payload)
+    assert initialized.status_code == 200
+
+    completed_at = now + timedelta(seconds=1)
+    record = request_record("request-45", completed_at, lifecycle="completed")
+    update = {
+        **payload,
+        "action": "update",
+        "expected_generation": 1,
+        "observed_at": completed_at.isoformat(),
         "requests": [record],
     }
 
-    rejected = client.put("/api/status/requests/upsert", json=payload)
+    rejected = client.put("/api/status/requests/upsert", json=update)
 
     assert rejected.status_code == 422
-    assert store.write_count == 0
+    assert store.write_count == 1
 
-    record["dod_source_version"] = "issue-updated:current"
-    record["closure_audit"] = accepted_closure_audit("request-45", now)
+    record["closure_audit"] = accepted_closure_audit("request-45", completed_at)
     record["po_review_required"] = True
-    pending_po = client.put("/api/status/requests/upsert", json=payload)
+    pending_po = client.put("/api/status/requests/upsert", json=update)
     assert pending_po.status_code == 422
     record["po_acceptance_receipt"] = {
         "schema_version": 1,
@@ -384,11 +399,11 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
         "dod_source_version": "issue-updated:current",
         "requirements_contract_digest": "sha256:" + "c" * 64,
         "decision": "accepted",
-        "acknowledged_at": now.isoformat(),
+        "acknowledged_at": completed_at.isoformat(),
         "channel": "front-desk-same-thread",
         "message_ref": "pm-message-1",
     }
-    accepted = client.put("/api/status/requests/upsert", json=payload)
+    accepted = client.put("/api/status/requests/upsert", json=update)
 
     assert accepted.status_code == 200
     assert store.value.request_registry.requests[0].lifecycle == "completed"
@@ -405,10 +420,148 @@ def test_legacy_completed_snapshot_remains_readable_without_closure_audit():
         "source": "manual-public-registry",
         "requests": [request_record("request-45", now, lifecycle="completed")],
     }
+    legacy = data["request_registry"]["requests"][0]
+    for field in (
+        "dod_source_version",
+        "required_requirement_ids",
+        "requirements_contract_digest",
+        "expected_artifact_head",
+    ):
+        legacy.pop(field)
 
     parsed = StatusSnapshot.model_validate(data)
 
     assert parsed.request_registry.requests[0].closure_audit is None
+
+
+def test_request_registry_rejects_direct_completed_initialization():
+    """事前保存したAC契約を経ずhandcrafted auditで完了を初期化する回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    record = request_record("request-45", now, lifecycle="completed")
+    record["closure_audit"] = accepted_closure_audit("request-45", now)
+
+    response = TestClient(create_app(store)).put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [record],
+        },
+    )
+
+    assert response.status_code == 409
+    assert store.write_count == 0
+
+    running = request_record("request-44", now, lifecycle="running")
+    initialized = TestClient(create_app(store)).put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [running],
+        },
+    )
+    assert initialized.status_code == 200
+    added_at = now + timedelta(seconds=1)
+    added = request_record("request-45", added_at, lifecycle="completed")
+    added["closure_audit"] = accepted_closure_audit("request-45", added_at)
+    added_response = TestClient(create_app(store)).put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "update",
+            "expected_generation": 1,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": added_at.isoformat(),
+            "requests": [added],
+        },
+    )
+    assert added_response.status_code == 409
+
+
+def test_request_registry_completion_cannot_shrink_saved_contract():
+    """完了時だけ必須ACを減らし自己申告acceptへ差し替える回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    running = request_record("request-45", now, lifecycle="running")
+    initialized = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [running],
+        },
+    )
+    assert initialized.status_code == 200
+
+    completed_at = now + timedelta(seconds=1)
+    completed = request_record("request-45", completed_at, lifecycle="completed")
+    completed["required_requirement_ids"] = ["reduced-contract"]
+    audit = accepted_closure_audit("request-45", completed_at)
+    audit["requirements"][0]["requirement_id"] = "reduced-contract"
+    completed["closure_audit"] = audit
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "update",
+            "expected_generation": 1,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": completed_at.isoformat(),
+            "requests": [completed],
+        },
+    )
+
+    assert response.status_code == 409
+    assert "previously saved requirements contract" in response.json()["detail"]
+
+
+def test_request_registry_report_clock_covers_closure_contract_fields():
+    """同じreport clockで契約・closure証跡だけを差し替える回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    running = request_record("request-45", now, lifecycle="running")
+    initialized = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [running],
+        },
+    )
+    assert initialized.status_code == 200
+
+    replacement = dict(running)
+    replacement["requirements_contract_digest"] = "sha256:" + "d" * 64
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "update",
+            "expected_generation": 1,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            "requests": [replacement],
+        },
+    )
+
+    assert response.status_code == 409
+    assert "request report" in response.json()["detail"]
 
 
 def test_status_marks_old_received_snapshot_stale(tmp_path, monkeypatch):

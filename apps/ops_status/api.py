@@ -234,6 +234,14 @@ def reject_older_request(previous: RequestRecord, incoming: RequestRecord) -> No
                 previous.progress_summary,
                 previous.blocker,
                 previous.next_action,
+                previous.resume_trigger,
+                previous.dod_source_version,
+                previous.required_requirement_ids,
+                previous.requirements_contract_digest,
+                previous.expected_artifact_head,
+                previous.closure_audit,
+                previous.po_review_required,
+                previous.po_acceptance_receipt,
                 previous.evidence,
             ),
             (
@@ -243,6 +251,14 @@ def reject_older_request(previous: RequestRecord, incoming: RequestRecord) -> No
                 incoming.progress_summary,
                 incoming.blocker,
                 incoming.next_action,
+                incoming.resume_trigger,
+                incoming.dod_source_version,
+                incoming.required_requirement_ids,
+                incoming.requirements_contract_digest,
+                incoming.expected_artifact_head,
+                incoming.closure_audit,
+                incoming.po_review_required,
+                incoming.po_acceptance_receipt,
                 incoming.evidence,
             ),
             "request report",
@@ -270,6 +286,11 @@ def apply_registry_update(
     if current is None:
         if update.action != "initialize":
             raise HTTPException(status_code=409, detail="request registry is not initialized")
+        if any(request.lifecycle == "completed" for request in update.requests):
+            raise HTTPException(
+                status_code=409,
+                detail="completed request needs a previously saved requirements contract",
+            )
         registry = RequestRegistrySnapshot(
             generation=1,
             active_front_desk=FrontDeskClaim(
@@ -317,8 +338,32 @@ def apply_registry_update(
             if incoming.scope_id != previous.scope_id:
                 raise HTTPException(status_code=409, detail="request scope identity cannot change")
             reject_older_request(previous, incoming)
-        elif incoming.scope_id in occupied_scopes:
-            raise HTTPException(status_code=409, detail="request scope identity is already used")
+            if incoming.lifecycle == "completed" and previous.lifecycle != "completed":
+                if (
+                    not previous.required_requirement_ids
+                    or previous.requirements_contract_digest is None
+                    or previous.expected_artifact_head is None
+                    or previous.dod_source_version is None
+                    or incoming.required_requirement_ids != previous.required_requirement_ids
+                    or incoming.requirements_contract_digest
+                    != previous.requirements_contract_digest
+                    or incoming.expected_artifact_head != previous.expected_artifact_head
+                    or incoming.dod_source_version != previous.dod_source_version
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="completion must use the previously saved requirements contract",
+                    )
+        else:
+            if incoming.lifecycle == "completed":
+                raise HTTPException(
+                    status_code=409,
+                    detail="completed request needs a previously saved requirements contract",
+                )
+            if incoming.scope_id in occupied_scopes:
+                raise HTTPException(
+                    status_code=409, detail="request scope identity is already used"
+                )
         if incoming != previous:
             requests[incoming.request_id] = incoming
             changed = True

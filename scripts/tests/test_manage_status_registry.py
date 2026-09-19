@@ -472,6 +472,9 @@ def run_closure(tmp_path: Path, payload: dict) -> dict:
         "missing-required-id",
         "blocked-without-owner",
         "cancelled",
+        "continue-intent",
+        "stop-decision",
+        "required-not-applicable",
     ],
 )
 def test_closure_check_rejects_false_completion_signals(tmp_path, case):
@@ -508,9 +511,17 @@ def test_closure_check_rejects_false_completion_signals(tmp_path, case):
             "evidence_refs": [],
             "reason": "merge gate blocked",
         }
-    else:
+    elif case == "cancelled":
         payload["request"]["terminal_intent"] = "cancelled"
         audit["stop_decision"] = {"made": True, "reason": "hypothesis stopped"}
+    elif case == "continue-intent":
+        payload["request"]["terminal_intent"] = "continue"
+    elif case == "stop-decision":
+        audit["stop_decision"] = {"made": True, "reason": "hypothesis stopped"}
+    else:
+        audit["requirements"][0].update(
+            result="not_applicable", evidence_refs=[], reason="checker chose to skip it"
+        )
     if case in {
         "skipped-tests",
         "unresolved-review",

@@ -346,7 +346,12 @@ class ClosureAudit(BaseModel):
         requirement_results = [item.result for item in self.requirements]
         derived = (
             "reject"
-            if "unmet" in states or "unmet" in requirement_results
+            if (
+                "unmet" in states
+                or "unmet" in requirement_results
+                or "not_applicable" in requirement_results
+                or self.stop_decision.made
+            )
             else "unknown"
             if "unknown" in states or "unverified" in requirement_results
             else "accept"
@@ -409,6 +414,9 @@ class RequestRecord(BaseModel):
     next_action: str | None = Field(default=None, max_length=500)
     resume_trigger: str | None = Field(default=None, max_length=500)
     dod_source_version: str | None = Field(default=None, min_length=1, max_length=200)
+    required_requirement_ids: list[str] = Field(default_factory=list, max_length=64)
+    requirements_contract_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    expected_artifact_head: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     closure_audit: ClosureAudit | None = None
     po_review_required: bool = False
     po_acceptance_receipt: PoAcceptanceReceipt | None = None
@@ -422,6 +430,8 @@ class RequestRecord(BaseModel):
     def check_connection_and_identity(self) -> "RequestRecord":
         if len(self.member_agents) != len(set(self.member_agents)):
             raise ValueError("request member agents must be unique")
+        if len(self.required_requirement_ids) != len(set(self.required_requirement_ids)):
+            raise ValueError("required closure requirement identifiers must be unique")
         if (self.runtime_connection == "unknown") != (self.runtime_observed_at is None):
             raise ValueError("known runtime connection needs its own observation time")
         if self.lifecycle == "completed" and self.issue_state != "closed":
@@ -545,6 +555,20 @@ class RequestRegistryUpdate(BaseModel):
                     raise ValueError(
                         "completed request closure audit must use the latest DoD version"
                     )
+                if (
+                    not request.required_requirement_ids
+                    or request.requirements_contract_digest is None
+                    or request.expected_artifact_head is None
+                ):
+                    raise ValueError("completed request needs a fixed requirements contract")
+                if set(request.required_requirement_ids) != {
+                    item.requirement_id for item in audit.requirements
+                }:
+                    raise ValueError("closure audit must cover the fixed required IDs")
+                if request.requirements_contract_digest != audit.requirements_contract_digest:
+                    raise ValueError("closure audit must match the fixed requirements contract")
+                if request.expected_artifact_head != audit.evidence_head:
+                    raise ValueError("closure audit must use the fixed artifact head")
                 if (
                     request.request_id != audit.request_id
                     or request.issue_url != audit.objective_ref

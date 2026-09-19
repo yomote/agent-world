@@ -55,6 +55,9 @@ REQUEST_CONTEXT_FIELDS = {
     "next_action",
     "resume_trigger",
     "dod_source_version",
+    "required_requirement_ids",
+    "requirements_contract_digest",
+    "expected_artifact_head",
     "closure_audit",
     "po_review_required",
     "po_acceptance_receipt",
@@ -68,6 +71,9 @@ REQUEST_CONTEXT_FIELDS = {
 LEGACY_REQUEST_CONTEXT_FIELDS = REQUEST_CONTEXT_FIELDS - {
     "resume_trigger",
     "dod_source_version",
+    "required_requirement_ids",
+    "requirements_contract_digest",
+    "expected_artifact_head",
     "closure_audit",
     "po_review_required",
     "po_acceptance_receipt",
@@ -334,6 +340,10 @@ def closure_check(input_path: Path) -> dict:
         result = requirement["result"]
         if result not in {"satisfied", "unmet", "unverified", "not_applicable"}:
             raise ValueError("invalid closure requirement result")
+        if result == "not_applicable":
+            guard_errors.append(
+                f"{requirement_id}: fixed required requirement cannot be not applicable"
+            )
         if result == "satisfied" and not evidence:
             guard_errors.append(f"{requirement_id}: satisfied requirement has no evidence")
             result = "unmet"
@@ -371,8 +381,10 @@ def closure_check(input_path: Path) -> dict:
     if not isinstance(stop["made"], bool) or stop["made"] != bool(stop["reason"]):
         raise ValueError("closure stop decision needs a reason only when made")
 
-    if request["terminal_intent"] == "cancelled":
-        guard_errors.append("cancelled work is not successful closure")
+    if request["terminal_intent"] != "complete":
+        guard_errors.append("successful closure needs complete terminal intent")
+    if stop["made"]:
+        guard_errors.append("stop decision is not successful closure")
     if request["issue_state"] != "closed":
         guard_errors.append("successful closure needs a closed Issue observation")
     if guard_errors or "unmet" in states.values() or "unmet" in requirement_results.values():
@@ -466,6 +478,9 @@ def read_registry(registry_path: Path) -> dict:
                 "next_action": request.get("next_action"),
                 "resume_trigger": request.get("resume_trigger"),
                 "dod_source_version": request.get("dod_source_version"),
+                "required_requirement_ids": request.get("required_requirement_ids", []),
+                "requirements_contract_digest": request.get("requirements_contract_digest"),
+                "expected_artifact_head": request.get("expected_artifact_head"),
                 "closure_audit": request.get("closure_audit"),
                 "po_review_required": request.get("po_review_required", False),
                 "po_acceptance_receipt": request.get("po_acceptance_receipt"),
@@ -616,7 +631,7 @@ def discover(locator_path: Path, project_root: Path) -> dict:
         "next_action",
         "report_updated_at",
     }
-    extended_bundle_fields = legacy_bundle_fields | {
+    continuity_bundle_fields = legacy_bundle_fields | {
         "owner_agent",
         "blocker",
         "resume_trigger",
@@ -625,11 +640,18 @@ def discover(locator_path: Path, project_root: Path) -> dict:
         "po_review_required",
         "po_acceptance_receipt",
     }
+    closure_bundle_fields = continuity_bundle_fields | {
+        "required_requirement_ids",
+        "requirements_contract_digest",
+        "expected_artifact_head",
+    }
+    allowed_bundle_fields = {
+        frozenset(legacy_bundle_fields),
+        frozenset(continuity_bundle_fields),
+        frozenset(closure_bundle_fields),
+    }
     if any(
-        (
-            set(bundle_by_id[request_id]) != legacy_bundle_fields
-            and set(bundle_by_id[request_id]) != extended_bundle_fields
-        )
+        (frozenset(bundle_by_id[request_id]) not in allowed_bundle_fields)
         or {key: context_by_id[request_id][key] for key in set(bundle_by_id[request_id])}
         != {key: bundle_by_id[request_id][key] for key in set(bundle_by_id[request_id])}
         for request_id in bundle_by_id
@@ -772,6 +794,9 @@ def prepare(registry_path: Path, successor: str, prepared_at: str) -> dict:
                 "next_action": item.get("next_action"),
                 "resume_trigger": item.get("resume_trigger"),
                 "dod_source_version": item.get("dod_source_version"),
+                "required_requirement_ids": item.get("required_requirement_ids", []),
+                "requirements_contract_digest": item.get("requirements_contract_digest"),
+                "expected_artifact_head": item.get("expected_artifact_head"),
                 "closure_audit": item.get("closure_audit"),
                 "po_review_required": item.get("po_review_required", False),
                 "po_acceptance_receipt": item.get("po_acceptance_receipt"),

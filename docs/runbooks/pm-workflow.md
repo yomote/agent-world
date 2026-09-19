@@ -84,7 +84,7 @@ task-primary ownerは対象commitとDraft PRを完了まで所有します。[�
 
 Issueの最新目的・DoD版と成果headについて、ownerとは別のcheckerが `closure-check` 入力を作り、code、checks、review、merge、delivery、目的の6 gateを `achieved` / `unmet` / `unknown` で判定します。guardはDoD版、exact head、証跡の有無、6 gateとoverallの整合だけを検査し、業務価値を推測しません。`completed` の新規registry保存には `accept` のclosure auditが必要です。既存の署名なしJSONとStatus.Ingest認証の境界であり、checkerの人格や独立性を暗号学的に証明するものではありません。
 
-Issueを正本とする目的、具体use case、non-goalsと最新DoD版から、checkerは必須requirement IDとcontract digestを固定します。各requirementを `generic-quality`、`domain`、`value` に分け、検証方法、必要な公開evidence、exact head、checker、`satisfied` / `unmet` / `unverified` / `not_applicable`（理由必須）へ対応付けます。guardは必須IDのcoverage、contract digest、DoD版、head、evidence URLを照合し、省略や`unverified`をacceptへ昇格しません。security、types、runtime、unknown、idempotence、tenant、observability、operations、readabilityはriskに応じた汎用品質、業務固有のuse caseはdomain、baseline比較とPO価値はvalueとして分離します。property-based testのcorrectnessはusefulnessの代替にしません。
+Issueを正本とする目的、具体use case、non-goalsと最新DoD版から、checkerは必須requirement IDとcontract digestを固定します。各requirementを `generic-quality`、`domain`、`value` に分け、検証方法、必要な公開evidence、exact head、checker、`satisfied` / `unmet` / `unverified` へ対応付けます。必須IDを`not_applicable`として回避できません。guardは必須IDのcoverage、contract digest、DoD版、head、evidence URLを照合し、省略や`unverified`をacceptへ昇格しません。security、types、runtime、unknown、idempotence、tenant、observability、operations、readabilityはriskに応じた汎用品質、業務固有のuse caseはdomain、baseline比較とPO価値はvalueとして分離します。property-based testのcorrectnessはusefulnessの代替にしません。
 
 必須IDとcontract digestの意味内容がIssue正本を完全に表すかは独立checkerの責任です。現在はtrusted local operatorが固定した入力を検査する境界であり、Issueをnetworkから自動取得して意味を証明するpolicy engineではありません。blockerは具体的なfailure、impact、evidence、requirement ID、severityの理由を記録し、好みやscope外の案はblocking findingにしません。
 
@@ -117,7 +117,7 @@ PO本人による最終確認が必要なrequestだけ `po_review_required=true`
 
 acceptance receiptは同じthreadのmessage参照を必須にしますが、署名付きの本人証明ではありません。保存workerはFront Deskが受け取ったPO本人の明示応答だけを記録し、推測やPMの自己申告で作成しません。現在の保証範囲はtrusted local operatorによる手動記録までで、なりすまし防止は未実装です。
 
-PO確認が必要なrequestを `completed` として新規保存するには、内部closure auditに加えて、同じrequest、head、DoD版の `accepted` receiptが必要です。機械的な内部unitなど `po_review_required=false` のrequestへ一律強制しません。outbox/inboxの永続化とackは実装済みですが、PO本人へのnative自動表示、idle Front Deskの自動wake、既読確認は未実装です。Slack、email、常駐daemon、Scheduled Tasksへの連鎖は行いません。
+PO確認が必要なrequestを `completed` として新規保存するには、内部closure auditに加えて、同じrequest、head、DoD版の `accepted` receiptが必要です。着工時に保存した必須ID、contract digest、DoD版、成果headを完了遷移で照合し、直接completedとして初期化したり完了時に契約を縮小したりできません。既存completed snapshotの読取は維持します。機械的な内部unitなど `po_review_required=false` のrequestへ一律強制しません。outbox/inboxの永続化とackは実装済みですが、PO本人へのnative自動表示、idle Front Deskの自動wake、既読確認は未実装です。Slack、email、常駐daemon、Scheduled Tasksへの連鎖は行いません。
 
 ## GitとDraft PR
 
