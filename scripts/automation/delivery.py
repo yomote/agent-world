@@ -776,6 +776,18 @@ class Campaign:
         ]
         data = self.data()
         data["review"] = review
+        final_body = (
+            data["review_summary_body"]
+            + "\n\n## GitHub review可視性postcondition\n\n"
+            + f"- prior receipt: {prior_receipt['url']}\n"
+            + "- PR UI: Conversation / Files changedでCOMMENTED reviewを確認\n"
+            + "- observer: trusted local operator（認証roleの保証ではない）\n\n"
+            + render_review_input(updated)
+        )
+        data["review_summary_body"] = final_body
+        history = data.setdefault("review_delivery_history", [])
+        if not any(item.get("key") == prior_receipt.get("key") for item in history):
+            history.append(prior_receipt)
         data["review_delivery_expected"] = {
             "head": data["head"],
             "pr": data["pr"],
@@ -799,16 +811,7 @@ class Campaign:
             raise Stop("unknown", "review_postcondition_receipt_invalid")
         data = self.data()
         data["review_delivery"] = receipt
-        data.setdefault("review_delivery_history", []).append(prior_receipt)
         self.save_event(data, "review_postcondition_visible")
-        final_body = (
-            data["review_summary_body"]
-            + "\n\n## GitHub review可視性postcondition\n\n"
-            + f"- prior receipt: {prior_receipt['url']}\n"
-            + "- PR UI: Conversation / Files changedでCOMMENTED reviewを確認\n"
-            + "- observer: trusted local operator（認証roleの保証ではない）\n\n"
-            + render_review_input(updated)
-        )
         return self.after_review_visible(data["head"], data["pr"], review, receipt, final_body)
 
     def reconcile_review_delivery(self):

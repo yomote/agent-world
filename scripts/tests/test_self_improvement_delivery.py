@@ -864,7 +864,7 @@ def test_visibility_postcondition_resumes_only_declared_pending_stage(task, monk
     }
     source = task.root / "postcondition.json"
     source.write_text(json.dumps(packet), encoding="utf-8")
-    calls, visible = [], []
+    calls, visible, published = [], [], []
 
     def publish(operation, arguments, **kwargs):
         calls.append(operation)
@@ -874,23 +874,55 @@ def test_visibility_postcondition_resumes_only_declared_pending_stage(task, monk
             "independent review",
             "trusted local operator observed the prior COMMENT review in PR UI; not an auth role",
         ]
-        return {
-            "head": head,
-            "url": "https://github.com/yomote/agent-world/pull/91#pullrequestreview-2",
-            "review_id": 2,
-            "key": delivery.review_key(arguments["review"], head),
-            "actor": "yomote",
-            "state": "COMMENTED",
-        }
+        published.append(arguments)
+        raise transport.Stop("unknown", "github_transport_no_retry")
+
+    final_receipt = {
+        "head": head,
+        "url": "https://github.com/yomote/agent-world/pull/91#pullrequestreview-2",
+        "review_id": 2,
+        "actor": "yomote",
+        "state": "COMMENTED",
+    }
 
     monkeypatch.setattr(task.transport, "call", publish)
     monkeypatch.setattr(
         task, "after_review_visible", lambda *args: visible.append(args) or "continued"
     )
-    assert task.confirm_review_postcondition("postcondition.json") == "continued"
-    assert calls == ["publish_pr_review"]
+    with pytest.raises(transport.Stop, match="no_retry"):
+        task.confirm_review_postcondition("postcondition.json")
+    assert "[achieved]" in task.data()["review_summary_body"]
     assert task.data()["review_delivery_history"] == [prior]
     assert task.data()["review_input"]["acceptance_map"][0]["status"] == "achieved"
+    task.finish_step("unknown", "github_transport_no_retry")
+    identifier = "33333333-3333-4333-8333-333333333333"
+    final_receipt["key"] = delivery.review_key(published[0]["review"], head)
+    with task.db:
+        task.db.execute(
+            "INSERT INTO delivery_operations VALUES (?,?,?,'unknown',?,NULL)",
+            (
+                identifier,
+                task.name,
+                "publish_pr_review",
+                json.dumps(
+                    {
+                        "id": identifier,
+                        "operation": "publish_pr_review",
+                        "arguments": published[0],
+                    }
+                ),
+            ),
+        )
+
+    def reconcile(operation, arguments, **kwargs):
+        calls.append(operation)
+        assert operation == "reconcile_pr_review"
+        assert arguments == published[0]
+        return final_receipt
+
+    monkeypatch.setattr(task.transport, "call", reconcile)
+    assert task.reconcile_review_delivery() == "continued"
+    assert calls == ["publish_pr_review", "reconcile_pr_review"]
     assert url in visible[0][4]
     assert "[achieved]" in visible[0][4]
 
