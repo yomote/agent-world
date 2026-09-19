@@ -432,6 +432,15 @@ class RequestRecord(BaseModel):
             raise ValueError("request member agents must be unique")
         if len(self.required_requirement_ids) != len(set(self.required_requirement_ids)):
             raise ValueError("required closure requirement identifiers must be unique")
+        contract_fields = (
+            bool(self.required_requirement_ids),
+            self.requirements_contract_digest is not None,
+            self.expected_artifact_head is not None,
+        )
+        if any(contract_fields) and not all(contract_fields):
+            raise ValueError("closure contract fields must be fixed together")
+        if all(contract_fields) and self.dod_source_version is None:
+            raise ValueError("fixed closure contract needs a DoD version")
         if (self.runtime_connection == "unknown") != (self.runtime_observed_at is None):
             raise ValueError("known runtime connection needs its own observation time")
         if self.lifecycle == "completed" and self.issue_state != "closed":

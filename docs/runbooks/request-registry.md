@@ -56,7 +56,7 @@ marker更新後に初めてowner移転済みとして扱い、必要な未完依
 
 ## 通常更新
 
-未完requestの継続条件と、`completed` 保存前の独立closure audit、PO確認が必要な場合のacceptance receiptは[PMワークフロー](pm-workflow.md#継続と受入closure)を正典とする。`initialize` / `update` は新しい完了自己申告を保存前に検査する。着工時に必須requirement ID、contract digest、DoD版、成果headを保存し、完了遷移で同じ契約とauditを照合するため、直接completedとして初期化したり契約を縮小したりできない。handoff `prepare` は未完requestのowner、next action、resume triggerとblocked reasonを検査する。導入前の保存snapshotは読取り可能なままにし、新しい保存・export入口だけをguardする。
+未完requestの継続条件と、`completed` 保存前の独立closure audit、PO確認が必要な場合のacceptance receiptは[PMワークフロー](pm-workflow.md#継続と受入closure)を正典とする。`initialize` / `update` は新しい完了自己申告を保存前に検査する。着工時に必須requirement ID、contract digest、DoD版、成果head、PO確認要否を固定し、完了遷移で同じ契約とauditを照合するため、直接completedとして初期化したり通常更新で契約を縮小したりできない。ACや成果headを変える場合はIssueへ理由と影響を残した新しいversioned requestを使う。completedのauditとPO receiptは差し替えず、導入前のcompletedへ後付けしない。handoff `prepare` は未完requestのowner、next action、resume triggerとblocked reasonを検査する。導入前の保存snapshotは読取り可能なままにし、新しい保存・export入口だけをguardする。
 
 `initialize`は未初期化時に`expected_generation=0`で一度だけ使う。以後はactive Front Desk aliasと現在generationを指定して`update`する。指定requestだけが更新され、他requestは保持される。同内容はno-opとなる。
 

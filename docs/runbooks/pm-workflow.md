@@ -117,7 +117,7 @@ PO本人による最終確認が必要なrequestだけ `po_review_required=true`
 
 acceptance receiptは同じthreadのmessage参照を必須にしますが、署名付きの本人証明ではありません。保存workerはFront Deskが受け取ったPO本人の明示応答だけを記録し、推測やPMの自己申告で作成しません。現在の保証範囲はtrusted local operatorによる手動記録までで、なりすまし防止は未実装です。
 
-PO確認が必要なrequestを `completed` として新規保存するには、内部closure auditに加えて、同じrequest、head、DoD版の `accepted` receiptが必要です。着工時に保存した必須ID、contract digest、DoD版、成果headを完了遷移で照合し、直接completedとして初期化したり完了時に契約を縮小したりできません。既存completed snapshotの読取は維持します。機械的な内部unitなど `po_review_required=false` のrequestへ一律強制しません。outbox/inboxの永続化とackは実装済みですが、PO本人へのnative自動表示、idle Front Deskの自動wake、既読確認は未実装です。Slack、email、常駐daemon、Scheduled Tasksへの連鎖は行いません。
+PO確認が必要なrequestを `completed` として新規保存するには、内部closure auditに加えて、同じrequest、head、DoD版の `accepted` receiptが必要です。着工時に保存した必須ID、contract digest、DoD版、成果head、PO確認要否は固定し、通常の進捗更新や完了遷移で変更できません。AC改訂や成果head変更は理由と履歴をIssueへ残した新しいversioned requestとして登録します。直接completedとして初期化したり完了時に契約を縮小したりできず、保存済みcompletedのauditとPO receiptも差し替えません。既存completed snapshotの読取は維持しますが、過去の完了へ新しいreceiptを後付けしません。機械的な内部unitなど `po_review_required=false` のrequestへ一律強制しません。outbox/inboxの永続化とackは実装済みですが、PO本人へのnative自動表示、idle Front Deskの自動wake、既読確認は未実装です。Slack、email、常駐daemon、Scheduled Tasksへの連鎖は行いません。
 
 ## GitとDraft PR
 

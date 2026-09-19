@@ -338,6 +338,35 @@ def apply_registry_update(
             if incoming.scope_id != previous.scope_id:
                 raise HTTPException(status_code=409, detail="request scope identity cannot change")
             reject_older_request(previous, incoming)
+            previous_contract = (
+                previous.required_requirement_ids,
+                previous.requirements_contract_digest,
+                previous.expected_artifact_head,
+                previous.dod_source_version,
+                previous.po_review_required,
+            )
+            incoming_contract = (
+                incoming.required_requirement_ids,
+                incoming.requirements_contract_digest,
+                incoming.expected_artifact_head,
+                incoming.dod_source_version,
+                incoming.po_review_required,
+            )
+            if previous.required_requirement_ids and incoming_contract != previous_contract:
+                raise HTTPException(
+                    status_code=409,
+                    detail="fixed closure contract needs a new versioned request to change",
+                )
+            if previous.lifecycle == "completed" and (
+                incoming.lifecycle != "completed"
+                or incoming_contract != previous_contract
+                or incoming.closure_audit != previous.closure_audit
+                or incoming.po_acceptance_receipt != previous.po_acceptance_receipt
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="completed closure evidence is immutable",
+                )
             if incoming.lifecycle == "completed" and previous.lifecycle != "completed":
                 if (
                     not previous.required_requirement_ids

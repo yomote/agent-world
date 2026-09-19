@@ -313,6 +313,8 @@ def test_pm_projection_upsert_rejects_missing_or_mixed_write_targets(mutation):
         create_app(MemoryStore(StatusSnapshot.model_validate(snapshot(now))))
     ).put("/api/status/upsert", json=payload)
     assert response.status_code == 422
+
+
 def accepted_closure_audit(request_id: str, at: datetime) -> dict:
     gate = {
         "state": "achieved",
@@ -361,6 +363,7 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
     store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
     client = TestClient(create_app(store))
     running = request_record("request-45", now, lifecycle="running")
+    running["po_review_required"] = True
     payload = {
         "source": "manual-public-registry",
         "action": "initialize",
@@ -374,6 +377,7 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
 
     completed_at = now + timedelta(seconds=1)
     record = request_record("request-45", completed_at, lifecycle="completed")
+    record["po_review_required"] = True
     update = {
         **payload,
         "action": "update",
@@ -388,7 +392,6 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
     assert store.write_count == 1
 
     record["closure_audit"] = accepted_closure_audit("request-45", completed_at)
-    record["po_review_required"] = True
     pending_po = client.put("/api/status/requests/upsert", json=update)
     assert pending_po.status_code == 422
     record["po_acceptance_receipt"] = {
@@ -407,6 +410,22 @@ def test_request_registry_completed_write_requires_matching_closure_audit():
 
     assert accepted.status_code == 200
     assert store.value.request_registry.requests[0].lifecycle == "completed"
+
+    rewritten = json.loads(json.dumps(record))
+    rewritten_at = completed_at + timedelta(seconds=1)
+    rewritten["report_updated_at"] = rewritten_at.isoformat()
+    rewritten["closure_audit"]["checker_agent"] = "replacement-checker"
+    replaced = client.put(
+        "/api/status/requests/upsert",
+        json={
+            **update,
+            "expected_generation": 2,
+            "observed_at": rewritten_at.isoformat(),
+            "requests": [rewritten],
+        },
+    )
+    assert replaced.status_code == 409
+    assert "immutable" in replaced.json()["detail"]
 
 
 def test_legacy_completed_snapshot_remains_readable_without_closure_audit():
@@ -524,7 +543,55 @@ def test_request_registry_completion_cannot_shrink_saved_contract():
     )
 
     assert response.status_code == 409
-    assert "previously saved requirements contract" in response.json()["detail"]
+    assert "new versioned request" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("required_requirement_ids", ["reduced-contract"]),
+        ("po_review_required", False),
+    ],
+)
+def test_running_request_cannot_rewrite_fixed_closure_contract(field, replacement):
+    """中間running更新でAC縮小やPO確認解除の前提を作る回帰を防ぐ。"""
+    now = datetime.now(UTC)
+    store = MemoryStore(StatusSnapshot.model_validate(snapshot(now)))
+    client = TestClient(create_app(store))
+    running = request_record("request-45", now, lifecycle="running")
+    if field == "po_review_required":
+        running[field] = True
+    initialized = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "initialize",
+            "expected_generation": 0,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": now.isoformat(),
+            "requests": [running],
+        },
+    )
+    assert initialized.status_code == 200
+
+    changed_at = now + timedelta(seconds=1)
+    changed = dict(running)
+    changed[field] = replacement
+    changed["report_updated_at"] = changed_at.isoformat()
+    response = client.put(
+        "/api/status/requests/upsert",
+        json={
+            "source": "manual-public-registry",
+            "action": "update",
+            "expected_generation": 1,
+            "actor_front_desk": "front-desk-1",
+            "observed_at": changed_at.isoformat(),
+            "requests": [changed],
+        },
+    )
+
+    assert response.status_code == 409
+    assert "new versioned request" in response.json()["detail"]
 
 
 def test_request_registry_report_clock_covers_closure_contract_fields():
