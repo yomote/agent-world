@@ -21,8 +21,16 @@ from typing import Any
 REVIEW_MARKER = "<!-- agent-world-independent-review -->"
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 EXCLUDED_LABELS = {"needs-human", "release"}
-EXPECTED_CHECK = "check"
-EXPECTED_WORKFLOW = "ci.yml"
+GITHUB_ACTIONS_APP_ID = 15368
+REQUIRED_CHECKS = {
+    "check": GITHUB_ACTIONS_APP_ID,
+    "container-check": GITHUB_ACTIONS_APP_ID,
+}
+REQUIRED_WORKFLOWS = {
+    "check": "ci.yml",
+    "container-check": "deploy-azure.yml",
+}
+POST_MERGE_WORKFLOW = "ci.yml"
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REVIEW_RE = re.compile(
     rf"\A{re.escape(REVIEW_MARKER)}\r?\n"
@@ -319,11 +327,17 @@ def validate_ruleset(rulesets: list[dict[str, Any]]) -> None:
             continue
         if not {"deletion", "non_fast_forward", "required_linear_history"} <= rules.keys():
             continue
-        contexts = {item.get("context") for item in checks.get("required_status_checks", [])}
+        required_checks = checks.get("required_status_checks")
+        if not isinstance(required_checks, list) or not all(
+            isinstance(item, dict) for item in required_checks
+        ):
+            continue
+        contexts = {item.get("context"): item.get("integration_id") for item in required_checks}
         if (
             pull_request.get("required_review_thread_resolution") is True
             and checks.get("strict_required_status_checks_policy") is True
-            and EXPECTED_CHECK in contexts
+            and len(required_checks) == len(REQUIRED_CHECKS)
+            and contexts == REQUIRED_CHECKS
         ):
             return
     raise GateError(
@@ -331,7 +345,7 @@ def validate_ruleset(rulesets: list[dict[str, Any]]) -> None:
     )
 
 
-def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
+def latest_ci_run(runs: list[dict[str, Any]], target: GateTarget) -> dict[str, Any] | None:
     matching = [
         run
         for run in runs
@@ -340,13 +354,13 @@ def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
         and any(item.get("number") == target.number for item in run.get("pull_requests", []))
     ]
     if not matching:
-        return False
+        return None
     if any(
         not all(isinstance(run.get(key), int) for key in ("run_number", "run_attempt", "id"))
         for run in matching
     ):
         raise GateError("current-head CI identity is incomplete")
-    latest = max(
+    return max(
         matching,
         key=lambda run: (
             run.get("run_number", -1),
@@ -354,10 +368,14 @@ def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
             run.get("id", -1),
         ),
     )
-    if latest.get("status") == "completed" and latest.get("conclusion") == "success":
-        return True
-    if latest.get("status") != "completed":
+
+
+def validate_ci(runs: list[dict[str, Any]], target: GateTarget) -> bool:
+    latest = latest_ci_run(runs, target)
+    if latest is None or latest.get("status") != "completed":
         return False
+    if latest.get("conclusion") == "success":
+        return True
     raise GateError(f"latest current-head CI is not successful: {latest.get('conclusion')}")
 
 
@@ -398,11 +416,11 @@ def unresolved_threads(client: GitHubClient, number: int) -> int:
     return sum(not isinstance(node, dict) or node.get("isResolved") is not True for node in nodes)
 
 
-def fetch_runs(client: GitHubClient, target: GateTarget) -> list[dict[str, Any]]:
+def fetch_runs(client: GitHubClient, target: GateTarget, workflow: str) -> list[dict[str, Any]]:
     query = urllib.parse.urlencode(
         {"event": "pull_request", "head_sha": target.expected_head, "per_page": 100}
     )
-    result = client.get(_repo_path(client, f"/actions/workflows/{EXPECTED_WORKFLOW}/runs?{query}"))
+    result = client.get(_repo_path(client, f"/actions/workflows/{workflow}/runs?{query}"))
     if not isinstance(result, dict):
         raise GateError("CI workflow runs response is invalid")
     runs = result.get("workflow_runs")
@@ -410,6 +428,90 @@ def fetch_runs(client: GitHubClient, target: GateTarget) -> list[dict[str, Any]]
     if not isinstance(runs, list) or not isinstance(total_count, int) or total_count > len(runs):
         raise GateError("CI workflow runs are unavailable or exceed the bounded query")
     return runs
+
+
+def fetch_check_runs(
+    client: GitHubClient, target: GateTarget, context: str
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode(
+        {
+            "check_name": context,
+            "app_id": GITHUB_ACTIONS_APP_ID,
+            "filter": "latest",
+            "per_page": 100,
+        }
+    )
+    result = client.get(_repo_path(client, f"/commits/{target.expected_head}/check-runs?{query}"))
+    if not isinstance(result, dict):
+        raise GateError("required check-runs response is invalid")
+    check_runs = result.get("check_runs")
+    total_count = result.get("total_count")
+    if (
+        not isinstance(check_runs, list)
+        or not isinstance(total_count, int)
+        or total_count > len(check_runs)
+        or not all(isinstance(check, dict) for check in check_runs)
+    ):
+        raise GateError("required check-runs are unavailable or exceed the bounded query")
+    return check_runs
+
+
+def validate_required_check(
+    check_runs: list[dict[str, Any]],
+    target: GateTarget,
+    context: str,
+    workflow_run_id: int,
+) -> bool:
+    run_path = f"/actions/runs/{workflow_run_id}/job/"
+    matching = [
+        check
+        for check in check_runs
+        if check.get("head_sha") == target.expected_head
+        and check.get("name") == context
+        and isinstance(check.get("app"), dict)
+        and check["app"].get("id") == GITHUB_ACTIONS_APP_ID
+        and isinstance(check.get("details_url"), str)
+        and run_path in check["details_url"]
+    ]
+    if not matching:
+        return False
+    if any(not isinstance(check.get("id"), int) for check in matching):
+        raise GateError("required check-run identity is incomplete")
+    latest = max(matching, key=lambda check: check["id"])
+    if latest.get("status") != "completed":
+        return False
+    if latest.get("conclusion") == "success":
+        return True
+    raise GateError(
+        f"latest current-head required check {context} is not successful: "
+        f"{latest.get('conclusion')}"
+    )
+
+
+def required_checks_succeeded(client: GitHubClient, target: GateTarget) -> bool:
+    latest_runs: dict[str, dict[str, Any]] = {}
+    for context, workflow in REQUIRED_WORKFLOWS.items():
+        runs = fetch_runs(client, target, workflow)
+        latest = latest_ci_run(runs, target)
+        if latest is None or latest.get("status") != "completed":
+            continue
+        if latest.get("conclusion") != "success":
+            raise GateError(
+                f"latest current-head workflow {workflow} is not successful: "
+                f"{latest.get('conclusion')}"
+            )
+        latest_runs[context] = latest
+    if len(latest_runs) != len(REQUIRED_WORKFLOWS):
+        return False
+    return all(
+        validate_required_check(
+            fetch_check_runs(client, target, context),
+            target,
+            context,
+            run["id"],
+        )
+        for context, run in latest_runs.items()
+    )
 
 
 def evaluate(client: GitHubClient, target: GateTarget, *, require_ci: bool = True) -> str:
@@ -427,14 +529,14 @@ def evaluate(client: GitHubClient, target: GateTarget, *, require_ci: bool = Tru
     if unresolved_threads(client, target.number):
         raise GateError("unresolved review threads remain")
     validate_ruleset(fetch_rulesets(client))
-    if require_ci and not validate_ci(fetch_runs(client, target), target):
-        raise GateError("current-head CI is still running")
+    if require_ci and not required_checks_succeeded(client, target):
+        raise GateError("current-head required workflows are still running")
     return reviewer
 
 
 def wait_for_ci(client: GitHubClient, target: GateTarget, attempts: int, interval: int) -> None:
     for attempt in range(attempts):
-        if validate_ci(fetch_runs(client, target), target):
+        if required_checks_succeeded(client, target):
             return
         if attempt + 1 < attempts:
             time.sleep(interval)
@@ -458,7 +560,7 @@ def verify_bootstrap_source(expected_head: str) -> None:
 def dispatch_post_merge(client: GitHubClient, target: GateTarget, merge_sha: str) -> None:
     try:
         client.post(
-            _repo_path(client, f"/actions/workflows/{EXPECTED_WORKFLOW}/dispatches"),
+            _repo_path(client, f"/actions/workflows/{POST_MERGE_WORKFLOW}/dispatches"),
             {"ref": "main"},
         )
     except GitHubUnknownError as error:

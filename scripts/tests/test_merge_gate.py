@@ -53,7 +53,10 @@ def protected_ruleset():
                 "type": "required_status_checks",
                 "parameters": {
                     "strict_required_status_checks_policy": True,
-                    "required_status_checks": [{"context": "check"}],
+                    "required_status_checks": [
+                        {"context": "check", "integration_id": 15368},
+                        {"context": "container-check", "integration_id": 15368},
+                    ],
                 },
             },
         ],
@@ -137,7 +140,16 @@ def test_ci_requires_success_for_same_pr_and_head():
 def test_ruleset_requires_strict_check_threads_and_no_bypass():
     """GitHub保護が未適用・緩和された状態でmergeする回帰を防ぐ。"""
     merge_gate.validate_ruleset([protected_ruleset()])
-    for mutate in ("bypass", "unknown-bypass", "exclude", "strict", "thread", "context"):
+    for mutate in (
+        "bypass",
+        "unknown-bypass",
+        "exclude",
+        "strict",
+        "thread",
+        "context",
+        "integration",
+        "extra-context",
+    ):
         ruleset = protected_ruleset()
         if mutate == "bypass":
             ruleset["bypass_actors"] = [{"actor_type": "RepositoryRole"}]
@@ -149,12 +161,76 @@ def test_ruleset_requires_strict_check_threads_and_no_bypass():
             ruleset["rules"][4]["parameters"]["strict_required_status_checks_policy"] = False
         elif mutate == "thread":
             ruleset["rules"][3]["parameters"]["required_review_thread_resolution"] = False
-        else:
+        elif mutate == "context":
             ruleset["rules"][4]["parameters"]["required_status_checks"] = [
                 {"context": "self-written-status"}
             ]
+        elif mutate == "integration":
+            ruleset["rules"][4]["parameters"]["required_status_checks"][1]["integration_id"] = 999
+        else:
+            ruleset["rules"][4]["parameters"]["required_status_checks"].append(
+                {"context": "unexpected", "integration_id": 15368}
+            )
         with pytest.raises(merge_gate.GateError):
             merge_gate.validate_ruleset([ruleset])
+
+
+def test_wait_for_ci_requires_both_current_head_workflows(monkeypatch):
+    """同じheadのDraft skipをReady成功より新しい結果と誤認せず、両jobを要求する。"""
+    target = merge_gate.GateTarget(7, SHA)
+    draft_skipped = {
+        "head_sha": SHA,
+        "event": "pull_request",
+        "status": "completed",
+        "conclusion": "skipped",
+        "pull_requests": [{"number": 7}],
+        "run_number": 112,
+        "run_attempt": 1,
+        "id": 90,
+    }
+    ready_success = draft_skipped | {
+        "conclusion": "success",
+        "run_number": 113,
+        "id": 100,
+    }
+    runs = {
+        workflow: [draft_skipped, ready_success]
+        for workflow in merge_gate.REQUIRED_WORKFLOWS.values()
+    }
+    checks = {
+        context: [
+            {
+                "id": 200 + index,
+                "head_sha": SHA,
+                "name": context,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"id": 15368},
+                "details_url": "https://github.com/owner/repo/actions/runs/100/job/200",
+            }
+        ]
+        for index, context in enumerate(merge_gate.REQUIRED_WORKFLOWS)
+    }
+    monkeypatch.setattr(
+        merge_gate,
+        "fetch_runs",
+        lambda client, requested_target, workflow: runs[workflow],
+    )
+    monkeypatch.setattr(
+        merge_gate,
+        "fetch_check_runs",
+        lambda client, requested_target, context: checks[context],
+    )
+    merge_gate.wait_for_ci(object(), target, attempts=1, interval=60)
+
+    checks["container-check"][0]["conclusion"] = "skipped"
+    with pytest.raises(merge_gate.GateError, match="container-check.*skipped"):
+        merge_gate.wait_for_ci(object(), target, attempts=1, interval=60)
+
+    checks["container-check"][0]["conclusion"] = "success"
+    checks["container-check"][0]["app"]["id"] = 999
+    with pytest.raises(merge_gate.GateError, match="did not succeed"):
+        merge_gate.wait_for_ci(object(), target, attempts=1, interval=60)
 
 
 def test_cli_enforces_bounded_ci_polling():

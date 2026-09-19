@@ -21,11 +21,18 @@ override_resource {
 override_resource {
   target = github_repository_dependabot_security_updates.project
 }
+override_resource {
+  target = github_repository_environment.azure_production
+}
+override_resource {
+  target = github_repository_environment_deployment_policy.azure_production_main
+}
 
 variables {
-  owner           = "test-owner"
-  repository_name = "test-repository"
-  visibility      = "private"
+  owner               = "test-owner"
+  repository_name     = "test-repository"
+  visibility          = "private"
+  existing_ruleset_id = null
 }
 
 run "factory_policy" {
@@ -50,6 +57,16 @@ run "factory_policy" {
     ))
     error_message = "rulesetの必須チェックとCI / container workflowのjob名が一致していません。"
   }
+  # 同名の外部statusで必須checkを満たせないよう、GitHub Actions App IDも固定する。
+  assert {
+    condition = {
+      for check in github_repository_ruleset.main.rules[0].required_status_checks[0].required_check : check.context => check.integration_id
+      } == {
+      check             = 15368
+      "container-check" = 15368
+    }
+    error_message = "required checkはcheck/container-checkのexact contextとGitHub Actions App ID 15368を要求すること。"
+  }
   assert {
     condition     = github_actions_repository_permissions.project.sha_pinning_required && github_repository_vulnerability_alerts.project.enabled && github_repository_dependabot_security_updates.project.enabled
     error_message = "ActionのSHA固定と依存脆弱性の検出・修正提案を有効にする。"
@@ -65,6 +82,16 @@ run "factory_policy" {
   assert {
     condition     = github_repository.project.security_and_analysis[0].secret_scanning[0].status == "enabled" && github_repository.project.security_and_analysis[0].secret_scanning_push_protection[0].status == "enabled"
     error_message = "public repoのsecret scanningとpush protectionを有効にする。"
+  }
+  # OIDC subjectのenvironment境界を、main以外からのdeploymentで迂回させない。
+  assert {
+    condition = (
+      !github_repository_environment.azure_production.can_admins_bypass &&
+      !github_repository_environment.azure_production.deployment_branch_policy[0].protected_branches &&
+      github_repository_environment.azure_production.deployment_branch_policy[0].custom_branch_policies &&
+      github_repository_environment_deployment_policy.azure_production_main.branch_pattern == "main"
+    )
+    error_message = "azure-production environmentは管理者bypassなし・main限定にする。"
   }
   assert {
     condition = (

@@ -69,6 +69,31 @@ resource "github_repository_dependabot_security_updates" "project" {
   depends_on = [github_repository_vulnerability_alerts.project]
 }
 
+resource "github_repository_environment" "azure_production" {
+  repository        = github_repository.project.name
+  environment       = "azure-production"
+  can_admins_bypass = false
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "azure_production_main" {
+  repository     = github_repository.project.name
+  environment    = github_repository_environment.azure_production.environment
+  branch_pattern = "main"
+}
+
+locals {
+  # GitHub Actionsが発行した同名checkだけをrequiredとして受理する。
+  required_checks = {
+    check             = 15368
+    "container-check" = 15368
+  }
+}
+
 resource "github_repository_ruleset" "main" {
   name        = "agent-world-main"
   repository  = github_repository.project.name
@@ -97,10 +122,11 @@ resource "github_repository_ruleset" "main" {
     required_status_checks {
       strict_required_status_checks_policy = true
       dynamic "required_check" {
-        # workflowのjob名と照合する (tests/policy.tftest.hcl)。
-        for_each = toset(["check", "container-check"])
+        # workflowのjob名とGitHub Actions App IDを照合する (tests/policy.tftest.hcl)。
+        for_each = local.required_checks
         content {
-          context = required_check.value
+          context        = required_check.key
+          integration_id = required_check.value
         }
       }
     }
