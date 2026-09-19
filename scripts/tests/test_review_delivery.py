@@ -272,6 +272,9 @@ def test_only_declared_visibility_postcondition_can_advance_unknown_acceptance()
         )
         is updated
     )
+    rendered = render_review_input(updated)
+    assert "確認済みlive postcondition" in rendered
+    assert url in rendered
     bad = json.loads(json.dumps(updated))
     bad["scope_definition"] = "作者が縮小したscope"
     with pytest.raises(Stop, match="contract_changed"):

@@ -267,11 +267,33 @@ def render_review_input(value):
                 f"trigger: {item['trigger']}"
             )
     if value.get("live_postconditions"):
-        lines.extend(["", "## 投稿後に確認するlive postcondition", ""])
+        statuses = {item["acceptance_id"]: item for item in value["acceptance_map"]}
+        completed = all(
+            statuses[item["acceptance_id"]]["status"] == "achieved"
+            for item in value["live_postconditions"]
+        )
+        lines.extend(
+            [
+                "",
+                "## 確認済みlive postcondition"
+                if completed
+                else "## 投稿後に確認するlive postcondition",
+                "",
+            ]
+        )
         for item in value["live_postconditions"]:
+            acceptance = statuses[item["acceptance_id"]]
+            completed_text = (
+                acceptance["evidence"]
+                + "（trusted local operatorの観測であり、認証roleの保証ではない）"
+            )
+            pending_text = (
+                "GitHub COMMENT reviewのvisible receiptとPR UIをPM指示の"
+                "trusted local operatorが確認する（認証roleの保証ではない）"
+            )
             lines.append(
-                f"- `{item['acceptance_id']}`: GitHub COMMENT reviewのvisible receiptとPR UIを"
-                "PM指示のtrusted local operatorが確認する（認証roleの保証ではない）"
+                f"- `{item['acceptance_id']}` [{acceptance['status']}]: "
+                + (completed_text if completed else pending_text)
             )
     lines.extend(
         [
