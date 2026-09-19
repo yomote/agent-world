@@ -623,6 +623,7 @@ class Campaign:
             "independent semantic review result received; detailed check list not supplied"
         ]
         data = self.data()
+        data["review_delivery_checks"] = review_for_delivery["checks"]
         data["review_summary_body"] = body
         data["review_delivery_expected"] = {
             "head": head,
@@ -763,8 +764,14 @@ class Campaign:
         review["author_review_plan"] = updated["author_review_plan"]
         final_review = dict(review)
         final_review["scope"] = ", ".join(SCOPES[self.name])
+        prior_checks = (
+            data.get("review_delivery_checks")
+            or review.get("checks")
+            or review.get("verified")
+            or ["independent semantic review result received; detailed check list not supplied"]
+        )
         final_review["checks"] = [
-            *(review.get("verified") or []),
+            *prior_checks,
             "trusted local operator observed the prior COMMENT review in PR UI; not an auth role",
         ]
         data = self.data()
@@ -794,9 +801,15 @@ class Campaign:
         data["review_delivery"] = receipt
         data.setdefault("review_delivery_history", []).append(prior_receipt)
         self.save_event(data, "review_postcondition_visible")
-        return self.after_review_visible(
-            data["head"], data["pr"], review, receipt, data["review_summary_body"]
+        final_body = (
+            data["review_summary_body"]
+            + "\n\n## GitHub review可視性postcondition\n\n"
+            + f"- prior receipt: {prior_receipt['url']}\n"
+            + "- PR UI: Conversation / Files changedでCOMMENTED reviewを確認\n"
+            + "- observer: trusted local operator（認証roleの保証ではない）\n\n"
+            + render_review_input(updated)
         )
+        return self.after_review_visible(data["head"], data["pr"], review, receipt, final_body)
 
     def reconcile_review_delivery(self):
         """unknown POSTを再送せず、remoteのexact receiptだけで後続へ戻る。"""

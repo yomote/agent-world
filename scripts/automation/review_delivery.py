@@ -412,6 +412,7 @@ def prepare(review, *, head, files, proxy_login, pr_author):
         f"COMMENTです（PR author: `{pr_author}`）。GitHub上のAPPROVE/CHANGES_REQUESTEDや"
         "reviewer本人の認証を表しません。CI成功だけを目的達成の根拠にしていません。"
     )
+    body += "\n\n" + render_review_input(review)
     if suppression_lines:
         body += "\n\n### inlineにしなかった項目\n\n" + "\n".join(suppression_lines)
     return {

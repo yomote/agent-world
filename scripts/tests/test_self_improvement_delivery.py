@@ -864,11 +864,16 @@ def test_visibility_postcondition_resumes_only_declared_pending_stage(task, monk
     }
     source = task.root / "postcondition.json"
     source.write_text(json.dumps(packet), encoding="utf-8")
-    calls = []
+    calls, visible = [], []
 
     def publish(operation, arguments, **kwargs):
         calls.append(operation)
         assert operation == "publish_pr_review"
+        assert arguments["review"]["acceptance_map"][0]["status"] == "achieved"
+        assert arguments["review"]["checks"] == [
+            "independent review",
+            "trusted local operator observed the prior COMMENT review in PR UI; not an auth role",
+        ]
         return {
             "head": head,
             "url": "https://github.com/yomote/agent-world/pull/91#pullrequestreview-2",
@@ -879,11 +884,15 @@ def test_visibility_postcondition_resumes_only_declared_pending_stage(task, monk
         }
 
     monkeypatch.setattr(task.transport, "call", publish)
-    monkeypatch.setattr(task, "after_review_visible", lambda *args: "continued")
+    monkeypatch.setattr(
+        task, "after_review_visible", lambda *args: visible.append(args) or "continued"
+    )
     assert task.confirm_review_postcondition("postcondition.json") == "continued"
     assert calls == ["publish_pr_review"]
     assert task.data()["review_delivery_history"] == [prior]
     assert task.data()["review_input"]["acceptance_map"][0]["status"] == "achieved"
+    assert url in visible[0][4]
+    assert "[achieved]" in visible[0][4]
 
 
 def test_helper_review_recovery_uses_bound_checkout_and_is_atomic(task, monkeypatch):
