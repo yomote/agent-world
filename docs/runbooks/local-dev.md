@@ -9,6 +9,13 @@ Windows/macOS/Linux用のvenvパスを自動選択する。UIは [5173](http://1
 Ctrl+Cで両サーバーを終了。片方の異常終了時ももう片方を終了し、失敗を報告する。
 フロントはHMR、Pythonの変更は再起動で反映する。
 
+ローカルUIはデモごとに分かれている。
+
+- デモ選択: `http://127.0.0.1:5173/`
+- 会計: `http://127.0.0.1:5173/demos/accounting`
+- 物流: `http://127.0.0.1:5173/demos/logistics`
+- World move: `http://127.0.0.1:5173/demos/world`
+
 個別に起動したい場合は初回セットアップ後に別ターミナルで:
 
 ```sh

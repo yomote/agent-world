@@ -5,8 +5,6 @@ import type { Action, WorldEvent } from "./api/types";
 import { handleMoveKeyDown } from "./moveKeyboard";
 import { SandboxSession, type TraceEntry } from "./session";
 import { WorldCanvas } from "./world/WorldCanvas";
-import { LogisticsLab } from "./LogisticsLab";
-import { AccountingLab } from "./AccountingLab";
 
 const reasons: Record<WorldEvent["reason"], string> = {
   moved: "移動を確定",
@@ -50,7 +48,7 @@ function TraceRow({ entry }: { entry: TraceEntry }) {
   );
 }
 
-export default function App() {
+export function WorldDemoPage() {
   const [session] = useState(() => new SandboxSession(worldApi));
   const [actor] = useState(() => createRandomActor());
   const [running, setRunning] = useState(false);
@@ -99,6 +97,10 @@ export default function App() {
               : "World 接続待ち"}
         </div>
       </header>
+
+      <p className="demo-back">
+        <a href="/">← デモ選択へ戻る</a>
+      </p>
 
       {error && (
         <div className="error" role="alert">
@@ -240,8 +242,6 @@ export default function App() {
           </p>
         )}
       </section>
-      <LogisticsLab />
-      <AccountingLab />
       <footer className="page-footer">
         <span>メモリ内World · 休止や再起動でAの位置と履歴はリセット</span>
         <span>World Simulator is authoritative.</span>
