@@ -22,10 +22,25 @@ const schema = JSON.parse(
     { cwd: root, encoding: "utf8" },
   ),
 );
+const accountingSchema = JSON.parse(
+  execFileSync(
+    python,
+    [
+      "-c",
+      "import json,sys; from pathlib import Path; sys.path.insert(0,'apps'); from accounting_agent.api import create_app; print(json.dumps(create_app(Path(':memory:')).openapi()))",
+    ],
+    { cwd: root, encoding: "utf8" },
+  ),
+);
 const outputs = [
   // 生成コマンドと同じ改行・CLIヘッダーを使い、書式だけの差を検出しない。
   ["docs/api/openapi.json", JSON.stringify(schema, null, 2) + "\n"],
   ["apps/web/src/api/schema.d.ts", COMMENT_HEADER + astToString(await openapiTS(schema))],
+  ["docs/api/accounting-openapi.json", JSON.stringify(accountingSchema, null, 2) + "\n"],
+  [
+    "apps/web/src/api/accounting-schema.d.ts",
+    COMMENT_HEADER + astToString(await openapiTS(accountingSchema)),
+  ],
 ];
 let failed = false;
 for (const [relative, source] of outputs) {
@@ -39,8 +54,9 @@ for (const [relative, source] of outputs) {
     if (error.code !== "ENOENT") throw error;
   }
   // JSONの1と1.0は同じ数値。Python生成時とJSON.parse後の字句差を意味差として扱わない。
+  const sourceSchema = relative.includes("accounting") ? accountingSchema : schema;
   const matches = relative.endsWith(".json")
-    ? actual !== undefined && JSON.stringify(JSON.parse(actual)) === JSON.stringify(schema)
+    ? actual !== undefined && JSON.stringify(JSON.parse(actual)) === JSON.stringify(sourceSchema)
     : actual?.replaceAll("\r\n", "\n") === expected;
   if (!matches) {
     console.error(

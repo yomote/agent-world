@@ -37,6 +37,55 @@ main {
   width: min(1120px, calc(100% - 48px));
   margin: 32px auto;
 }
+.demo-home-heading {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.demo-home-heading > p:last-child,
+.demo-card p,
+.demo-back {
+  color: #9db0c6;
+}
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.demo-card {
+  display: grid;
+  gap: 10px;
+  min-height: 170px;
+  padding: 20px;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid #2a3d56;
+  border-radius: 10px;
+  background: #101e30;
+}
+.demo-card:hover,
+.demo-card:focus-visible {
+  border-color: #58dfc2;
+}
+.demo-card:focus-visible,
+.demo-back a:focus-visible {
+  outline: 3px solid #58dfc2;
+  outline-offset: 3px;
+}
+.demo-card > span {
+  color: #8da6c2;
+  font-size: 0.75rem;
+}
+.demo-card p {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.demo-back {
+  margin: -12px 0 20px;
+}
+.demo-back a {
+  color: #b9dff4;
+}
 h1,
 h2,
 p {
@@ -539,7 +588,153 @@ code {
   padding: 5px 12px;
   margin-left: 12px;
 }
+.accounting-lab {
+  margin-top: 24px;
+  padding: 24px;
+  border: 1px solid #35536d;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #101c2a, #111821);
+}
+.scope-badge {
+  padding: 7px 10px;
+  border: 1px solid #4e7896;
+  border-radius: 999px;
+  color: #b9dff4;
+  font-size: 0.75rem;
+}
+.accounting-intro {
+  margin: 18px 0;
+  padding: 18px;
+  border-left: 4px solid #5cc8a1;
+  background: #162635;
+  line-height: 1.65;
+}
+.accounting-intro h3,
+.review-package h3 {
+  margin-top: 0;
+}
+.accounting-actions,
+.operator-question div,
+.accounting-status,
+.package-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.accounting-actions button,
+.operator-question button {
+  padding: 10px 14px;
+}
+.accounting-history {
+  display: grid;
+  gap: 6px;
+  max-width: 680px;
+  margin: 16px 0;
+}
+.accounting-history label {
+  font-weight: 700;
+}
+.accounting-history select {
+  padding: 10px;
+  color: #d7e6f2;
+  border: 1px solid #34546a;
+  border-radius: 6px;
+  background: #132231;
+}
+.accounting-history small {
+  color: #9db4c7;
+}
+.accounting-history strong {
+  color: #b9dff4;
+}
+.accounting-history details,
+.accounting-new-run {
+  color: #9db4c7;
+}
+.accounting-new-run {
+  margin: 12px 0;
+}
+.accounting-new-run .accounting-actions {
+  margin-top: 10px;
+}
+.accounting-status {
+  margin: 16px 0;
+  color: #a9bfd2;
+  font-size: 0.8rem;
+}
+.accounting-status span {
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: #203144;
+}
+.accounting-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+.accounting-comparison button {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  text-align: left;
+  color: #b9cada;
+  border: 1px solid #34546a;
+  background: #132231;
+}
+.accounting-comparison button.selected {
+  border-color: #68d6ad;
+}
+.accounting-comparison p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #9db4c7;
+  font-size: 0.8rem;
+}
+.accounting-error,
+.operator-question {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #895c55;
+  border-radius: 8px;
+  background: #322425;
+}
+.package-kpis > div {
+  min-width: 160px;
+  padding: 12px;
+  border: 1px solid #34546a;
+  border-radius: 8px;
+  background: #132231;
+}
+.package-kpis span,
+.package-kpis strong {
+  display: block;
+}
+.package-kpis span {
+  color: #9db4c7;
+  font-size: 0.75rem;
+}
+.package-kpis strong {
+  margin-top: 5px;
+  color: #d9f8ec;
+  font-size: 1.1rem;
+}
+.review-package article {
+  margin-top: 12px;
+  padding: 12px;
+  border-bottom: 1px solid #2d4659;
+}
+.scope-note {
+  color: #f2c987;
+}
+.accounting-trace {
+  margin-top: 18px;
+  color: #a9bfd2;
+}
 @media (max-width: 820px) {
+  .demo-grid {
+    grid-template-columns: 1fr;
+  }
   main {
     width: calc(100% - 28px);
     margin: 20px auto;
@@ -574,5 +769,11 @@ code {
   }
   .lab-kpi {
     text-align: left;
+  }
+  .accounting-comparison {
+    grid-template-columns: 1fr;
+  }
+  .accounting-comparison p {
+    grid-column: auto;
   }
 }

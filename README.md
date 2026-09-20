@@ -58,3 +58,7 @@ Simulatorは同じWorldの確定Eventを直近80件だけメモリに保持す�
 - [テスト方針](docs/testing.md) / [Agent向け規約](AGENTS.md)
 - [Agent orchestrationと6業務Worldの提案](docs/proposals/agent-orchestration-domain-roadmap.md)
 - [物流rule版の実装範囲と次段階](docs/proposals/logistics-rule-foundation.md)
+
+## 入金消込Agent Lab（実装中）
+
+合成した銀行明細、請求、メール、調整履歴から、単一Agentが次に読む資料や保留を選び、経理レビューpackageを作る読み取り専用Labを追加する。帳簿、資金、外部メールは更新しない。設計と検証境界は[会計Agent提案](docs/proposals/accounting-cash-application-agent.md)と[ADR 0013](docs/adr/0013-read-only-accounting-agent.md)を参照する。
