@@ -11,7 +11,7 @@ bundle用CLIはPython 3.11の標準libraryだけで動き、専用venvや追加i
 
 ## project rootからのbootstrap
 
-新しいtop-level root sessionは`AGENTS.md`を入口にする。Front Deskは受付だけを行い、PM controllerが次のread-only発見をworkerへ委任する。subagent、child、既存worker、旧rootはこの入口からclaimしない。
+新しいtop-level root sessionは`AGENTS.md`を入口にする。Front Deskは受付だけを行い、PMが次のread-only発見をworkerへ委任する。subagent、child、既存worker、旧rootはこの入口からclaimしない。
 
 `python scripts/manage_status_registry.py discover --locator .codex/handoff-locator.local.json --output .codex/bootstrap-result.local.json`
 
@@ -55,6 +55,8 @@ marker更新後に初めてowner移転済みとして扱い、必要な未完依
 将来新しいhandoverをprepareした場合は、prepare receiptを確認した担当workerが同じstable locatorを新しいbundle、public context、両digest、generation、from/toへ明示更新する。`discover`はlocatorやregistryを更新しない。新規root sessionを開いただけでは処理は始まらず、最初のユーザーmessageで`AGENTS.md`が適用された後にこの分配を行う。
 
 ## 通常更新
+
+未完requestの継続条件と、`completed` 保存前の独立closure audit、PO確認が必要な場合のacceptance receiptは[PMワークフロー](pm-workflow.md#継続と受入closure)を正典とする。`initialize` / `update` は新しい完了自己申告を保存前に検査する。着工時に必須requirement ID、contract digest、DoD版、成果head、PO確認要否を固定し、完了遷移で同じ契約とauditを照合するため、直接completedとして初期化したり通常更新で契約を縮小したりできない。ACや成果headを変える場合はIssueへ理由と影響を残した新しいversioned requestを使う。completedのauditとPO receiptは差し替えず、導入前のcompletedへ後付けしない。handoff `prepare` は未完requestのowner、next action、resume triggerとblocked reasonを検査する。導入前の保存snapshotは読取り可能なままにし、新しい保存・export入口だけをguardする。
 
 `initialize`は未初期化時に`expected_generation=0`で一度だけ使う。以後はactive Front Desk aliasと現在generationを指定して`update`する。指定requestだけが更新され、他requestは保持される。同内容はno-opとなる。
 

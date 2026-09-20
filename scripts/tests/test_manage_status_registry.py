@@ -11,6 +11,8 @@ from ops_status.models import StatusSnapshot
 from scripts.manage_status_registry import (
     boot,
     claim,
+    closure_check,
+    continuity_errors,
     digest_bundle,
     discover,
     mark_claimed,
@@ -47,6 +49,7 @@ def registry(at: datetime) -> dict:
                 "member_agents": ["status-owner"],
                 "progress_summary": "bundle準備済み",
                 "next_action": "新しい窓口がclaim",
+                "resume_trigger": "成功claim receiptを確認後に明示dispatch",
                 "report_updated_at": at.isoformat(),
                 "report_source": "manual-public-summary",
                 "runtime_connection": "record-only",
@@ -385,3 +388,219 @@ def test_mark_claimed_requires_success_receipt_before_disabling_locator(tmp_path
     )
     with pytest.raises(ValueError, match="successful claim marker"):
         discover(locator_path, tmp_path / "repo")
+
+
+def closure_payload(at: datetime) -> dict:
+    gate = {
+        "state": "achieved",
+        "evidence_refs": ["https://github.com/yomote/agent-world/pull/91"],
+        "reason": None,
+    }
+    return {
+        "schema_version": 1,
+        "request": {
+            "request_id": "request-45",
+            "objective_ref": "https://github.com/yomote/agent-world/issues/45",
+            "latest_dod_version": "issue-updated:2026-09-19T03:13:59Z",
+            "required_requirement_ids": ["generic-exact-head", "domain-use-case"],
+            "requirements_contract_digest": "sha256:" + "c" * 64,
+            "expected_head": "a" * 40,
+            "issue_state": "closed",
+            "terminal_intent": "complete",
+        },
+        "audit": {
+            "schema_version": 1,
+            "request_id": "request-45",
+            "objective_ref": "https://github.com/yomote/agent-world/issues/45",
+            "dod_source_version": "issue-updated:2026-09-19T03:13:59Z",
+            "requirements_contract_digest": "sha256:" + "c" * 64,
+            "evidence_head": "a" * 40,
+            "checker_agent": "independent-checker",
+            "checked_at": at.isoformat(),
+            **{
+                name: gate.copy()
+                for name in ("code_done", "verified", "reviewed", "merged", "delivered", "purpose")
+            },
+            "requirements": [
+                {
+                    "requirement_id": "generic-exact-head",
+                    "category": "generic-quality",
+                    "source_version": "quality-contract:v1",
+                    "verification_method": "current-head check",
+                    "evidence_refs": ["https://github.com/yomote/agent-world/pull/91/checks"],
+                    "evidence_head": "a" * 40,
+                    "checker_agent": "independent-checker",
+                    "result": "satisfied",
+                    "reason": None,
+                },
+                {
+                    "requirement_id": "domain-use-case",
+                    "category": "domain",
+                    "source_version": "issue-updated:2026-09-19T03:13:59Z",
+                    "verification_method": "use-case acceptance",
+                    "evidence_refs": ["https://github.com/yomote/agent-world/issues/45"],
+                    "evidence_head": "a" * 40,
+                    "checker_agent": "independent-checker",
+                    "result": "satisfied",
+                    "reason": None,
+                },
+            ],
+            "overall": "accept",
+            "owner": None,
+            "next_action": None,
+            "resume_trigger": None,
+            "stop_decision": {"made": False, "reason": None},
+        },
+    }
+
+
+def run_closure(tmp_path: Path, payload: dict) -> dict:
+    path = tmp_path / "closure.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return closure_check(path)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "success-receipt-wrong-dod",
+        "skipped-tests",
+        "stale-head",
+        "unresolved-review",
+        "merged-business-failed",
+        "ci-pass-domain-wrong",
+        "missing-required-id",
+        "blocked-without-owner",
+        "cancelled",
+        "continue-intent",
+        "stop-decision",
+        "required-not-applicable",
+    ],
+)
+def test_closure_check_rejects_false_completion_signals(tmp_path, case):
+    """技術的terminalや中止を目的達成へ昇格する回帰を防ぐ。"""
+    payload = closure_payload(datetime.now(UTC))
+    audit = payload["audit"]
+    if case == "success-receipt-wrong-dod":
+        audit["dod_source_version"] = "issue-updated:old"
+    elif case == "skipped-tests":
+        audit["verified"] = {"state": "unmet", "evidence_refs": [], "reason": "tests skipped"}
+    elif case == "stale-head":
+        audit["evidence_head"] = "b" * 40
+    elif case == "unresolved-review":
+        audit["reviewed"] = {
+            "state": "unknown",
+            "evidence_refs": [],
+            "reason": "review unresolved",
+        }
+    elif case == "merged-business-failed":
+        audit["purpose"] = {
+            "state": "unmet",
+            "evidence_refs": ["https://github.com/yomote/agent-world/issues/45"],
+            "reason": "business DoD failed",
+        }
+    elif case == "ci-pass-domain-wrong":
+        audit["requirements"][1].update(
+            result="unmet", evidence_refs=[], reason="domain output violates the use case"
+        )
+    elif case == "missing-required-id":
+        audit["requirements"].pop()
+    elif case == "blocked-without-owner":
+        audit["merged"] = {
+            "state": "unmet",
+            "evidence_refs": [],
+            "reason": "merge gate blocked",
+        }
+    elif case == "cancelled":
+        payload["request"]["terminal_intent"] = "cancelled"
+        audit["stop_decision"] = {"made": True, "reason": "hypothesis stopped"}
+    elif case == "continue-intent":
+        payload["request"]["terminal_intent"] = "continue"
+    elif case == "stop-decision":
+        audit["stop_decision"] = {"made": True, "reason": "hypothesis stopped"}
+    else:
+        audit["requirements"][0].update(
+            result="not_applicable", evidence_refs=[], reason="checker chose to skip it"
+        )
+    if case in {
+        "skipped-tests",
+        "unresolved-review",
+        "merged-business-failed",
+        "ci-pass-domain-wrong",
+    }:
+        audit["overall"] = "unknown" if case == "unresolved-review" else "reject"
+    if case != "blocked-without-owner":
+        audit.update(
+            {
+                "owner": "pm-controller",
+                "next_action": "PMが次のbounded packetを分配",
+                "resume_trigger": "既承認scope内の新packet採用時",
+            }
+        )
+
+    result = run_closure(tmp_path, payload)
+
+    assert result["closure_status"] != "accept"
+    assert result["receipt"] is None
+    if case == "blocked-without-owner":
+        assert "unaccepted closure needs owner" in result["reasons"]
+
+
+def test_closure_check_accepts_only_current_fully_evidenced_objective(tmp_path):
+    """最新DoD・exact head・全gateの証跡が揃った目的だけを完了receiptにする。"""
+    payload = closure_payload(datetime.now(UTC))
+
+    result = run_closure(tmp_path, payload)
+
+    assert result["closure_status"] == "accept"
+    assert result["receipt"]["overall"] == "accept"
+    assert result["continuation"] is None
+    assert result["purpose_achieved"] == "achieved"
+
+
+def test_issue_89_audit_rejects_done_and_returns_continuity(tmp_path):
+    """Issue 89の技術成果や中止判断を未達の業務目的へ昇格する回帰を防ぐ。"""
+    payload = json.loads(
+        (Path(__file__).parent / "fixtures/issue_89_closure_input.json").read_text(encoding="utf-8")
+    )
+
+    result = run_closure(tmp_path, payload)
+
+    assert result["closure_status"] == "reject"
+    assert result["code_done"] == "achieved"
+    assert result["merged"] == "unmet"
+    assert result["purpose_achieved"] == "unmet"
+    assert result["continuation"]["owner"] == "pm-controller"
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "owner", "next_action", "trigger", "blocker"),
+    [
+        ("reconnectable", "implementer", "merge-ownerへ受渡す", "review receipt受領時", None),
+        ("blocked", "ci-owner", "失敗jobを修正する", "修正commit作成時", "CI失敗"),
+        ("blocked", "merge-owner", "gateを再診断する", "token診断完了時", "merge block"),
+        ("blocked", "pm-controller", "判断packetを採否する", "判断回答受領時", "判断待ち"),
+        ("running", "pm-controller", "次のwork unitを分配する", "owner報告受領時", None),
+        (
+            "handover-waiting",
+            "front-desk-old",
+            "新rootへ明示dispatchする",
+            "claim receipt成功時",
+            None,
+        ),
+    ],
+)
+def test_six_continuity_cases_keep_owner_action_and_trigger(
+    lifecycle, owner, next_action, trigger, blocker
+):
+    """6つのterminal/再開場面で次の責任と復帰条件が消える回帰を防ぐ。"""
+    request = {
+        "request_id": "request-45",
+        "lifecycle": lifecycle,
+        "owner_agent": owner,
+        "next_action": next_action,
+        "resume_trigger": trigger,
+        "blocker": blocker,
+    }
+
+    assert continuity_errors([request]) == []

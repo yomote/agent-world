@@ -78,6 +78,47 @@ task-primary ownerは対象commitとDraft PRを完了まで所有します。[�
 
 子へ渡す文脈は必要最小限にし、独立した作業だけを並行にします。調査や全体検証を重複させず、work itemの最終検証はownerに集約します。難航時は無限に反復せず、事実と次の選択肢をPM controllerへ返します。低遅延・risk・costに応じてモデルを選びますが、金額と高速化率は未測定のため主張しません。
 
+## 継続と受入closure
+
+`code_done`、検証済み、review済み、merge済み、利用者へdelivery済み、Issueの目的達成、PO acceptanceは別の事実です。workerの完了報告、childのfinal、Front DeskまたはPMのturn終了、PRのmerge、中止判断を、後段の事実へ自動的に読み替えません。rootのfinal応答も停止命令ではありません。
+
+Issueの最新目的・DoD版と成果headについて、ownerとは別のcheckerが `closure-check` 入力を作り、code、checks、review、merge、delivery、目的の6 gateを `achieved` / `unmet` / `unknown` で判定します。guardはDoD版、exact head、証跡の有無、6 gateとoverallの整合だけを検査し、業務価値を推測しません。`completed` の新規registry保存には `accept` のclosure auditが必要です。既存の署名なしJSONとStatus.Ingest認証の境界であり、checkerの人格や独立性を暗号学的に証明するものではありません。
+
+Issueを正本とする目的、具体use case、non-goalsと最新DoD版から、checkerは必須requirement IDとcontract digestを固定します。各requirementを `generic-quality`、`domain`、`value` に分け、検証方法、必要な公開evidence、exact head、checker、`satisfied` / `unmet` / `unverified` へ対応付けます。必須IDを`not_applicable`として回避できません。guardは必須IDのcoverage、contract digest、DoD版、head、evidence URLを照合し、省略や`unverified`をacceptへ昇格しません。security、types、runtime、unknown、idempotence、tenant、observability、operations、readabilityはriskに応じた汎用品質、業務固有のuse caseはdomain、baseline比較とPO価値はvalueとして分離します。property-based testのcorrectnessはusefulnessの代替にしません。
+
+必須IDとcontract digestの意味内容がIssue正本を完全に表すかは独立checkerの責任です。現在はtrusted local operatorが固定した入力を検査する境界であり、Issueをnetworkから自動取得して意味を証明するpolicy engineではありません。blockerは具体的なfailure、impact、evidence、requirement ID、severityの理由を記録し、好みやscope外の案はblocking findingにしません。
+
+Issueの作成責任者は着工前にpurpose、AC ID、non-scope、期待するevidenceを定義します。この体制ではPMが責任を持ち、投稿workerは代筆します。外部Issue authorが定めた条件をPMが無断で置換しません。ACを変える場合はIssue責任者とPMが理由、履歴、影響をIssueへ記録し、対応するPRのAC mapも同期します。PR作者はAC map、変更固有のriskとinvariant、確認点、evidence、known unmetを提示します。独立reviewerは提示観点に拘束されず欠落も指摘し、PMはIssue ACと証拠で内部受入を判断します。PR作者が実装都合でACを下げることや、POの価値判断を内部受入で代替することはできません。
+
+```powershell
+python scripts/manage_status_registry.py closure-check `
+  --input artifacts/status/closure-input.local.json `
+  --output artifacts/status/closure-result.local.json
+```
+
+未達または不明なら、現在の責任保持者 `owner_agent`、具体的な `next_action`、再開する観測可能な `resume_trigger` を残します。次の実行担当を `next_action` に書く場合、責任保持者と同一である必要はありません。`blocked` は判断相手を含む具体的理由も残します。失敗は試行上限、replan条件、停止後のownerを次手またはblockerへ記録し、同じ操作を無限に再実行しません。新規の `blocked` / `handover-waiting` / `reconnectable` 保存とhandoff exportはこの不足を拒否しますが、導入前のsnapshot読取りは維持します。
+
+| 受領入口    | 保存する状態                                       | 次のownerと復帰条件                                      |
+| ----------- | -------------------------------------------------- | -------------------------------------------------------- |
+| worker完了  | Issueがopenなら `reconnectable` または次工程の状態 | review、CI、merge、残DoDのownerと、そのreceiptまたは結果 |
+| CI失敗      | `blocked`                                          | 修正owner、失敗job、修正headができた時                   |
+| merge block | `blocked`                                          | gate診断owner、blocker、正規gateが利用可能になった時     |
+| 判断待ち    | `blocked`                                          | PM、判断相手と内容、回答受領時                           |
+| 親turn終了  | 実行中の事実を維持                                 | 報告を受けるPM、owner報告受領時                          |
+| 新session   | `handover-waiting`                                 | 旧責任保持者、成功claim receipt後の明示dispatch          |
+
+native child finalは親へ届きますが、idleな親sessionの新turn開始や利用者へのnative pushは確認できません。したがってchild finalを自動interceptするdaemonは置かず、PMが節目でcheckerを明示dispatchします。request保存とhandoff prepareのguardはルーズボールを検出しますが、PMのfinal自体を阻止するruntime hookではありません。daily棚卸しもread-onlyで、generic live loopではありません。
+
+### PO acceptance
+
+PO本人による最終確認が必要なrequestだけ `po_review_required=true` とします。内部closureの `accept` はPMと独立checkerによる内部受入であり、PO acceptanceではありません。保存workerは `scripts/manage_po_acceptance.py enqueue` で、Issueと価値、artifactまたはpreview URLと有効期限、期待する1〜3操作、検証済み・不明・制約、head・PR・merge、内部receipt、POへの確認点、ownerを型検証し、Front Desk向けoutboxへ保存します。同じrequest、head、artifact、DoD receipt版はdedupします。
+
+状態は `ready_for_po_review` → `notified` → `accepted` または `changes_requested` です。ここで `accepted` はPO本人が同じthreadで明示した最終確認であり、PMの内部受入やworkerのackではありません。`notified` はFront Deskが同じthreadへ発信し、そのチャネルが受理したreceiptだけを意味し、PO本人の既読や承認ではありません。送信結果不明は `notification_unknown` に固定し、自動再送しません。`changes_requested` はowner、次手、復帰条件を必須にします。process再開時は同じstoreを読み、pending outboxを復元します。内部未達は `unmet-decision-report` として完成通知から分離します。
+
+acceptance receiptは同じthreadのmessage参照を必須にしますが、署名付きの本人証明ではありません。保存workerはFront Deskが受け取ったPO本人の明示応答だけを記録し、推測やPMの自己申告で作成しません。現在の保証範囲はtrusted local operatorによる手動記録までで、なりすまし防止は未実装です。
+
+PO確認が必要なrequestを `completed` として新規保存するには、内部closure auditに加えて、同じrequest、head、DoD版の `accepted` receiptが必要です。着工時に保存した必須ID、contract digest、DoD版、成果head、PO確認要否は固定し、通常の進捗更新や完了遷移で変更できません。AC改訂や成果head変更は理由と履歴をIssueへ残した新しいversioned requestとして登録します。直接completedとして初期化したり完了時に契約を縮小したりできず、保存済みcompletedのauditとPO receiptも差し替えません。既存completed snapshotの読取は維持しますが、過去の完了へ新しいreceiptを後付けしません。機械的な内部unitなど `po_review_required=false` のrequestへ一律強制しません。outbox/inboxの永続化とackは実装済みですが、PO本人へのnative自動表示、idle Front Deskの自動wake、既読確認は未実装です。Slack、email、常駐daemon、Scheduled Tasksへの連鎖は行いません。
+
 ## GitとDraft PR
 
 独立worktreeで作業し、primary ownerが自分の変更をcommitします。担当packetで許可された場合に限り、ownerがpushし、Draft PRを作成または更新します。他worktreeの未コミット成果は、担当との移管合意なしに取り込みません。
