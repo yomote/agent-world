@@ -576,6 +576,38 @@ code {
 .operator-question button {
   padding: 10px 14px;
 }
+.accounting-history {
+  display: grid;
+  gap: 6px;
+  max-width: 680px;
+  margin: 16px 0;
+}
+.accounting-history label {
+  font-weight: 700;
+}
+.accounting-history select {
+  padding: 10px;
+  color: #d7e6f2;
+  border: 1px solid #34546a;
+  border-radius: 6px;
+  background: #132231;
+}
+.accounting-history small {
+  color: #9db4c7;
+}
+.accounting-history strong {
+  color: #b9dff4;
+}
+.accounting-history details,
+.accounting-new-run {
+  color: #9db4c7;
+}
+.accounting-new-run {
+  margin: 12px 0;
+}
+.accounting-new-run .accounting-actions {
+  margin-top: 10px;
+}
 .accounting-status {
   margin: 16px 0;
   color: #a9bfd2;

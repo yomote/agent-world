@@ -30,6 +30,20 @@ type PackagePayload = {
 
 const yen = (value: number) => `${value.toLocaleString("ja-JP")}円`;
 
+export function accountingCaseLabel(run: Pick<AccountingRun, "fixture_id">) {
+  const labels: Record<string, string> = {
+    "fixture-9d5e33713165": "入金と請求の差額・取消を調べた公開例",
+    "fixture-3dff6a560d89": "同額請求2件で確認を保留した例",
+  };
+  return labels[run.fixture_id] ?? "保存済みの調査例";
+}
+
+export function accountingStateLabel(run: Pick<AccountingRun, "status" | "pending_question">) {
+  if (run.pending_question) return "人の確認待ち・成果物なし";
+  if (run.status === "ready_for_review") return "レビュー用成果物あり";
+  return `停止状態: ${run.status}`;
+}
+
 function packageOf(run: AccountingRun | null): PackagePayload | null {
   const artifact = run?.artifact as { payload?: unknown } | null | undefined;
   return (artifact?.payload as PackagePayload | undefined) ?? null;
@@ -40,6 +54,7 @@ export function AccountingLab() {
     agent: null,
     baseline: null,
   });
+  const [history, setHistory] = useState<AccountingRun[]>([]);
   const [selectedMode, setSelectedMode] = useState<"agent" | "baseline">("agent");
   const [busyMode, setBusyMode] = useState<"agent" | "baseline" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,13 +65,14 @@ export function AccountingLab() {
     let active = true;
     void (async () => {
       try {
-        const history = await accountingApi.list();
-        const latest = await Promise.all(
-          (["agent", "baseline"] as const).map(async (mode) => {
-            const summary = history.find((item) => item.mode === mode);
-            return [mode, summary ? await accountingApi.get(summary.run_id) : null] as const;
-          }),
+        const summaries = await accountingApi.list();
+        const storedRuns = await Promise.all(
+          summaries.map((summary) => accountingApi.get(summary.run_id)),
         );
+        const latest = (["agent", "baseline"] as const).map(
+          (mode) => [mode, storedRuns.find((item) => item.mode === mode) ?? null] as const,
+        );
+        if (active) setHistory(storedRuns);
         if (active) setRuns(Object.fromEntries(latest) as typeof runs);
       } catch {
         // 履歴表示はread-only補助。新規実行やwrite retryへ連鎖させない。
@@ -69,6 +85,7 @@ export function AccountingLab() {
 
   function remember(mode: "agent" | "baseline", value: AccountingRun) {
     setRuns((current) => ({ ...current, [mode]: value }));
+    setHistory((current) => [value, ...current.filter((item) => item.run_id !== value.run_id)]);
   }
 
   async function reportFailure(
@@ -150,7 +167,7 @@ export function AccountingLab() {
       <div className="accounting-intro">
         <h3>何が楽になるデモ？</h3>
         <p>
-          「消込」は、銀行へ入ったお金を未払いの請求へ対応づける作業です。経理担当が銀行明細、
+          「消込」は、入金をどの請求に対応させるかを決める作業です。経理担当が銀行明細、
           請求書、メール、調整履歴を探し直す代わりに、Agentが資料を選んで調べ、根拠付きの確認用資料を作ります。
         </p>
         <ol>
@@ -169,14 +186,55 @@ export function AccountingLab() {
         </details>
       </div>
 
-      <div className="accounting-actions">
-        <button disabled={busyMode !== null} onClick={() => void start("agent")}>
-          {busyMode === "agent" ? "Agentが調査中…" : "実モデルAgentで調査"}
-        </button>
-        <button disabled={busyMode !== null} onClick={() => void start("baseline")}>
-          {busyMode === "baseline" ? "固定workflow実行中…" : "固定workflowを実行"}
-        </button>
-      </div>
+      {history.length > 0 && (
+        <div className="accounting-history">
+          <label htmlFor="accounting-history-run">保存済みの調査結果を見る</label>
+          <select
+            id="accounting-history-run"
+            value={run?.run_id ?? ""}
+            onChange={(event) => {
+              const stored = history.find((item) => item.run_id === event.target.value);
+              if (!stored) return;
+              const mode = stored.mode === "agent" ? "agent" : "baseline";
+              setSelectedMode(mode);
+              remember(mode, stored);
+              setError(null);
+            }}
+          >
+            {history.map((item) => (
+              <option key={item.run_id} value={item.run_id}>
+                {accountingCaseLabel(item)} /{" "}
+                {item.mode === "agent" ? "実モデル保存結果" : "固定workflow"} /{" "}
+                {accountingStateLabel(item)}
+              </option>
+            ))}
+          </select>
+          <strong>
+            これは保存済みの実行履歴です。選択しても新規実行やモデル呼出しは行いません。
+          </strong>
+          <small>合成データだけを使い、実台帳は更新していません。</small>
+          {run && (
+            <details>
+              <summary>技術情報</summary>
+              <code>
+                {run.fixture_id} / {run.status} / {run.run_id}
+              </code>
+            </details>
+          )}
+        </div>
+      )}
+
+      <details className="accounting-new-run">
+        <summary>新しく実行する（保存結果を見るだけなら操作不要）</summary>
+        <div className="accounting-actions">
+          <button disabled={busyMode !== null} onClick={() => void start("agent")}>
+            {busyMode === "agent" ? "Agentが調査中…" : "実モデルAgentで調査"}
+          </button>
+          <button disabled={busyMode !== null} onClick={() => void start("baseline")}>
+            {busyMode === "baseline" ? "固定workflow実行中…" : "固定workflowを実行"}
+          </button>
+        </div>
+      </details>
 
       {error && <p className="accounting-error">{error}。自動再送していません。</p>}
       {(runs.agent || runs.baseline) && (
