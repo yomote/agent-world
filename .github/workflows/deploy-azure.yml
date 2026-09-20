@@ -44,7 +44,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Check out pull request
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
@@ -204,7 +204,7 @@ jobs:
           echo "image_only=${image_only}" >>"${GITHUB_OUTPUT}"
 
       - name: Check out exact main commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.source.outputs.sha }}
           fetch-depth: 0
@@ -245,7 +245,7 @@ jobs:
 
       - name: Sign in to Azure with OIDC
         if: steps.approval.outputs.image_only != 'true'
-        uses: Azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        uses: Azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
