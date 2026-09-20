@@ -16,6 +16,10 @@ Front DeskとPM controllerの調査、編集、検証、レビュー、統合、
 
 PM controllerは管理の節目に次の差分snapshotをFront Deskへ1メッセージで返し、Front Deskがユーザーへ取り次ぎます。これは報告の書式であり、自動通知の実装や停止後の監視継続を保証しません。Issue/PRへの記録は対象を割り当てられたworkerが行います。
 
+ユーザーが問い合わせる前に報告する節目は、具体案が成立した時、触れられる成果ができた時、blockerまたは待ち相手が変わった時、work itemが完了した時です。ownerはその節目をPMへ送り、PMは「案または成果」「利用者にとっての価値」「未検証または制約」「次に試すこと」を数行にまとめてFront Deskのinboxへ渡します。定型的な途中経過、同じ状態の言い換え、pollごとの報告は送りません。
+
+inboxへの到達は内部handoffであり、ユーザーへの配達ではありません。Front Deskが同じthreadへ発信し、チャネルが受理したreceiptを得るまでは配達をpendingとして保持します。結果不明を配達済みにせず、自動再送しません。idleなroot sessionの自動wakeと利用者へのnative pushは未実装なので、この責務は節目を保存して次にFront Deskが応答できる状態にするところまでです。
+
 製品内の非同期Action、Human in the Loop、開発taskのwakeと通知を混同せずに確認する入口は[重要設計レビュー](design-review.md)です。PMは設計の節目で閲覧依頼と判断依頼を分け、判断点がない閲覧依頼を承認待ちにしません。
 
 ```text
