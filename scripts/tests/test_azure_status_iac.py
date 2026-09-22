@@ -56,6 +56,17 @@ def test_deploy_gate_rejects_unreviewed_or_broad_changes():
     assert gate.index("OutOfScope") < gate.index("protectedIgnorePatterns | Where-Object")
 
 
+def test_protected_deploy_requires_easy_auth_id_tokens_only():
+    """Easy Authのhybrid loginを壊すApp Registration設定の回帰を防ぐ。"""
+    script = (ROOT / "scripts/azure-status/Deploy-ManagementStatus.ps1").read_text(encoding="utf-8")
+
+    assert "web.implicitGrantSettings" in script
+    assert "-not $implicitGrant.enableIdTokenIssuance" in script
+    assert "$implicitGrant.enableAccessTokenIssuance" in script
+    assert "must enable ID token issuance" in script
+    assert "must not enable implicit access token issuance" in script
+
+
 def test_protected_gate_accepts_known_ignores_and_rejects_unknown_ignore(tmp_path):
     """既知existingのIgnoreだけを非writeとして扱い、外scopeのIgnoreを拒否する。"""
     subscription = "11111111-1111-1111-1111-111111111111"

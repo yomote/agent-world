@@ -95,6 +95,17 @@ if ($LASTEXITCODE -ne 0 -or $signedInObjectId -notmatch $guidPattern -or $signed
     throw 'Signed-in Azure user object ID does not match OperatorObjectId.'
 }
 
+if ($Phase -eq 'Protected') {
+    $implicitGrant = & $azPath ad app show --id $AuthClientId `
+        --query web.implicitGrantSettings --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $implicitGrant.enableIdTokenIssuance) {
+        throw 'The Easy Auth app registration must enable ID token issuance.'
+    }
+    if ($implicitGrant.enableAccessTokenIssuance) {
+        throw 'The Easy Auth app registration must not enable implicit access token issuance.'
+    }
+}
+
 $protected = $Phase -eq 'Protected'
 $templateName = if ($protected) { 'protected-main.bicep' } else { 'main.bicep' }
 $template = Join-Path $PSScriptRoot "..\..\infra\azure-status\$templateName"
